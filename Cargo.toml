@@ -1,0 +1,24 @@
+[package]
+name = "sys"
+version = "0.1.0"
+edition = "2018"
+license = "WTFPL"
+publish = false
+
+[dependencies]
+chrono = "0.4"
+clap = "2.33"
+pickledb = "0.4"
+reqwest = "0.11"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+solana-clap-utils = "1.6"
+solana-cli-config = "1.6"
+solana-cli-output = "1.6"
+solana-client = "1.6"
+solana-logger = "1.6"
+solana-remote-wallet = "1.6"
+solana-sdk = "1.6"
+thiserror = "1.0"
+tokio = { version = "1.2.0", features = ["macros", "time"] }
+tokio-binance = "1.0"
