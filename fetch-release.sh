@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 
-set -e
+BIN=sys
+REPO=https://github.com/mvines/sys
+DEFAULT_TO_MASTER=1
 
 case "$(uname)" in
 Linux)
@@ -15,16 +17,18 @@ Darwin)
   ;;
 esac
 
-if [[ -z $1 || $1 = master ]]; then
-  RELEASE_BINARY=https://github.com/mvines/sys/raw/master-bin/sys-$TARGET
+BIN_TARGET=$BIN-$TARGET
+
+if [[ ( -z $1 && -n $DEFAULT_TO_MASTER ) || $1 = master ]]; then
+  URL=$REPO/raw/master-bin/$BIN_TARGET
 elif [[ -n $1 ]]; then
-  RELEASE_BINARY=https://github.com/mvines/sys/releases/download/$1/sys-$TARGET
+  URL=$REPO/releases/download/$1/$BIN_TARGET
 else
-  RELEASE_BINARY=https://github.com/mvines/sys/releases/latest/download/sys-$TARGET
+  URL=$REPO/releases/latest/download/$BIN_TARGET
 fi
 
-set -x
-curl -sSfL $RELEASE_BINARY -o sys
-chmod +x sys
-ls -l sys
-./sys --version
+set -ex
+curl -fL $URL -o $BIN
+chmod +x $BIN
+ls -l $BIN
+./$BIN --version
