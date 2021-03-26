@@ -63,8 +63,8 @@ jobs:
       run: |
         set -x
         mkdir master-bin
-        mv x86_64-apple-darwin/sys-x86_64-apple-darwin master-bin/
-        mv x86_64-unknown-linux-gnu/sys-x86_64-unknown-linux-gnu master-bin/
+        mv x86_64-apple-darwin/* master-bin/
+        mv x86_64-unknown-linux-gnu/* master-bin/
         cd master-bin
         git init .
         git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
