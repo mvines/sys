@@ -52,7 +52,7 @@ pub struct Db {
     credentials_db: PickleDb,
 }
 
-#[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
 pub struct PendingDeposit {
     pub exchange: Exchange,
     pub tx_id: String, // transaction signature of the deposit
@@ -102,9 +102,13 @@ impl Db {
         Ok(self.db.dump()?)
     }
 
-    pub fn confirm_exchange_deposit(&mut self, deposit: &PendingDeposit) -> DbResult<()> {
+    pub fn cancel_exchange_deposit(&mut self, deposit: &PendingDeposit) -> DbResult<()> {
         assert!(self.db.lrem_value("deposits", deposit)?);
         Ok(self.db.dump()?)
+    }
+
+    pub fn confirm_exchange_deposit(&mut self, deposit: &PendingDeposit) -> DbResult<()> {
+        self.cancel_exchange_deposit(deposit)
     }
 
     pub fn pending_exchange_deposits(&self, exchange: Exchange) -> Vec<PendingDeposit> {

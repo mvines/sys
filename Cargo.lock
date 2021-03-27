@@ -3304,6 +3304,8 @@ dependencies = [
  "solana-logger",
  "solana-remote-wallet",
  "solana-sdk",
+ "solana-stake-program",
+ "solana-vote-program",
  "thiserror",
  "tokio 1.4.0",
  "tokio-binance",

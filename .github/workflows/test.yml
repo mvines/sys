@@ -39,7 +39,6 @@ jobs:
 
     - name: cargo clippy
       uses: actions-rs/cargo@v1
-      continue-on-error: true # TODO: REMOVE
       with:
         command: clippy
         args: --workspace --all-targets -- --deny=warnings
