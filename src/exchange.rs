@@ -4,7 +4,7 @@ use {
     thiserror::Error,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Exchange {
     Binance,
     BinanceUs,
@@ -15,8 +15,8 @@ impl FromStr for Exchange {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "binance" => Ok(Exchange::Binance),
-            "binanceus" => Ok(Exchange::BinanceUs),
+            "Binance" | "binance" => Ok(Exchange::Binance),
+            "BinanceUs" | "binanceus" => Ok(Exchange::BinanceUs),
             _ => Err(ParseExchangeError::Invalid),
         }
     }

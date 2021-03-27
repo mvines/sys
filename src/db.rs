@@ -54,9 +54,9 @@ pub struct Db {
 
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 pub struct PendingDeposit {
-    pub signature: String,
     pub exchange: Exchange,
-    pub amount: f64,
+    pub tx_id: String, // transaction signature of the deposit
+    pub amount: f64,   // amount of SOL deposited
 }
 
 impl Db {
@@ -65,34 +65,33 @@ impl Db {
         exchange: Exchange,
         exchange_credentials: ExchangeCredentials,
     ) -> DbResult<()> {
-        if !self.credentials_db.lexists("exchange_credentials") {
-            self.credentials_db.lcreate("exchange_credentials")?;
-        }
         self.clear_exchange_credentials(exchange)?;
 
         self.credentials_db
-            .set(
-                &format!("{:?}_credentials", exchange),
-                &exchange_credentials,
-            )
+            .set(&format!("{:?}", exchange), &exchange_credentials)
             .unwrap();
 
         Ok(self.credentials_db.dump()?)
     }
 
     pub fn get_exchange_credentials(&self, exchange: Exchange) -> Option<ExchangeCredentials> {
-        self.credentials_db
-            .get(&format!("{:?}_credentials", exchange))
+        self.credentials_db.get(&format!("{:?}", exchange))
     }
 
     pub fn clear_exchange_credentials(&mut self, exchange: Exchange) -> DbResult<()> {
         if self.get_exchange_credentials(exchange).is_some() {
-            self.credentials_db
-                .rem(&format!("{:?}_credentials", exchange))
-                .ok();
+            self.credentials_db.rem(&format!("{:?}", exchange)).ok();
             self.credentials_db.dump()?;
         }
         Ok(())
+    }
+
+    pub fn get_configured_exchanges(&self) -> Vec<Exchange> {
+        self.credentials_db
+            .get_all()
+            .into_iter()
+            .filter_map(|key| key.parse().ok())
+            .collect()
     }
 
     pub fn record_exchange_deposit(&mut self, deposit: PendingDeposit) -> DbResult<()> {
@@ -104,14 +103,15 @@ impl Db {
     }
 
     pub fn confirm_exchange_deposit(&mut self, deposit: &PendingDeposit) -> DbResult<()> {
-        self.db.lrem_value("deposits", deposit)?;
+        assert!(self.db.lrem_value("deposits", deposit)?);
         Ok(self.db.dump()?)
     }
 
-    pub fn pending_exchange_deposits(&self) -> Vec<PendingDeposit> {
+    pub fn pending_exchange_deposits(&self, exchange: Exchange) -> Vec<PendingDeposit> {
         self.db
             .liter("deposits")
             .filter_map(|item_iter| item_iter.get_item::<PendingDeposit>())
+            .filter(|pending_deposit| pending_deposit.exchange == exchange)
             .collect()
     }
 }

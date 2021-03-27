@@ -1,23 +1,19 @@
 /*
 
-  sys binance deposit
-
-  sys <xxx> deposit binance <source-keypair> <amount> --authority <vote or stake withdraw keypair>
-       -- if vote/stake account, withdraw from vote/stake account to an ephemeral account
+  sys binance deposit <amount> from <source-address> [by <authority>] (cli --keypair is default authority)
+       -- support system/vote/stake accounts
+       -- need ledger support
+       -- eventually must be an enrolled account
 
   ====
 
-  sys binance sell ....
-  sys sell binance <pair> <amount> [place a limit order for +x% over spot or fixed amount, default +0%]
+  sys binance sell <amount> with <pair> at [limit order for +x% over spot or fixed amount, default +0%]
+        -- no market orders
+        -- can't sell for less than the current price
 
-  sys update
-           - check for pending deposits across all exchanges and confirm them.
-           - check for completed sells (need new Db structure for this...)
-               - need to manage partial fills
-           - add notifier for events...
-
-
-  =====
+          - in `sys sync`, check for completed sells (need new Db structure for this...)
+              - need to manage partial fills
+ =====
    atomic DB updates?
 
 */
@@ -48,6 +44,45 @@ fn app_version() -> String {
         None => "devbuild".to_string(),
         Some(commit) => commit[..8].to_string(),
     })
+}
+
+async fn sync(db: &mut Db) -> Result<(), Box<dyn std::error::Error>> {
+    for exchange in db.get_configured_exchanges() {
+        println!("Synchronizing with {:?}...", exchange);
+        let deposit_history = {
+            let account_client = exchange_account_client(exchange, db).await?;
+            let withdrawal_client = account_client.to_withdraw_client();
+            withdrawal_client
+                .get_deposit_history()
+                .with_asset("SOL")
+                .json::<DepositHistory>()
+                .await?
+                .deposit_list
+        };
+
+        for pending_deposit in db.pending_exchange_deposits(exchange) {
+            if let Some(deposit_record) = deposit_history
+                .iter()
+                .find(|deposit_record| deposit_record.tx_id == pending_deposit.tx_id)
+            {
+                if deposit_record.success() {
+                    println!(
+                        " ◎{} deposit successful ({})",
+                        pending_deposit.amount, pending_deposit.tx_id
+                    );
+                    db.confirm_exchange_deposit(&pending_deposit)?;
+                    // TODO: add notifier...
+                    continue;
+                }
+            }
+            println!(
+                "  ◎{} deposit pending ({})",
+                pending_deposit.amount, pending_deposit.tx_id
+            );
+        }
+    }
+
+    Ok(())
 }
 
 #[tokio::main]
@@ -86,7 +121,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .validator(|value| naivedate_of(&value).map(|_| ()))
                         .help("Date to fetch the price for"),
                 ),
-        );
+        )
+        .subcommand(SubCommand::with_name("sync").about("Synchronize with exchanges"));
 
     for exchange in &exchanges {
         app = app.subcommand(
@@ -140,6 +176,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let when = naivedate_of(&value_t_or_exit!(arg_matches, "when", String)).unwrap();
             let market_data = coin_gecko::get_coin_history(when).await?;
             println!("Price on {}: ${:.2}", when, market_data.current_price.usd);
+        }
+        ("sync", Some(_arg_matches)) => {
+            sync(&mut db).await?;
         }
         (exchange, Some(exchange_matches)) => {
             assert!(exchanges.contains(&exchange), "Bug!");
@@ -344,6 +383,29 @@ struct DepositAddress {
     address: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DepositRecord {
+    address: String,
+    asset: String,
+    amount: f64,
+    tx_id: String,
+    status: usize, // 0 = pending, 1 = success, 6 = credited but cannot withdraw
+}
+
+impl DepositRecord {
+    fn success(&self) -> bool {
+        self.status == 1
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DepositHistory {
+    deposit_list: Vec<DepositRecord>,
+    success: bool,
+}
+
 /*
 async fn binance() -> Result<(), Box<dyn std::error::Error>> {
 use serde_json::Value;
@@ -352,7 +414,7 @@ use serde_json::Value;
     let response = client
         .get_open_orders()
         .with_symbol("SOLUSDT")
-        .json::<Value>()
+        .json::<serde_json::Value>()
         .await?;
     println!("get_open_orders: {:?}", response);
     // https://docs.rs/tokio-binance/1.0.0/tokio_binance/struct.AccountClient.html#method.place_limit_order
@@ -363,9 +425,9 @@ use serde_json::Value;
     let response = withdrawal_client
         .get_deposit_address("SOL")
         .with_status(true)
-        .json::<Value>()
+        .json::<serde_json::Value>()
         .await?;
-    println!("get_deposit_address: {:?}", response);
+    println!("get_deexchange_clientposit_address: {:?}", response);
 
     /*
     let response = withdrawal_client
@@ -373,7 +435,7 @@ use serde_json::Value;
         // optional: processing time for request; default is 5000, can't be above 60000.
         .with_recv_window(8000)
         //
-        .json::<Value>()
+        .json::<serde_json::Value>()
         .await?;
         */
 
@@ -382,7 +444,7 @@ use serde_json::Value;
         .with_asset("SOL")
         // optional: 0(0:pending,6: credited but cannot withdraw, 1:success)
         //.with_status(1)
-        .json::<Value>()
+        .json::<serde_json::Value>()
         .await?;
 
     // "amount"...
@@ -391,13 +453,13 @@ use serde_json::Value;
 
     let response = withdrawal_client
         .get_account_status()
-        .json::<Value>()
+        .json::<serde_json::Value>()
         .await?;
     println!("get_account_status: {:?}", response);
 
     let response = withdrawal_client
         .get_system_status()
-        .json::<Value>()
+        .json::<serde_json::Value>()
         .await?;
     /*
        {
