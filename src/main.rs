@@ -11,6 +11,7 @@ use {
         message::Message,
         native_token::{lamports_to_sol, sol_to_lamports, Sol},
         pubkey::Pubkey,
+        signers::Signers,
         system_instruction, system_program,
         transaction::Transaction,
     },
@@ -37,7 +38,7 @@ fn app_version() -> String {
     })
 }
 
-async fn sync(db: &mut Db) -> Result<(), Box<dyn std::error::Error>> {
+async fn process_sync(db: &mut Db) -> Result<(), Box<dyn std::error::Error>> {
     for exchange in db.get_configured_exchanges() {
         println!("Synchronizing with {:?}...", exchange);
         let deposit_history = {
@@ -78,6 +79,242 @@ async fn sync(db: &mut Db) -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     }
+
+    Ok(())
+}
+
+async fn process_exchange_balance(
+    db: &mut Db,
+    exchange: Exchange,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let account_client = exchange_account_client(exchange, &db).await?;
+    let account_info = account_client.get_account().json::<AccountInfo>().await?;
+    let sol_balance = account_info
+        .balances
+        .iter()
+        .find(|b| b.asset == "SOL")
+        .expect("SOL");
+    println!(
+        "Available: ◎{}\nIn order:  ◎{}",
+        sol_balance.free, sol_balance.locked
+    );
+    Ok(())
+}
+
+async fn process_exchange_deposit<T: Signers>(
+    db: &mut Db,
+    rpc_client: RpcClient,
+    exchange: Exchange,
+    amount: Option<u64>,
+    from_address: Pubkey,
+    authority_address: Pubkey,
+    signers: T,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (recent_blockhash, fee_calculator) = rpc_client.get_recent_blockhash()?;
+
+    let from_account = rpc_client
+        .get_account_with_commitment(&from_address, rpc_client.commitment())?
+        .value
+        .ok_or_else(|| format!("From account, {}, does not exist", from_address))?;
+
+    let authority_account = if from_address == authority_address {
+        from_account.clone()
+    } else {
+        rpc_client
+            .get_account_with_commitment(&authority_address, rpc_client.commitment())?
+            .value
+            .ok_or_else(|| format!("Authority account, {}, does not exist", authority_address))?
+    };
+
+    if authority_account.lamports < fee_calculator.lamports_per_signature {
+        return Err(format!(
+            "Authority has insufficient funds for the transaction fee of {}",
+            Sol(fee_calculator.lamports_per_signature)
+        )
+        .into());
+    }
+
+    let account_client = exchange_account_client(exchange, &db).await?;
+    if !account_client
+        .get_account()
+        .json::<AccountInfo>()
+        .await?
+        .can_deposit
+    {
+        return Err(format!("{:?} deposits not available", exchange).into());
+    }
+    let withdrawal_client = account_client.to_withdraw_client();
+
+    let deposit_address = withdrawal_client
+        .get_deposit_address("SOL")
+        .with_status(true)
+        .json::<DepositAddress>()
+        .await?
+        .address
+        .parse::<Pubkey>()?;
+
+    let (instructions, lamports, minimum_balance) = if from_account.owner == system_program::id() {
+        let lamports = amount.unwrap_or_else(|| {
+            if from_address == authority_address {
+                from_account
+                    .lamports
+                    .saturating_sub(fee_calculator.lamports_per_signature)
+            } else {
+                from_account.lamports
+            }
+        });
+
+        (
+            vec![system_instruction::transfer(
+                &from_address,
+                &deposit_address,
+                lamports,
+            )],
+            lamports,
+            if from_address == authority_address {
+                fee_calculator.lamports_per_signature
+            } else {
+                0
+            },
+        )
+    } else if from_account.owner == solana_vote_program::id() {
+        let minimum_balance = rpc_client.get_minimum_balance_for_rent_exemption(
+            solana_vote_program::vote_state::VoteState::size_of(),
+        )?;
+
+        let lamports =
+            amount.unwrap_or_else(|| from_account.lamports.saturating_sub(minimum_balance));
+
+        (
+            vec![solana_vote_program::vote_instruction::withdraw(
+                &from_address,
+                &authority_address,
+                lamports,
+                &deposit_address,
+            )],
+            lamports,
+            minimum_balance,
+        )
+    } else if from_account.owner == solana_stake_program::id() {
+        let lamports = amount.unwrap_or(from_account.lamports);
+
+        (
+            vec![solana_stake_program::stake_instruction::withdraw(
+                &from_address,
+                &authority_address,
+                &deposit_address,
+                lamports,
+                None,
+            )],
+            lamports,
+            0,
+        )
+    } else {
+        return Err(format!("Unsupport from account owner: {}", from_account.owner).into());
+    };
+
+    if lamports == 0 {
+        return Err("Nothing to deposit".into());
+    }
+
+    if lamports == 0 || from_account.lamports < lamports + minimum_balance {
+        return Err("From account has insufficient funds".into());
+    }
+
+    let amount = lamports_to_sol(lamports);
+    println!("From address: {}", from_address);
+    if from_address != authority_address {
+        println!("Authority address: {}", authority_address);
+    }
+    println!("Amount: {}", Sol(lamports));
+    println!("{:?} deposit address: {}", exchange, deposit_address);
+
+    let message = Message::new(&instructions, Some(&authority_address));
+    if fee_calculator.calculate_fee(&message) > authority_account.lamports {
+        return Err("Insufficient funds for transaction fee".into());
+    }
+
+    let mut transaction = Transaction::new_unsigned(message);
+    transaction.message.recent_blockhash = recent_blockhash;
+    let simulation_result = rpc_client.simulate_transaction(&transaction)?.value;
+    if simulation_result.err.is_some() {
+        return Err(format!("Simulation failure: {:?}", simulation_result).into());
+    }
+
+    //transaction.try_sign(&vec![authority_signer], recent_blockhash)?;
+    transaction.try_sign(&signers, recent_blockhash)?;
+    println!("Transaction signature: {}", transaction.signatures[0]);
+
+    let pending_deposit = PendingDeposit {
+        tx_id: transaction.signatures[0].to_string(),
+        exchange,
+        amount,
+    };
+
+    db.record_exchange_deposit(pending_deposit.clone())?;
+
+    loop {
+        match rpc_client.send_and_confirm_transaction_with_spinner(&transaction) {
+            Ok(_) => break,
+            Err(err) => {
+                println!("Send transaction failed: {:?}", err);
+            }
+        }
+        match rpc_client.get_fee_calculator_for_blockhash(&recent_blockhash) {
+            Err(err) => {
+                println!("Failed to get fee calculator: {:?}", err);
+            }
+            Ok(None) => {
+                db.cancel_exchange_deposit(&pending_deposit)
+                    .expect("cancel_exchange_deposit");
+                return Err("Deposit failed: {}".into());
+            }
+            Ok(_) => {
+                println!("Blockhash has not yet expired, retrying transaction...");
+            }
+        };
+    }
+
+    process_sync(db).await
+}
+
+async fn process_exchange_market(
+    db: &mut Db,
+    exchange: Exchange,
+    pair: String,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let account_client = exchange_account_client(exchange, &db).await?;
+    let market_data_client = account_client.to_market_data_client();
+
+    let average_price = market_data_client
+        .get_average_price(&pair)
+        .json::<AveragePrice>()
+        .await?;
+
+    let ticker_price = market_data_client
+        .get_24hr_ticker_price()
+        .with_symbol(&pair)
+        .json::<TickerPrice>()
+        .await?;
+
+    println!("Symbol: {}", ticker_price.symbol);
+    println!(
+        "Ask: ${}, Bid: ${}, High: ${}, Low: ${}, ",
+        ticker_price.ask_price,
+        ticker_price.bid_price,
+        ticker_price.high_price,
+        ticker_price.low_price
+    );
+    println!(
+        "Last {} minute average: ${}",
+        average_price.mins, average_price.price
+    );
+    println!(
+        "Last 24h change: ${} ({}%), Weighted average price: ${}",
+        ticker_price.price_change,
+        ticker_price.price_change_percent,
+        ticker_price.weighted_avg_price
+    );
 
     Ok(())
 }
@@ -124,7 +361,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     for exchange in &exchanges {
         app = app.subcommand(
             SubCommand::with_name(exchange)
-                .about("Interact with the exchange")
+                .about("Exchange interactions")
                 .setting(AppSettings::SubcommandRequiredElseHelp)
                 .setting(AppSettings::InferSubcommands)
                 .subcommand(SubCommand::with_name("balance").about("Get SOL balance"))
@@ -209,7 +446,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("Price on {}: ${:.2}", when, market_data.current_price.usd);
         }
         ("sync", Some(_arg_matches)) => {
-            sync(&mut db).await?;
+            process_sync(&mut db).await?;
         }
         (exchange, Some(exchange_matches)) => {
             assert!(exchanges.contains(&exchange), "Bug!");
@@ -217,17 +454,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let exchange = Exchange::from_str(exchange)?;
             match exchange_matches.subcommand() {
                 ("balance", Some(_arg_matches)) => {
-                    let account_client = exchange_account_client(exchange, &db).await?;
-                    let account_info = account_client.get_account().json::<AccountInfo>().await?;
-                    let sol_balance = account_info
-                        .balances
-                        .iter()
-                        .find(|b| b.asset == "SOL")
-                        .expect("SOL");
-                    println!(
-                        "Available: ◎{}\nIn order:  ◎{}",
-                        sol_balance.free, sol_balance.locked
-                    );
+                    process_exchange_balance(&mut db, exchange).await?;
                 }
                 ("deposit", Some(arg_matches)) => {
                     let amount = match arg_matches.value_of("amount").unwrap() {
@@ -252,219 +479,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let authority_address = authority_address.expect("authority_address");
                     let authority_signer = authority_signer.expect("authority_signer");
 
-                    let (recent_blockhash, fee_calculator) = rpc_client.get_recent_blockhash()?;
-
-                    let from_account = rpc_client
-                        .get_account_with_commitment(&from_address, rpc_client.commitment())?
-                        .value
-                        .ok_or_else(|| format!("From account, {}, does not exist", from_address))?;
-
-                    let authority_account = if from_address == authority_address {
-                        from_account.clone()
-                    } else {
-                        rpc_client
-                            .get_account_with_commitment(
-                                &authority_address,
-                                rpc_client.commitment(),
-                            )?
-                            .value
-                            .ok_or_else(|| {
-                                format!("Authority account, {}, does not exist", authority_address)
-                            })?
-                    };
-
-                    if authority_account.lamports < fee_calculator.lamports_per_signature {
-                        return Err(format!(
-                            "Authority has insufficient funds for the transaction fee of {}",
-                            Sol(fee_calculator.lamports_per_signature)
-                        )
-                        .into());
-                    }
-
-                    let account_client = exchange_account_client(exchange, &db).await?;
-                    if !account_client
-                        .get_account()
-                        .json::<AccountInfo>()
-                        .await?
-                        .can_deposit
-                    {
-                        return Err(format!("{:?} deposits not available", exchange).into());
-                    }
-                    let withdrawal_client = account_client.to_withdraw_client();
-
-                    let deposit_address = withdrawal_client
-                        .get_deposit_address("SOL")
-                        .with_status(true)
-                        .json::<DepositAddress>()
-                        .await?
-                        .address
-                        .parse::<Pubkey>()?;
-
-                    let (instructions, lamports, minimum_balance) = if from_account.owner
-                        == system_program::id()
-                    {
-                        let lamports = amount.unwrap_or_else(|| {
-                            if from_address == authority_address {
-                                from_account
-                                    .lamports
-                                    .saturating_sub(fee_calculator.lamports_per_signature)
-                            } else {
-                                from_account.lamports
-                            }
-                        });
-
-                        (
-                            vec![system_instruction::transfer(
-                                &from_address,
-                                &deposit_address,
-                                lamports,
-                            )],
-                            lamports,
-                            if from_address == authority_address {
-                                fee_calculator.lamports_per_signature
-                            } else {
-                                0
-                            },
-                        )
-                    } else if from_account.owner == solana_vote_program::id() {
-                        let minimum_balance = rpc_client.get_minimum_balance_for_rent_exemption(
-                            solana_vote_program::vote_state::VoteState::size_of(),
-                        )?;
-
-                        let lamports = amount.unwrap_or_else(|| {
-                            from_account.lamports.saturating_sub(minimum_balance)
-                        });
-
-                        (
-                            vec![solana_vote_program::vote_instruction::withdraw(
-                                &from_address,
-                                &authority_address,
-                                lamports,
-                                &deposit_address,
-                            )],
-                            lamports,
-                            minimum_balance,
-                        )
-                    } else if from_account.owner == solana_stake_program::id() {
-                        let lamports = amount.unwrap_or(from_account.lamports);
-
-                        (
-                            vec![solana_stake_program::stake_instruction::withdraw(
-                                &from_address,
-                                &authority_address,
-                                &deposit_address,
-                                lamports,
-                                None,
-                            )],
-                            lamports,
-                            0,
-                        )
-                    } else {
-                        return Err(format!(
-                            "Unsupport from account owner: {}",
-                            from_account.owner
-                        )
-                        .into());
-                    };
-
-                    if lamports == 0 {
-                        return Err("Nothing to deposit".into());
-                    }
-
-                    if lamports == 0 || from_account.lamports < lamports + minimum_balance {
-                        return Err("From account has insufficient funds".into());
-                    }
-
-                    let amount = lamports_to_sol(lamports);
-                    println!("From address: {}", from_address);
-                    if from_address != authority_address {
-                        println!("Authority address: {}", authority_address);
-                    }
-                    println!("Amount: {}", Sol(lamports));
-                    println!("{:?} deposit address: {}", exchange, deposit_address);
-
-                    let message = Message::new(&instructions, Some(&authority_address));
-                    if fee_calculator.calculate_fee(&message) > authority_account.lamports {
-                        return Err("Insufficient funds for transaction fee".into());
-                    }
-
-                    let mut transaction = Transaction::new_unsigned(message);
-                    transaction.message.recent_blockhash = recent_blockhash;
-                    let simulation_result = rpc_client.simulate_transaction(&transaction)?.value;
-                    if simulation_result.err.is_some() {
-                        return Err(format!("Simulation failure: {:?}", simulation_result).into());
-                    }
-
-                    transaction.try_sign(&vec![authority_signer], recent_blockhash)?;
-                    println!("Transaction signature: {}", transaction.signatures[0]);
-
-                    let pending_deposit = PendingDeposit {
-                        tx_id: transaction.signatures[0].to_string(),
+                    process_exchange_deposit(
+                        &mut db,
+                        rpc_client,
                         exchange,
                         amount,
-                    };
-
-                    db.record_exchange_deposit(pending_deposit.clone())?;
-
-                    loop {
-                        match rpc_client.send_and_confirm_transaction_with_spinner(&transaction) {
-                            Ok(_) => break,
-                            Err(err) => {
-                                println!("Send transaction failed: {:?}", err);
-                            }
-                        }
-                        match rpc_client.get_fee_calculator_for_blockhash(&recent_blockhash) {
-                            Err(err) => {
-                                println!("Failed to get fee calculator: {:?}", err);
-                            }
-                            Ok(None) => {
-                                db.cancel_exchange_deposit(&pending_deposit)
-                                    .expect("cancel_exchange_deposit");
-                                return Err("Deposit failed: {}".into());
-                            }
-                            Ok(_) => {
-                                println!("Blockhash has not yet expired, retrying transaction...");
-                            }
-                        };
-                    }
-
-                    sync(&mut db).await?;
+                        from_address,
+                        authority_address,
+                        vec![authority_signer],
+                    )
+                    .await?;
                 }
                 ("market", Some(arg_matches)) => {
-                    let account_client = exchange_account_client(exchange, &db).await?;
                     let pair = value_t_or_exit!(arg_matches, "pair", String);
-
-                    let market_data_client = account_client.to_market_data_client();
-
-                    let average_price = market_data_client
-                        .get_average_price(&pair)
-                        .json::<AveragePrice>()
-                        .await?;
-
-                    let ticker_price = market_data_client
-                        .get_24hr_ticker_price()
-                        .with_symbol(&pair)
-                        .json::<TickerPrice>()
-                        .await?;
-
-                    println!("Symbol: {}", ticker_price.symbol);
-                    println!(
-                        "Ask: ${}, Bid: ${}, High: ${}, Low: ${}, ",
-                        ticker_price.ask_price,
-                        ticker_price.bid_price,
-                        ticker_price.high_price,
-                        ticker_price.low_price
-                    );
-                    println!(
-                        "Last {} minute average: ${}",
-                        average_price.mins, average_price.price
-                    );
-                    println!(
-                        "Last 24h change: ${} ({}%), Weighted average price: ${}",
-                        ticker_price.price_change,
-                        ticker_price.price_change_percent,
-                        ticker_price.weighted_avg_price
-                    );
+                    process_exchange_market(&mut db, exchange, pair).await?;
                 }
                 ("api", Some(api_matches)) => match api_matches.subcommand() {
                     ("show", Some(_arg_matches)) => match db.get_exchange_credentials(exchange) {
