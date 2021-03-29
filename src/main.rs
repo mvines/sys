@@ -1,6 +1,8 @@
 use {
     chrono::prelude::*,
-    clap::{crate_description, crate_name, value_t_or_exit, App, AppSettings, Arg, SubCommand},
+    clap::{
+        crate_description, crate_name, value_t, value_t_or_exit, App, AppSettings, Arg, SubCommand,
+    },
     db::*,
     exchange::*,
     serde::Deserialize,
@@ -365,12 +367,17 @@ async fn process_exchange_market(
     Ok(())
 }
 
+enum LimitOrderPrice {
+    At(f64),
+    AmountOverAsk(f64),
+}
+
 async fn process_exchange_sell(
     db: &mut Db,
     exchange: Exchange,
     pair: String,
     quantity: f64,
-    price: f64,
+    price: LimitOrderPrice,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let account_client = exchange_account_client(exchange, &db).await?;
     let market_data_client = account_client.to_market_data_client();
@@ -387,10 +394,22 @@ async fn process_exchange_sell(
         ticker_price.ask_price, ticker_price.bid_price,
     );
 
+    let ask_price = ticker_price.ask_price.parse::<f64>().expect("ask_price");
+    let bid_price = ticker_price.bid_price.parse::<f64>().expect("bid_price");
+
+    let price = match price {
+        LimitOrderPrice::At(price) => price,
+        LimitOrderPrice::AmountOverAsk(extra) => ask_price + extra,
+    };
+
     println!("Placing sell order for ◎{} at ${}", quantity, price);
 
-    if ticker_price.bid_price.parse::<f64>().unwrap() > price {
-        return Err(format!("Order price is less than bid price").into());
+    if bid_price > price {
+        return Err("Order price is less than bid price".into());
+    }
+
+    if price * quantity < 10. {
+        return Err("Total order amount must be 10 or greater".into());
     }
 
     let response = account_client
@@ -525,13 +544,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .help("The amount to sell, in SOL"),
                         )
                         .arg(
-                            Arg::with_name("limit")
-                                .long("limit")
+                            Arg::with_name("at")
+                                .long("at")
                                 .value_name("PRICE")
                                 .takes_value(true)
-                                .required(true)
                                 .validator(is_parsable::<f64>)
                                 .help("Place a limit order at this price"),
+                        )
+                        .arg(
+                            Arg::with_name("ask_plus")
+                                .long("ask-plus")
+                                .value_name("AMOUNT")
+                                .takes_value(true)
+                                .conflicts_with("at")
+                                .validator(is_parsable::<f64>)
+                                .help("Place a limit order at this amount over the current ask"),
                         )
                         .arg(
                             Arg::with_name("pair")
@@ -616,7 +643,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ("sell", Some(arg_matches)) => {
                     let pair = value_t_or_exit!(arg_matches, "pair", String);
                     let amount = value_t_or_exit!(arg_matches, "amount", f64);
-                    let price = value_t_or_exit!(arg_matches, "limit", f64);
+
+                    let price = if let Ok(price) = value_t!(arg_matches, "at", f64) {
+                        LimitOrderPrice::At(price)
+                    } else if let Ok(ask_plus) = value_t!(arg_matches, "ask_plus", f64) {
+                        LimitOrderPrice::AmountOverAsk(ask_plus)
+                    } else {
+                        return Err("--at or --ask-plus argument required".into());
+                    };
                     process_exchange_sell(&mut db, exchange, pair, amount, price).await?;
                 }
                 ("api", Some(api_matches)) => match api_matches.subcommand() {
