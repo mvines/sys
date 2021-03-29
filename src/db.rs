@@ -13,14 +13,8 @@ pub enum DbError {
 
     #[error("PickleDb: {0}")]
     PickleDb(#[from] pickledb::error::Error),
-    /*
-    /// Length of the seed is too long for address generation
-    #[error("Length of the seed is too long for address generation")]
-    MaxSeedLengthExceeded,
-    #[error("Provided seeds do not result in a valid address")]
-    InvalidSeeds,
-    */
 }
+
 pub type DbResult<T> = std::result::Result<T, DbError>;
 
 pub fn new<P: AsRef<Path>>(db_path: P) -> DbResult<Db> {
@@ -59,6 +53,13 @@ pub struct PendingDeposit {
     pub amount: f64,   // amount of SOL deposited
 }
 
+#[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
+pub struct OpenOrder {
+    pub exchange: Exchange,
+    pub pair: String,
+    pub order_id: String,
+}
+
 impl Db {
     pub fn set_exchange_credentials(
         &mut self,
@@ -94,7 +95,7 @@ impl Db {
             .collect()
     }
 
-    pub fn record_exchange_deposit(&mut self, deposit: PendingDeposit) -> DbResult<()> {
+    pub fn record_deposit(&mut self, deposit: PendingDeposit) -> DbResult<()> {
         if !self.db.lexists("deposits") {
             self.db.lcreate("deposits")?;
         }
@@ -102,20 +103,41 @@ impl Db {
         Ok(self.db.dump()?)
     }
 
-    pub fn cancel_exchange_deposit(&mut self, deposit: &PendingDeposit) -> DbResult<()> {
+    pub fn cancel_deposit(&mut self, deposit: &PendingDeposit) -> DbResult<()> {
         assert!(self.db.lrem_value("deposits", deposit)?);
         Ok(self.db.dump()?)
     }
 
-    pub fn confirm_exchange_deposit(&mut self, deposit: &PendingDeposit) -> DbResult<()> {
-        self.cancel_exchange_deposit(deposit)
+    pub fn confirm_deposit(&mut self, deposit: &PendingDeposit) -> DbResult<()> {
+        self.cancel_deposit(deposit)
     }
 
-    pub fn pending_exchange_deposits(&self, exchange: Exchange) -> Vec<PendingDeposit> {
+    pub fn pending_deposits(&self, exchange: Exchange) -> Vec<PendingDeposit> {
         self.db
             .liter("deposits")
             .filter_map(|item_iter| item_iter.get_item::<PendingDeposit>())
             .filter(|pending_deposit| pending_deposit.exchange == exchange)
+            .collect()
+    }
+
+    pub fn record_order(&mut self, order: OpenOrder) -> DbResult<()> {
+        if !self.db.lexists("orders") {
+            self.db.lcreate("orders")?;
+        }
+        self.db.ladd("orders", &order).unwrap();
+        Ok(self.db.dump()?)
+    }
+
+    pub fn clear_order(&mut self, order: &OpenOrder) -> DbResult<()> {
+        assert!(self.db.lrem_value("orders", order)?);
+        Ok(self.db.dump()?)
+    }
+
+    pub fn pending_orders(&self, exchange: Exchange) -> Vec<OpenOrder> {
+        self.db
+            .liter("orders")
+            .filter_map(|item_iter| item_iter.get_item::<OpenOrder>())
+            .filter(|pending_order| pending_order.exchange == exchange)
             .collect()
     }
 }
