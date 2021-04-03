@@ -1,3 +1,8 @@
+mod coin_gecko;
+mod db;
+mod exchange;
+mod notifier;
+
 use {
     chrono::prelude::*,
     clap::{
@@ -5,6 +10,7 @@ use {
     },
     db::*,
     exchange::*,
+    notifier::*,
     serde::Deserialize,
     solana_clap_utils::{self, input_parsers::*, input_validators::*},
     solana_client::rpc_client::RpcClient,
@@ -20,9 +26,6 @@ use {
     std::{path::PathBuf, process::exit, str::FromStr},
     tokio_binance::AccountClient,
 };
-mod coin_gecko;
-mod db;
-mod exchange;
 
 fn naivedate_of(string: &str) -> Result<NaiveDate, String> {
     NaiveDate::parse_from_str(string, "%y/%m/%d")
@@ -43,6 +46,7 @@ fn app_version() -> String {
 async fn process_sync_exchange(
     db: &mut Db,
     exchange: Exchange,
+    notifier: &Notifier,
 ) -> Result<(), Box<dyn std::error::Error>> {
     println!("Synchronizing {:?}...", exchange);
     let account_client = exchange_account_client(exchange, db).await?;
@@ -63,12 +67,14 @@ async fn process_sync_exchange(
             .find(|deposit_record| deposit_record.tx_id == pending_deposit.tx_id)
         {
             if deposit_record.success() {
-                println!(
+                let msg = format!(
                     "◎{} deposit successful ({})",
                     pending_deposit.amount, pending_deposit.tx_id
                 );
+                println!("{}", msg);
+                notifier.send(&format!("{:?}: {}", exchange, msg)).await;
+
                 db.confirm_deposit(&pending_deposit)?;
-                // TODO: add notifier...
                 continue;
             } else {
                 println!(
@@ -116,8 +122,11 @@ async fn process_sync_exchange(
             }
             "FILLED" => {
                 assert_eq!(order.executed_qty, order.orig_qty);
-                println!("Order filled: {}", order_summary);
-                // TODO: add notifier...
+
+                let msg = format!("Order filled: {}", order_summary);
+                println!("{}", msg);
+                notifier.send(&format!("{:?}: {}", exchange, msg)).await;
+
                 db.clear_order(&order_info)?;
             }
             _ => unreachable!(),
@@ -126,9 +135,9 @@ async fn process_sync_exchange(
     Ok(())
 }
 
-async fn process_sync(db: &mut Db) -> Result<(), Box<dyn std::error::Error>> {
+async fn process_sync(db: &mut Db, notifier: &Notifier) -> Result<(), Box<dyn std::error::Error>> {
     for exchange in db.get_configured_exchanges() {
-        process_sync_exchange(db, exchange).await?;
+        process_sync_exchange(db, exchange, notifier).await?;
     }
     Ok(())
 }
@@ -159,6 +168,7 @@ async fn process_exchange_deposit<T: Signers>(
     from_address: Pubkey,
     authority_address: Pubkey,
     signers: T,
+    notifier: &Notifier,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (recent_blockhash, fee_calculator) = rpc_client.get_recent_blockhash()?;
 
@@ -323,7 +333,7 @@ async fn process_exchange_deposit<T: Signers>(
         };
     }
 
-    process_sync_exchange(db, exchange).await
+    process_sync_exchange(db, exchange, notifier).await
 }
 
 async fn process_exchange_market(
@@ -378,6 +388,7 @@ async fn process_exchange_sell(
     pair: String,
     quantity: f64,
     price: LimitOrderPrice,
+    notifier: &Notifier,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let account_client = exchange_account_client(exchange, &db).await?;
     let market_data_client = account_client.to_market_data_client();
@@ -424,7 +435,7 @@ async fn process_exchange_sell(
         order_id: response.client_order_id.clone(),
     })?;
 
-    process_sync_exchange(db, exchange).await
+    process_sync_exchange(db, exchange, notifier).await
 }
 
 #[tokio::main]
@@ -579,6 +590,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         CommitmentConfig::confirmed(),
     );
     let mut wallet_manager = None;
+    let notifier = Notifier::default();
 
     let mut db = db::new(&db_path).unwrap_or_else(|err| {
         eprintln!("Failed to open {}: {}", db_path.display(), err);
@@ -592,7 +604,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("Price on {}: ${:.2}", when, market_data.current_price.usd);
         }
         ("sync", Some(_arg_matches)) => {
-            process_sync(&mut db).await?;
+            process_sync(&mut db, &notifier).await?;
         }
         (exchange, Some(exchange_matches)) => {
             assert!(exchanges.contains(&exchange), "Bug!");
@@ -633,6 +645,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         from_address,
                         authority_address,
                         vec![authority_signer],
+                        &notifier,
                     )
                     .await?;
                 }
@@ -651,7 +664,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     } else {
                         return Err("--at or --ask-plus argument required".into());
                     };
-                    process_exchange_sell(&mut db, exchange, pair, amount, price).await?;
+                    process_exchange_sell(&mut db, exchange, pair, amount, price, &notifier)
+                        .await?;
                 }
                 ("api", Some(api_matches)) => match api_matches.subcommand() {
                     ("show", Some(_arg_matches)) => match db.get_exchange_credentials(exchange) {
