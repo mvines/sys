@@ -270,7 +270,7 @@ async fn process_exchange_deposit<T: Signers>(
             0,
         )
     } else {
-        return Err(format!("Unsupport from account owner: {}", from_account.owner).into());
+        return Err(format!("Unsupported `from` account owner: {}", from_account.owner).into());
     };
 
     if lamports == 0 {
