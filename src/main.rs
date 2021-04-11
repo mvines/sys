@@ -145,6 +145,7 @@ async fn process_sync(db: &mut Db, notifier: &Notifier) -> Result<(), Box<dyn st
 async fn process_exchange_balance(
     db: &mut Db,
     exchange: Exchange,
+    free_only: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let account_client = exchange_account_client(exchange, &db).await?;
     let account_info = account_client.get_account().json::<AccountInfo>().await?;
@@ -153,13 +154,18 @@ async fn process_exchange_balance(
         .iter()
         .find(|b| b.asset == "SOL")
         .expect("SOL");
-    println!(
-        "Available: ◎{}\nIn order:  ◎{}",
-        sol_balance.free, sol_balance.locked
-    );
+    if free_only {
+        println!("◎{}", sol_balance.free);
+    } else {
+        println!(
+            "Free: ◎{}\nIn order: ◎{}",
+            sol_balance.free, sol_balance.locked
+        );
+    }
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn process_exchange_deposit<T: Signers>(
     db: &mut Db,
     rpc_client: RpcClient,
@@ -483,7 +489,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .about("Exchange interactions")
                 .setting(AppSettings::SubcommandRequiredElseHelp)
                 .setting(AppSettings::InferSubcommands)
-                .subcommand(SubCommand::with_name("balance").about("Get SOL balance"))
+                .subcommand(
+                    SubCommand::with_name("balance")
+                        .about("Get SOL balance")
+                        .arg(
+                            Arg::with_name("free_only")
+                                .long("free")
+                                .takes_value(false)
+                                .help("Only display free balance"),
+                        ),
+                )
                 .subcommand(
                     SubCommand::with_name("market")
                         .about("Display market info for a given trading pair")
@@ -611,8 +626,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let exchange = Exchange::from_str(exchange)?;
             match exchange_matches.subcommand() {
-                ("balance", Some(_arg_matches)) => {
-                    process_exchange_balance(&mut db, exchange).await?;
+                ("balance", Some(arg_matches)) => {
+                    let free_only = arg_matches.is_present("free_only");
+                    process_exchange_balance(&mut db, exchange, free_only).await?;
                 }
                 ("deposit", Some(arg_matches)) => {
                     let amount = match arg_matches.value_of("amount").unwrap() {
