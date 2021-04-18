@@ -24,3 +24,6 @@ solana-vote-program = "=1.6.1"
 thiserror = "1.0"
 tokio = { version = "1.2.0", features = ["macros", "time"] }
 tokio-binance = "1.0"
+
+[profile.dev]
+split-debuginfo = "unpacked"
