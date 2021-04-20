@@ -129,7 +129,13 @@ async fn process_sync_exchange(
 
                 db.clear_order(&order_info)?;
             }
-            _ => unreachable!(),
+            "PARTIALLY_FILLED" => {
+                let msg = format!("Partially filled: {}", order_summary);
+                println!("{}", msg);
+            }
+            wtf_is_this => {
+                panic!("Unknown order status: {}", wtf_is_this);
+            }
         }
     }
     Ok(())
