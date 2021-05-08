@@ -148,6 +148,35 @@ async fn process_sync(db: &mut Db, notifier: &Notifier) -> Result<(), Box<dyn st
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
+async fn process_exchange_address(
+    db: &mut Db,
+    exchange: Exchange,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let account_client = exchange_account_client(exchange, &db).await?;
+    if !account_client
+        .get_account()
+        .json::<AccountInfo>()
+        .await?
+        .can_deposit
+    {
+        return Err(format!("{:?} deposits not available", exchange).into());
+    }
+    let withdrawal_client = account_client.to_withdraw_client();
+
+    let deposit_address = withdrawal_client
+        .get_deposit_address("SOL")
+        .with_status(true)
+        .json::<DepositAddress>()
+        .await?
+        .address
+        .ok_or_else(|| format!("{:?} did not provide a deposit address", exchange))?
+        .parse::<Pubkey>()?;
+
+    println!("{}", deposit_address);
+    Ok(())
+}
+
 async fn process_exchange_balance(
     db: &mut Db,
     exchange: Exchange,
@@ -223,6 +252,7 @@ async fn process_exchange_deposit<T: Signers>(
         .json::<DepositAddress>()
         .await?
         .address
+        .ok_or_else(|| format!("{:?} did not provide a deposit address", exchange))?
         .parse::<Pubkey>()?;
 
     let (instructions, lamports, minimum_balance) = if from_account.owner == system_program::id() {
@@ -505,6 +535,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .help("Only display free balance"),
                         ),
                 )
+                .subcommand(SubCommand::with_name("address").about("Show SOL deposit address"))
                 .subcommand(
                     SubCommand::with_name("market")
                         .about("Display market info for a given trading pair")
@@ -632,6 +663,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let exchange = Exchange::from_str(exchange)?;
             match exchange_matches.subcommand() {
+                ("address", Some(_arg_matches)) => {
+                    process_exchange_address(&mut db, exchange).await?;
+                }
                 ("balance", Some(arg_matches)) => {
                     let free_only = arg_matches.is_present("free_only");
                     process_exchange_balance(&mut db, exchange, free_only).await?;
@@ -790,7 +824,7 @@ struct AccountInfo {
 
 #[derive(Debug, Deserialize)]
 struct DepositAddress {
-    address: String,
+    address: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
