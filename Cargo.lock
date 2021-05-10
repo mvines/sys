@@ -74,6 +74,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9b34d609dfbaf33d6889b2b7106d3ca345eacad44200913df5ba02bfd31d2ba9"
 
 [[package]]
+name = "async-trait"
+version = "0.1.50"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0b98e84bbb4cbcdd97da190ba0c58a1bb0de2c1fdf67d159e192ed766aeca722"
+dependencies = [
+ "proc-macro2 1.0.26",
+ "quote 1.0.9",
+ "syn 1.0.72",
+]
+
+[[package]]
 name = "async-tungstenite"
 version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -733,6 +744,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "dotenv"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "77c90badedccf4105eca100756a0b1289e191f6fcbdadd3cee1d2f614f97da8f"
+
+[[package]]
 name = "dtoa"
 version = "0.4.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -904,6 +921,25 @@ name = "fs_extra"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2022715d62ab30faffd124d40b76f4134a550a87792276512b18d63272333394"
+
+[[package]]
+name = "ftx"
+version = "0.1.1"
+source = "git+https://github.com/fabianboesiger/ftx?rev=48c19604a1df93ac62a147e5ee708c150b459a69#48c19604a1df93ac62a147e5ee708c150b459a69"
+dependencies = [
+ "chrono",
+ "dotenv",
+ "futures-util",
+ "hex",
+ "hmac-sha256",
+ "log",
+ "reqwest",
+ "rust_decimal",
+ "serde",
+ "serde_json",
+ "tokio 1.5.0",
+ "tokio-tungstenite",
+]
 
 [[package]]
 name = "fuchsia-zircon"
@@ -1193,6 +1229,12 @@ dependencies = [
  "generic-array 0.12.4",
  "hmac 0.7.1",
 ]
+
+[[package]]
+name = "hmac-sha256"
+version = "0.1.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bcdc571e566521512579aab40bf807c5066e1765fb36857f16ed7595c13567c6"
 
 [[package]]
 name = "http"
@@ -2326,6 +2368,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "rust_decimal"
+version = "1.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "72e80c4f9a71b5949e283189c3c3ae35fedddecfe112e75c9d58751c36605b62"
+dependencies = [
+ "arrayvec",
+ "num-traits",
+ "serde",
+]
+
+[[package]]
 name = "rustc-demangle"
 version = "0.1.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3306,10 +3359,13 @@ dependencies = [
 name = "sys"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "chrono",
  "clap",
+ "ftx",
  "pickledb",
  "reqwest",
+ "rust_decimal",
  "serde",
  "serde_json",
  "solana-clap-utils",
@@ -3677,6 +3733,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "tokio-tungstenite"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1e96bb520beab540ab664bd5a9cfeaa1fcd846fa68c830b42e2c8963071251d2"
+dependencies = [
+ "futures-util",
+ "log",
+ "native-tls",
+ "pin-project",
+ "tokio 1.5.0",
+ "tokio-native-tls",
+ "tungstenite 0.13.0",
+]
+
+[[package]]
 name = "tokio-udp"
 version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3800,6 +3871,27 @@ dependencies = [
  "native-tls",
  "rand 0.8.3",
  "sha-1 0.9.5",
+ "url",
+ "utf-8",
+]
+
+[[package]]
+name = "tungstenite"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5fe8dada8c1a3aeca77d6b51a4f1314e0f4b8e438b7b1b71e3ddaca8080e4093"
+dependencies = [
+ "base64 0.13.0",
+ "byteorder",
+ "bytes 1.0.1",
+ "http",
+ "httparse",
+ "input_buffer 0.4.0",
+ "log",
+ "native-tls",
+ "rand 0.8.3",
+ "sha-1 0.9.5",
+ "thiserror",
  "url",
  "utf-8",
 ]

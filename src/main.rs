@@ -1,6 +1,8 @@
+mod binance_exchange;
 mod coin_gecko;
 mod db;
 mod exchange;
+mod ftx_exchange;
 mod notifier;
 
 use {
@@ -11,7 +13,6 @@ use {
     db::*,
     exchange::*,
     notifier::*,
-    serde::Deserialize,
     solana_clap_utils::{self, input_parsers::*, input_validators::*},
     solana_client::rpc_client::RpcClient,
     solana_sdk::{
@@ -24,7 +25,6 @@ use {
         transaction::Transaction,
     },
     std::{path::PathBuf, process::exit, str::FromStr},
-    tokio_binance::AccountClient,
 };
 
 fn naivedate_of(string: &str) -> Result<NaiveDate, String> {
@@ -46,156 +46,65 @@ fn app_version() -> String {
 async fn process_sync_exchange(
     db: &mut Db,
     exchange: Exchange,
+    exchange_client: &dyn ExchangeClient,
     notifier: &Notifier,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    println!("Synchronizing {:?}...", exchange);
-    let account_client = exchange_account_client(exchange, db).await?;
-
-    let deposit_history = {
-        let withdrawal_client = account_client.to_withdraw_client();
-        withdrawal_client
-            .get_deposit_history()
-            .with_asset("SOL")
-            .json::<DepositHistory>()
-            .await?
-            .deposit_list
-    };
+    let recent_deposits = exchange_client.recent_deposits().await?;
 
     for pending_deposit in db.pending_deposits(exchange) {
-        if let Some(deposit_record) = deposit_history
+        if let Some(deposit_info) = recent_deposits
             .iter()
-            .find(|deposit_record| deposit_record.tx_id == pending_deposit.tx_id)
+            .find(|deposit_info| deposit_info.tx_id == pending_deposit.tx_id)
         {
-            if deposit_record.success() {
-                let msg = format!(
-                    "◎{} deposit successful ({})",
-                    pending_deposit.amount, pending_deposit.tx_id
-                );
-                println!("{}", msg);
-                notifier.send(&format!("{:?}: {}", exchange, msg)).await;
+            assert!(
+                (deposit_info.amount - pending_deposit.amount).abs() < f64::EPSILON,
+                "Deposit amount mismatch!"
+            );
+            let msg = format!(
+                "◎{} deposit successful ({})",
+                pending_deposit.amount, pending_deposit.tx_id
+            );
+            println!("{}", msg);
+            notifier.send(&format!("{:?}: {}", exchange, msg)).await;
 
-                db.confirm_deposit(&pending_deposit)?;
-                continue;
-            } else {
-                println!(
-                    "◎{} deposit pending (visible on {:?}) ({})",
-                    pending_deposit.amount, exchange, pending_deposit.tx_id
-                );
-            }
+            db.confirm_deposit(&pending_deposit)?;
         } else {
             println!(
-                "◎{} deposit pending (not visible on {:?} yet) ({})",
-                pending_deposit.amount, exchange, pending_deposit.tx_id
+                "◎{} deposit pending ({})",
+                pending_deposit.amount, pending_deposit.tx_id
             );
         }
     }
 
     for order_info in db.pending_orders(exchange) {
-        let order = account_client
-            .get_order(
-                &order_info.pair,
-                tokio_binance::ID::ClientOId(&order_info.order_id),
-            )
-            .json::<Order>()
+        let order_status = exchange_client
+            .sell_order_status(&order_info.pair, &order_info.order_id)
             .await?;
-
-        assert_eq!(order.side, "SELL");
-        assert_eq!(order.r#type, "LIMIT");
-        assert_eq!(order.time_in_force, "GTC");
-        assert_eq!(order.symbol, order_info.pair);
-        assert_eq!(order.client_order_id, order_info.order_id);
-
         let order_summary = format!(
             "{}: ◎{} at ${} (◎{} filled)",
-            order.symbol, order.orig_qty, order.price, order.executed_qty,
+            order_info.pair, order_status.amount, order_status.price, order_status.filled_amount,
         );
 
-        match order.status.as_str() {
-            "NEW" => println!("Open order: {}", order_summary),
-            "CANCELED" => {
-                println!("Clearing canceled order: {}", order_summary);
-                if order.executed_qty != "0.00000000" {
-                    println!("TODO: Handle partial execution upon cancel: {:?}", order);
-                    todo!();
-                }
-                db.clear_order(&order_info)?;
-            }
-            "FILLED" => {
-                assert_eq!(order.executed_qty, order.orig_qty);
-
-                let msg = format!("Order filled: {}", order_summary);
-                println!("{}", msg);
-                notifier.send(&format!("{:?}: {}", exchange, msg)).await;
-
-                db.clear_order(&order_info)?;
-            }
-            "PARTIALLY_FILLED" => {
+        if order_status.open {
+            if order_status.filled_amount > 0. {
                 let msg = format!("Partially filled: {}", order_summary);
                 println!("{}", msg);
+                notifier.send(&format!("{:?}: {}", exchange, msg)).await;
+            } else {
+                println!("Open order: {}", order_summary);
             }
-            wtf_is_this => {
-                panic!("Unknown order status: {}", wtf_is_this);
-            }
+        } else {
+            let msg = if (order_status.amount - order_status.filled_amount).abs() < f64::EPSILON {
+                format!("Order filled: {}", order_summary)
+            } else if order_status.filled_amount < f64::EPSILON {
+                format!("Order cancelled: {}", order_summary)
+            } else {
+                panic!("TODO: Handle partial execution upon cancel");
+            };
+            println!("{}", msg);
+            notifier.send(&format!("{:?}: {}", exchange, msg)).await;
+            db.clear_order(&order_info)?;
         }
-    }
-    Ok(())
-}
-
-async fn process_sync(db: &mut Db, notifier: &Notifier) -> Result<(), Box<dyn std::error::Error>> {
-    for exchange in db.get_configured_exchanges() {
-        process_sync_exchange(db, exchange, notifier).await?;
-    }
-    Ok(())
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn process_exchange_address(
-    db: &mut Db,
-    exchange: Exchange,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let account_client = exchange_account_client(exchange, &db).await?;
-    if !account_client
-        .get_account()
-        .json::<AccountInfo>()
-        .await?
-        .can_deposit
-    {
-        return Err(format!("{:?} deposits not available", exchange).into());
-    }
-    let withdrawal_client = account_client.to_withdraw_client();
-
-    let deposit_address = withdrawal_client
-        .get_deposit_address("SOL")
-        .with_status(true)
-        .json::<DepositAddress>()
-        .await?
-        .address
-        .ok_or_else(|| format!("{:?} did not provide a deposit address", exchange))?
-        .parse::<Pubkey>()?;
-
-    println!("{}", deposit_address);
-    Ok(())
-}
-
-async fn process_exchange_balance(
-    db: &mut Db,
-    exchange: Exchange,
-    free_only: bool,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let account_client = exchange_account_client(exchange, &db).await?;
-    let account_info = account_client.get_account().json::<AccountInfo>().await?;
-    let sol_balance = account_info
-        .balances
-        .iter()
-        .find(|b| b.asset == "SOL")
-        .expect("SOL");
-    if free_only {
-        println!("◎{}", sol_balance.free);
-    } else {
-        println!(
-            "Free: ◎{}\nIn order: ◎{}",
-            sol_balance.free, sol_balance.locked
-        );
     }
     Ok(())
 }
@@ -205,11 +114,11 @@ async fn process_exchange_deposit<T: Signers>(
     db: &mut Db,
     rpc_client: RpcClient,
     exchange: Exchange,
+    deposit_address: Pubkey,
     amount: Option<u64>,
     from_address: Pubkey,
     authority_address: Pubkey,
     signers: T,
-    notifier: &Notifier,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (recent_blockhash, fee_calculator) = rpc_client.get_recent_blockhash()?;
 
@@ -234,26 +143,6 @@ async fn process_exchange_deposit<T: Signers>(
         )
         .into());
     }
-
-    let account_client = exchange_account_client(exchange, &db).await?;
-    if !account_client
-        .get_account()
-        .json::<AccountInfo>()
-        .await?
-        .can_deposit
-    {
-        return Err(format!("{:?} deposits not available", exchange).into());
-    }
-    let withdrawal_client = account_client.to_withdraw_client();
-
-    let deposit_address = withdrawal_client
-        .get_deposit_address("SOL")
-        .with_status(true)
-        .json::<DepositAddress>()
-        .await?
-        .address
-        .ok_or_else(|| format!("{:?} did not provide a deposit address", exchange))?
-        .parse::<Pubkey>()?;
 
     let (instructions, lamports, minimum_balance) = if from_account.owner == system_program::id() {
         let lamports = amount.unwrap_or_else(|| {
@@ -356,7 +245,7 @@ async fn process_exchange_deposit<T: Signers>(
 
     loop {
         match rpc_client.send_and_confirm_transaction_with_spinner(&transaction) {
-            Ok(_) => break,
+            Ok(_) => return Ok(()),
             Err(err) => {
                 println!("Send transaction failed: {:?}", err);
             }
@@ -374,49 +263,6 @@ async fn process_exchange_deposit<T: Signers>(
             }
         };
     }
-
-    process_sync_exchange(db, exchange, notifier).await
-}
-
-async fn process_exchange_market(
-    db: &mut Db,
-    exchange: Exchange,
-    pair: String,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let account_client = exchange_account_client(exchange, &db).await?;
-    let market_data_client = account_client.to_market_data_client();
-
-    let average_price = market_data_client
-        .get_average_price(&pair)
-        .json::<AveragePrice>()
-        .await?;
-
-    let ticker_price = market_data_client
-        .get_24hr_ticker_price()
-        .with_symbol(&pair)
-        .json::<TickerPrice>()
-        .await?;
-
-    println!("Symbol: {}", ticker_price.symbol);
-    println!(
-        "Ask: ${}, Bid: ${}, High: ${}, Low: ${}, ",
-        ticker_price.ask_price,
-        ticker_price.bid_price,
-        ticker_price.high_price,
-        ticker_price.low_price
-    );
-    println!(
-        "Last {} minute average: ${}",
-        average_price.mins, average_price.price
-    );
-    println!(
-        "Last 24h change: ${} ({}%), Weighted average price: ${}",
-        ticker_price.price_change,
-        ticker_price.price_change_percent,
-        ticker_price.weighted_avg_price
-    );
-
-    Ok(())
 }
 
 enum LimitOrderPrice {
@@ -427,57 +273,36 @@ enum LimitOrderPrice {
 async fn process_exchange_sell(
     db: &mut Db,
     exchange: Exchange,
+    exchange_client: &dyn ExchangeClient,
     pair: String,
-    quantity: f64,
+    amount: f64,
     price: LimitOrderPrice,
-    notifier: &Notifier,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let account_client = exchange_account_client(exchange, &db).await?;
-    let market_data_client = account_client.to_market_data_client();
-
-    let ticker_price = market_data_client
-        .get_24hr_ticker_price()
-        .with_symbol(&pair)
-        .json::<TickerPrice>()
-        .await?;
-
-    println!("Symbol: {}", ticker_price.symbol);
-    println!(
-        "Ask: ${}, Bid: ${}",
-        ticker_price.ask_price, ticker_price.bid_price,
-    );
-
-    let ask_price = ticker_price.ask_price.parse::<f64>().expect("ask_price");
-    let bid_price = ticker_price.bid_price.parse::<f64>().expect("bid_price");
+    let bid_ask = exchange_client.bid_ask(&pair).await?;
+    println!("Symbol: {}", pair);
+    println!("Ask: ${}, Bid: ${}", bid_ask.ask_price, bid_ask.bid_price,);
 
     let price = match price {
         LimitOrderPrice::At(price) => price,
-        LimitOrderPrice::AmountOverAsk(extra) => ask_price + extra,
+        LimitOrderPrice::AmountOverAsk(extra) => bid_ask.ask_price + extra,
     };
 
-    println!("Placing sell order for ◎{} at ${}", quantity, price);
+    println!("Placing sell order for ◎{} at ${}", amount, price);
 
-    if bid_price > price {
+    if bid_ask.bid_price > price {
         return Err("Order price is less than bid price".into());
     }
 
-    if price * quantity < 10. {
-        return Err("Total order amount must be 10 or greater".into());
-    }
-
-    let response = account_client
-        .place_limit_order(&pair, tokio_binance::Side::Sell, price, quantity, true)
-        .with_new_order_resp_type(tokio_binance::OrderRespType::Full)
-        .json::<Order>()
+    let order_id = exchange_client
+        .place_sell_order(&pair, price, amount)
         .await?;
 
     db.record_order(OpenOrder {
         exchange,
         pair: pair.clone(),
-        order_id: response.client_order_id.clone(),
+        order_id,
     })?;
-
-    process_sync_exchange(db, exchange, notifier).await
+    Ok(())
 }
 
 #[tokio::main]
@@ -517,7 +342,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .help("Date to fetch the price for"),
                 ),
         )
-        .subcommand(SubCommand::with_name("sync").about("Synchronize with exchanges"));
+        .subcommand(SubCommand::with_name("sync").about("Synchronize with all exchanges"));
 
     for exchange in &exchanges {
         app = app.subcommand(
@@ -529,10 +354,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     SubCommand::with_name("balance")
                         .about("Get SOL balance")
                         .arg(
-                            Arg::with_name("free_only")
-                                .long("free")
+                            Arg::with_name("available_only")
+                                .long("available")
                                 .takes_value(false)
-                                .help("Only display free balance"),
+                                .help("Only display available balance"),
                         ),
                 )
                 .subcommand(SubCommand::with_name("address").about("Show SOL deposit address"))
@@ -555,11 +380,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             SubCommand::with_name("set")
                                 .about("Set API key")
                                 .arg(Arg::with_name("api_key").required(true).takes_value(true))
-                                .arg(
-                                    Arg::with_name("secret")
-                                        .required(true)
-                                        .takes_value(true),
-                                ),
+                                .arg(Arg::with_name("secret").required(true).takes_value(true)),
                         )
                         .subcommand(SubCommand::with_name("show").about("Show API key"))
                         .subcommand(SubCommand::with_name("clear").about("Clear API key")),
@@ -631,7 +452,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .default_value("SOLUSDT")
                                 .help("Market to place the order at"),
                         ),
-                ),
+                )
+                .subcommand(SubCommand::with_name("sync").about("Synchronize exchange")),
         );
     }
 
@@ -656,19 +478,46 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("Price on {}: ${:.2}", when, market_data.current_price.usd);
         }
         ("sync", Some(_arg_matches)) => {
-            process_sync(&mut db, &notifier).await?;
+            for (exchange, exchange_credentials) in db.get_configured_exchanges() {
+                println!("Synchronizing {:?}...", exchange);
+                let exchange_client = exchange_client_new(exchange, exchange_credentials)?;
+                process_sync_exchange(&mut db, exchange, exchange_client.as_ref(), &notifier)
+                    .await?
+            }
         }
         (exchange, Some(exchange_matches)) => {
             assert!(exchanges.contains(&exchange), "Bug!");
-
             let exchange = Exchange::from_str(exchange)?;
+
+            let exchange_client = || {
+                let exchange_credentials = db
+                    .get_exchange_credentials(exchange)
+                    .ok_or_else(|| format!("No API key set for {:?}", exchange))?;
+                exchange_client_new(exchange, exchange_credentials)
+            };
+
             match exchange_matches.subcommand() {
                 ("address", Some(_arg_matches)) => {
-                    process_exchange_address(&mut db, exchange).await?;
+                    let deposit_address = exchange_client()?.deposit_address().await?;
+                    println!("{}", deposit_address);
                 }
                 ("balance", Some(arg_matches)) => {
-                    let free_only = arg_matches.is_present("free_only");
-                    process_exchange_balance(&mut db, exchange, free_only).await?;
+                    let available_only = arg_matches.is_present("available_only");
+
+                    let balance = exchange_client()?.balance().await?;
+                    if available_only {
+                        println!("◎{}", balance.available);
+                    } else {
+                        println!(
+                            "Available: ◎{}\nTotal: ◎{}",
+                            balance.available, balance.total,
+                        );
+                    }
+                }
+                ("market", Some(arg_matches)) => {
+                    let pair = value_t_or_exit!(arg_matches, "pair", String);
+                    println!("Pair: {}", pair);
+                    exchange_client()?.print_market_info(&pair).await?;
                 }
                 ("deposit", Some(arg_matches)) => {
                     let amount = match arg_matches.value_of("amount").unwrap() {
@@ -693,21 +542,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let authority_address = authority_address.expect("authority_address");
                     let authority_signer = authority_signer.expect("authority_signer");
 
+                    let exchange_client = exchange_client()?;
+                    let deposit_address = exchange_client.deposit_address().await?;
+
                     process_exchange_deposit(
                         &mut db,
                         rpc_client,
                         exchange,
+                        deposit_address,
                         amount,
                         from_address,
                         authority_address,
                         vec![authority_signer],
-                        &notifier,
                     )
                     .await?;
-                }
-                ("market", Some(arg_matches)) => {
-                    let pair = value_t_or_exit!(arg_matches, "pair", String);
-                    process_exchange_market(&mut db, exchange, pair).await?;
+                    process_sync_exchange(&mut db, exchange, exchange_client.as_ref(), &notifier)
+                        .await?;
                 }
                 ("sell", Some(arg_matches)) => {
                     let pair = value_t_or_exit!(arg_matches, "pair", String);
@@ -720,15 +570,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     } else {
                         return Err("--at or --ask-plus argument required".into());
                     };
-                    process_exchange_sell(&mut db, exchange, pair, amount, price, &notifier)
-                        .await?;
+                    let exchange_client = exchange_client()?;
+                    process_exchange_sell(
+                        &mut db,
+                        exchange,
+                        exchange_client.as_ref(),
+                        pair,
+                        amount,
+                        price,
+                    )
+                    .await?;
+                    process_sync_exchange(&mut db, exchange, exchange_client.as_ref(), &notifier)
+                        .await?
+                }
+                ("sync", Some(_arg_matches)) => {
+                    let exchange_client = exchange_client()?;
+                    process_sync_exchange(&mut db, exchange, exchange_client.as_ref(), &notifier)
+                        .await?
                 }
                 ("api", Some(api_matches)) => match api_matches.subcommand() {
                     ("show", Some(_arg_matches)) => match db.get_exchange_credentials(exchange) {
-                        Some(ExchangeCredentials {
-                            api_key,
-                            secret: _,
-                        }) => {
+                        Some(ExchangeCredentials { api_key, secret: _ }) => {
                             println!("API Key: {}", api_key);
                             println!("Secret: ********");
                         }
@@ -741,10 +603,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let secret = value_t_or_exit!(arg_matches, "secret", String);
                         db.set_exchange_credentials(
                             exchange,
-                            ExchangeCredentials {
-                                api_key,
-                                secret,
-                            },
+                            ExchangeCredentials { api_key, secret },
                         )?;
                         println!("API key set for {:?}", exchange);
                     }
@@ -762,108 +621,4 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     Ok(())
-}
-
-async fn exchange_account_client(
-    exchange: Exchange,
-    db: &Db,
-) -> Result<AccountClient, Box<dyn std::error::Error>> {
-    let ExchangeCredentials {
-        api_key,
-        secret,
-    } = db
-        .get_exchange_credentials(exchange)
-        .ok_or_else(|| format!("No API key set for {:?}", exchange))?;
-
-    let url = match exchange {
-        Exchange::Binance => BINANCE_URL,
-        Exchange::BinanceUs => BINANCE_US_URL,
-        Exchange::Ftx | Exchange::FtxUs => todo!(),
-    };
-
-    Ok(AccountClient::connect(api_key, secret, url)?)
-}
-
-#[derive(Debug, Deserialize)]
-struct AveragePrice {
-    mins: usize,
-    price: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct TickerPrice {
-    ask_price: String,
-    bid_price: String,
-    high_price: String,
-    low_price: String,
-    price_change: String,
-    price_change_percent: String,
-    symbol: String,
-    volume: String,
-    quote_volume: String,
-    weighted_avg_price: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct AccountInfoBalance {
-    asset: String,
-    free: String,
-    locked: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct AccountInfo {
-    account_type: String,
-    balances: Vec<AccountInfoBalance>,
-    can_deposit: bool,
-    can_trade: bool,
-    can_withdraw: bool,
-}
-
-#[derive(Debug, Deserialize)]
-struct DepositAddress {
-    address: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct DepositRecord {
-    address: String,
-    asset: String,
-    amount: f64,
-    tx_id: String,
-    status: usize, // 0 = pending, 1 = success, 6 = credited but cannot withdraw
-}
-
-impl DepositRecord {
-    fn success(&self) -> bool {
-        self.status == 1
-    }
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct DepositHistory {
-    deposit_list: Vec<DepositRecord>,
-    success: bool,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct Order {
-    client_order_id: String,
-    cummulative_quote_qty: String,
-    executed_qty: String,
-    order_id: usize,
-    order_list_id: isize,
-    orig_qty: String,
-    price: String,
-    side: String,
-    status: String, // "NEW" / "FILLED" / "CANCELED"
-    symbol: String,
-    time_in_force: String,
-    r#type: String,
 }

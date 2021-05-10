@@ -1,5 +1,8 @@
 use {
+    crate::{binance_exchange, ftx_exchange},
+    async_trait::async_trait,
     serde::{Deserialize, Serialize},
+    solana_sdk::pubkey::Pubkey,
     std::str::FromStr,
     thiserror::Error,
 };
@@ -38,5 +41,64 @@ pub struct ExchangeCredentials {
     pub secret: String,
 }
 
-pub const BINANCE_URL: &str = "https://api.binance.com";
-pub const BINANCE_US_URL: &str = "https://api.binance.us";
+#[derive(Debug)]
+pub struct ExchangeBalance {
+    pub available: f64,
+    pub total: f64,
+}
+
+#[derive(Debug)]
+pub struct DepositInfo {
+    pub tx_id: String,
+    pub amount: f64,
+}
+
+#[derive(Debug)]
+pub struct BidAsk {
+    pub bid_price: f64,
+    pub ask_price: f64,
+}
+
+pub type OrderId = String;
+
+#[derive(Debug)]
+pub struct SellOrderStatus {
+    pub open: bool,
+    pub price: f64,
+    pub amount: f64,
+    pub filled_amount: f64,
+}
+
+#[async_trait]
+pub trait ExchangeClient {
+    async fn deposit_address(&self) -> Result<Pubkey, Box<dyn std::error::Error>>;
+    async fn recent_deposits(&self) -> Result<Vec<DepositInfo>, Box<dyn std::error::Error>>;
+    async fn balance(&self) -> Result<ExchangeBalance, Box<dyn std::error::Error>>;
+    async fn print_market_info(&self, pair: &str) -> Result<(), Box<dyn std::error::Error>>;
+    async fn bid_ask(&self, pair: &str) -> Result<BidAsk, Box<dyn std::error::Error>>;
+    async fn place_sell_order(
+        &self,
+        pair: &str,
+        price: f64,
+        amount: f64,
+    ) -> Result<OrderId, Box<dyn std::error::Error>>;
+    #[allow(clippy::ptr_arg)]
+    async fn sell_order_status(
+        &self,
+        pair: &str,
+        order_id: &OrderId,
+    ) -> Result<SellOrderStatus, Box<dyn std::error::Error>>;
+}
+
+pub fn exchange_client_new(
+    exchange: Exchange,
+    exchange_credentials: ExchangeCredentials,
+) -> Result<Box<dyn ExchangeClient>, Box<dyn std::error::Error>> {
+    let exchange_client: Box<dyn ExchangeClient> = match exchange {
+        Exchange::Binance => Box::new(binance_exchange::new(exchange_credentials)?),
+        Exchange::BinanceUs => Box::new(binance_exchange::new_us(exchange_credentials)?),
+        Exchange::Ftx => Box::new(ftx_exchange::new(exchange_credentials)?),
+        Exchange::FtxUs => Box::new(ftx_exchange::new_us(exchange_credentials)?),
+    };
+    Ok(exchange_client)
+}

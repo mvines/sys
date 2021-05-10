@@ -87,11 +87,18 @@ impl Db {
         Ok(())
     }
 
-    pub fn get_configured_exchanges(&self) -> Vec<Exchange> {
+    pub fn get_configured_exchanges(&self) -> Vec<(Exchange, ExchangeCredentials)> {
         self.credentials_db
             .get_all()
             .into_iter()
-            .filter_map(|key| key.parse().ok())
+            .filter_map(|key| {
+                if let Ok(exchange) = key.parse() {
+                    self.get_exchange_credentials(exchange)
+                        .map(|exchange_credentials| (exchange, exchange_credentials))
+                } else {
+                    None
+                }
+            })
             .collect()
     }
 
