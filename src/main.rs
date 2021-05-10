@@ -487,7 +487,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let today = Utc::now().date();
         format!("{}/{}/{}", today.year(), today.month(), today.day())
     };
-    let exchanges = ["binance", "binanceus"];
+    let exchanges = ["binance", "binanceus", "ftx", "ftxus"];
 
     let app_version = &*app_version();
     let mut app = App::new(crate_name!())
@@ -556,7 +556,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .about("Set API key")
                                 .arg(Arg::with_name("api_key").required(true).takes_value(true))
                                 .arg(
-                                    Arg::with_name("secret_key")
+                                    Arg::with_name("secret")
                                         .required(true)
                                         .takes_value(true),
                                 ),
@@ -725,12 +725,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 ("api", Some(api_matches)) => match api_matches.subcommand() {
                     ("show", Some(_arg_matches)) => match db.get_exchange_credentials(exchange) {
-                        Some(ExchangeCredentials::BinanceApi {
+                        Some(ExchangeCredentials {
                             api_key,
-                            secret_key: _,
+                            secret: _,
                         }) => {
                             println!("API Key: {}", api_key);
-                            println!("Secret Key: ********");
+                            println!("Secret: ********");
                         }
                         None => {
                             println!("No API key set for {:?}", exchange);
@@ -738,12 +738,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     },
                     ("set", Some(arg_matches)) => {
                         let api_key = value_t_or_exit!(arg_matches, "api_key", String);
-                        let secret_key = value_t_or_exit!(arg_matches, "secret_key", String);
+                        let secret = value_t_or_exit!(arg_matches, "secret", String);
                         db.set_exchange_credentials(
                             exchange,
-                            ExchangeCredentials::BinanceApi {
+                            ExchangeCredentials {
                                 api_key,
-                                secret_key,
+                                secret,
                             },
                         )?;
                         println!("API key set for {:?}", exchange);
@@ -768,9 +768,9 @@ async fn exchange_account_client(
     exchange: Exchange,
     db: &Db,
 ) -> Result<AccountClient, Box<dyn std::error::Error>> {
-    let ExchangeCredentials::BinanceApi {
+    let ExchangeCredentials {
         api_key,
-        secret_key,
+        secret,
     } = db
         .get_exchange_credentials(exchange)
         .ok_or_else(|| format!("No API key set for {:?}", exchange))?;
@@ -778,9 +778,10 @@ async fn exchange_account_client(
     let url = match exchange {
         Exchange::Binance => BINANCE_URL,
         Exchange::BinanceUs => BINANCE_US_URL,
+        Exchange::Ftx | Exchange::FtxUs => todo!(),
     };
 
-    Ok(AccountClient::connect(api_key, secret_key, url)?)
+    Ok(AccountClient::connect(api_key, secret, url)?)
 }
 
 #[derive(Debug, Deserialize)]

@@ -8,6 +8,8 @@ use {
 pub enum Exchange {
     Binance,
     BinanceUs,
+    Ftx,
+    FtxUs,
 }
 
 impl FromStr for Exchange {
@@ -17,6 +19,8 @@ impl FromStr for Exchange {
         match s {
             "Binance" | "binance" => Ok(Exchange::Binance),
             "BinanceUs" | "binanceus" => Ok(Exchange::BinanceUs),
+            "Ftx" | "ftx" => Ok(Exchange::Ftx),
+            "FtxUs" | "ftxus" => Ok(Exchange::FtxUs),
             _ => Err(ParseExchangeError::Invalid),
         }
     }
@@ -29,8 +33,9 @@ pub enum ParseExchangeError {
 }
 
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
-pub enum ExchangeCredentials {
-    BinanceApi { api_key: String, secret_key: String },
+pub struct ExchangeCredentials {
+    pub api_key: String,
+    pub secret: String,
 }
 
 pub const BINANCE_URL: &str = "https://api.binance.com";
