@@ -56,18 +56,35 @@ async fn process_sync_exchange(
             .iter()
             .find(|deposit_info| deposit_info.tx_id == pending_deposit.tx_id)
         {
-            assert!(
-                (deposit_info.amount - pending_deposit.amount).abs() < f64::EPSILON,
-                "Deposit amount mismatch!"
-            );
-            let msg = format!(
-                "◎{} deposit successful ({})",
-                pending_deposit.amount, pending_deposit.tx_id
-            );
-            println!("{}", msg);
-            notifier.send(&format!("{:?}: {}", exchange, msg)).await;
+            let missing_lamports =
+                sol_to_lamports((deposit_info.amount - pending_deposit.amount).abs());
+            if missing_lamports >= 10 {
+                let msg = format!(
+                    "Error! Deposit amount mismatch for {}! Actual amount: ◎{}, expected amount: ◎{}",
+                    pending_deposit.tx_id, deposit_info.amount, pending_deposit.amount
+                );
+                println!("{}", msg);
+                notifier.send(&format!("{:?}: {}", exchange, msg)).await;
+            } else {
+                if missing_lamports != 0 {
+                    // Binance will occasionally steal a lamport or two...
+                    let msg = format!(
+                        "{:?} just stole {} lamports from your deposit!",
+                        exchange, missing_lamports
+                    );
+                    println!("{}", msg);
+                    notifier.send(&format!("{:?}: {}", exchange, msg)).await;
+                }
 
-            db.confirm_deposit(&pending_deposit)?;
+                let msg = format!(
+                    "◎{} deposit successful ({})",
+                    pending_deposit.amount, pending_deposit.tx_id
+                );
+                println!("{}", msg);
+                notifier.send(&format!("{:?}: {}", exchange, msg)).await;
+
+                db.confirm_deposit(&pending_deposit)?;
+            }
         } else {
             println!(
                 "◎{} deposit pending ({})",
