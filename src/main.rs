@@ -2,6 +2,7 @@ mod binance_exchange;
 mod coin_gecko;
 mod db;
 mod exchange;
+mod field_as_string;
 mod ftx_exchange;
 mod notifier;
 
@@ -20,10 +21,12 @@ use {
         message::Message,
         native_token::{lamports_to_sol, sol_to_lamports, Sol},
         pubkey::Pubkey,
+        signature::Signature,
         signers::Signers,
         system_instruction, system_program,
         transaction::Transaction,
     },
+    solana_transaction_status::UiTransactionEncoding,
     std::{path::PathBuf, process::exit, str::FromStr},
 };
 
@@ -322,6 +325,278 @@ async fn process_exchange_sell(
     Ok(())
 }
 
+fn println_lot(lot: &Lot, current_price: f64, total_gain: &mut f64, total_current_value: &mut f64) {
+    let acquisition_value = lamports_to_sol(lot.amount) * lot.acquisition.price;
+    let current_value = lamports_to_sol(lot.amount) * current_price;
+    let gain = current_value - acquisition_value;
+
+    *total_gain += gain;
+    *total_current_value += current_value;
+
+    println!(
+        "{:>3}. {} | ◎{:<10.2} at ${:<6.2} | gain: ${:<12.2} | acquisition value: ${:<12.2} now: ${:<12.2} | {:?}",
+        lot.lot_number,
+        lot.acquisition.when,
+        lamports_to_sol(lot.amount),
+        lot.acquisition.price,
+        gain,
+        acquisition_value,
+        current_value,
+        lot.acquisition.kind,
+    );
+}
+
+async fn process_account_add(
+    db: &mut Db,
+    rpc_client: &RpcClient,
+    address: Pubkey,
+    description: String,
+    when: NaiveDate,
+    price: Option<f64>,
+    signature: Option<Signature>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (when, amount, last_update_epoch, kind) = match signature {
+        Some(signature) => {
+            let confirmed_transaction =
+                rpc_client.get_confirmed_transaction(&signature, UiTransactionEncoding::Base64)?;
+
+            let slot = confirmed_transaction.slot;
+            let when = match confirmed_transaction.block_time {
+                Some(block_time) => NaiveDateTime::from_timestamp_opt(block_time, 0)
+                    .ok_or_else(|| format!("Invalid block time for slot {}", slot))?
+                    .date(),
+                None => {
+                    println!(
+                        "Block time not available for slot {}, using `--when` argument instead: {}",
+                        slot, when
+                    );
+                    when
+                }
+            };
+
+            let meta = confirmed_transaction
+                .transaction
+                .meta
+                .ok_or("Transaction metadata not available")?;
+
+            if meta.err.is_some() {
+                return Err("Transaction was not successful".into());
+            }
+
+            let transaction = confirmed_transaction
+                .transaction
+                .transaction
+                .decode()
+                .ok_or("Unable to decode transaction")?;
+
+            let account_index = transaction
+                .message
+                .account_keys
+                .iter()
+                .position(|k| *k == address)
+                .ok_or_else(|| format!("{} not found in the transaction {}", address, signature))?;
+
+            let amount = meta.post_balances[account_index];
+
+            let epoch_schdule = rpc_client.get_epoch_schedule()?;
+            let last_update_epoch = epoch_schdule.get_epoch_and_slot_index(slot).0;
+
+            (
+                when,
+                amount,
+                last_update_epoch,
+                LotAcquistionKind::Transaction { slot, signature },
+            )
+        }
+        None => {
+            let amount = rpc_client
+                .get_account_with_commitment(&address, rpc_client.commitment())?
+                .value
+                .ok_or_else(|| format!("{} does not exist", address))?
+                .lamports;
+            let last_update_epoch = rpc_client.get_epoch_info()?.epoch.saturating_sub(1);
+            (
+                when,
+                amount,
+                last_update_epoch,
+                LotAcquistionKind::NotAvailable,
+            )
+        }
+    };
+
+    println!("Adding {}", address);
+
+    let current_price = coin_gecko::get_current_price().await?;
+    let price = match price {
+        Some(price) => price,
+        None => coin_gecko::get_price(when).await?,
+    };
+
+    let lot = Lot {
+        lot_number: db.next_lot_number(),
+        acquisition: LotAcquistion { when, price, kind },
+        amount,
+    };
+    println_lot(&lot, current_price, &mut 0., &mut 0.);
+
+    let account = TrackedAccount {
+        address,
+        description,
+        last_update_epoch,
+        last_update_balance: lot.amount,
+        lots: vec![lot],
+    };
+    db.add_account(account)?;
+
+    Ok(())
+}
+
+async fn process_account_list(db: &Db) -> Result<(), Box<dyn std::error::Error>> {
+    let accounts = db.get_accounts();
+    if accounts.is_empty() {
+        println!("No accounts");
+    } else {
+        let current_price = coin_gecko::get_current_price().await?;
+
+        let mut total_gain = 0.;
+        let mut total_current_value = 0.;
+
+        for account in accounts.values() {
+            println!("{}: {}", account.address.to_string(), account.description);
+
+            if !account.lots.is_empty() {
+                for lot in &account.lots {
+                    println_lot(
+                        lot,
+                        current_price,
+                        &mut total_gain,
+                        &mut total_current_value,
+                    );
+                }
+            } else {
+                println!("  No lots");
+            }
+            println!();
+        }
+        println!("Current price: ${:<.2}", current_price);
+        println!("Current value: ${:<.2}", total_current_value);
+        println!("Total gain:    ${:<.2}", total_gain);
+    }
+    Ok(())
+}
+
+async fn process_account_sync(
+    db: &mut Db,
+    rpc_client: &RpcClient,
+    address: Option<Pubkey>,
+    _notifier: &Notifier,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut accounts = match address {
+        Some(address) => {
+            vec![db
+                .get_account(address)
+                .ok_or_else(|| format!("{} does not exist", address))?]
+        }
+        None => db.get_accounts().values().cloned().collect(),
+    };
+
+    if accounts.is_empty() {
+        println!("No accounts to sync");
+        return Ok(());
+    }
+
+    let current_price = coin_gecko::get_current_price().await?;
+
+    let addresses: Vec<Pubkey> = accounts
+        .iter()
+        .map(|TrackedAccount { address, .. }| *address)
+        .collect::<Vec<_>>();
+
+    let epoch_info = rpc_client.get_epoch_info()?;
+
+    let start_epoch = accounts
+        .iter()
+        .map(
+            |TrackedAccount {
+                 last_update_epoch, ..
+             }| last_update_epoch,
+        )
+        .min()
+        .unwrap()
+        + 1;
+
+    let stop_epoch = epoch_info.epoch.saturating_sub(1);
+
+    if start_epoch > stop_epoch {
+        println!("Processed up to epoch {}", stop_epoch);
+        return Ok(());
+    }
+
+    for epoch in start_epoch..=stop_epoch {
+        println!("Processing epoch: {}", epoch);
+        let inflation_rewards = rpc_client.get_inflation_reward(&addresses, Some(epoch))?;
+
+        for (inflation_reward, address, mut account) in
+            itertools::izip!(inflation_rewards, addresses.iter(), accounts.iter_mut(),)
+        {
+            assert_eq!(*address, account.address);
+            if account.last_update_epoch >= epoch {
+                continue;
+            }
+
+            if let Some(inflation_reward) = inflation_reward {
+                account.last_update_balance += inflation_reward.amount;
+
+                let slot = inflation_reward.effective_slot;
+                let (when, price) = coin_gecko::get_block_date_and_price(&rpc_client, slot).await?;
+
+                let lot = Lot {
+                    lot_number: db.next_lot_number(),
+                    acquisition: LotAcquistion {
+                        when,
+                        price,
+                        kind: LotAcquistionKind::EpochReward { epoch, slot },
+                    },
+                    amount: inflation_reward.amount,
+                };
+                println_lot(&lot, current_price, &mut 0., &mut 0.);
+                account.lots.push(lot);
+            }
+        }
+    }
+
+    for mut account in accounts.iter_mut() {
+        account.last_update_epoch = stop_epoch;
+
+        let current_balance = rpc_client.get_balance(&account.address)?;
+
+        if current_balance > account.last_update_balance + sol_to_lamports(1.) {
+            // Larger than a 1 SOL increase? Register a new lot of unknown origin
+
+            let slot = epoch_info.absolute_slot;
+            let (when, price) = coin_gecko::get_block_date_and_price(&rpc_client, slot).await?;
+            let amount = current_balance - account.last_update_balance;
+
+            let lot = Lot {
+                lot_number: db.next_lot_number(),
+                acquisition: LotAcquistion {
+                    when,
+                    price,
+                    kind: LotAcquistionKind::NotAvailable,
+                },
+                amount,
+            };
+            println_lot(&lot, current_price, &mut 0., &mut 0.);
+            account.lots.push(lot);
+            account.last_update_balance = current_balance;
+        }
+
+        db.update_account(account.clone())?;
+    }
+
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let default_db_path = "sell-your-sol";
@@ -359,7 +634,96 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .help("Date to fetch the price for"),
                 ),
         )
-        .subcommand(SubCommand::with_name("sync").about("Synchronize with all exchanges"));
+        .subcommand(SubCommand::with_name("sync").about("Synchronize with all exchanges"))
+        .subcommand(
+            SubCommand::with_name("account")
+                .about("Account management")
+                .setting(AppSettings::SubcommandRequiredElseHelp)
+                .setting(AppSettings::InferSubcommands)
+                .subcommand(
+                    SubCommand::with_name("add")
+                        .about("Register an account")
+                        .arg(
+                            Arg::with_name("address")
+                                .index(1)
+                                .value_name("ADDRESS")
+                                .takes_value(true)
+                                .required(true)
+                                .validator(is_valid_pubkey)
+                                .help("Account address to add"),
+                        )
+                        .arg(
+                            Arg::with_name("description")
+                                .short("d")
+                                .long("description")
+                                .value_name("TEXT")
+                                .takes_value(true)
+                                .help("Account description"),
+                        )
+                        .arg(
+                            Arg::with_name("when")
+                                .short("w")
+                                .long("when")
+                                .value_name("YY/MM/DD")
+                                .takes_value(true)
+                                .required(true)
+                                .default_value(&default_when)
+                                .validator(|value| naivedate_of(&value).map(|_| ()))
+                                .help("Date acquired"),
+                        )
+                        .arg(
+                            Arg::with_name("transaction")
+                                .short("t")
+                                .long("transaction")
+                                .value_name("SIGNATURE")
+                                .takes_value(true)
+                                .validator(is_parsable::<Signature>)
+                                .help("Acquisition transaction signature"),
+                        )
+                        .arg(
+                            Arg::with_name("price")
+                                .short("p")
+                                .long("price")
+                                .value_name("USD")
+                                .takes_value(true)
+                                .validator(is_parsable::<f64>)
+                                .help("Acquisition price per SOL [default: market price on acquisition date]"),
+                        ),
+                )
+                .subcommand(SubCommand::with_name("ls").about("List registered accounts"))
+                .subcommand(
+                    SubCommand::with_name("remove")
+                        .about("Unregister an account")
+                        .arg(
+                            Arg::with_name("address")
+                                .index(1)
+                                .value_name("ADDRESS")
+                                .takes_value(true)
+                                .required(true)
+                                .validator(is_valid_pubkey)
+                                .help("Account address to add"),
+                        )
+                        .arg(
+                            Arg::with_name("confirm")
+                                .long("confirm")
+                                .takes_value(false)
+                                .help("Confirm the operation"),
+                        ),
+                )
+                .subcommand(
+                    SubCommand::with_name("sync")
+                        .about("Synchronize account")
+                        .arg(
+                            Arg::with_name("address")
+                                .index(1)
+                                .value_name("ADDRESS")
+                                .takes_value(true)
+                                .required(false)
+                                .validator(is_valid_pubkey)
+                                .help("Account to synchronize"),
+                        ),
+                ),
+        );
 
     for exchange in &exchanges {
         app = app.subcommand(
@@ -491,8 +855,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     match app_matches.subcommand() {
         ("price", Some(arg_matches)) => {
             let when = naivedate_of(&value_t_or_exit!(arg_matches, "when", String)).unwrap();
-            let market_data = coin_gecko::get_coin_history(when).await?;
-            println!("Price on {}: ${:.2}", when, market_data.current_price.usd);
+            let price = coin_gecko::get_price(when).await?;
+            println!("Price on {}: ${:.2}", when, price);
         }
         ("sync", Some(_arg_matches)) => {
             for (exchange, exchange_credentials) in db.get_configured_exchanges() {
@@ -502,6 +866,49 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .await?
             }
         }
+        ("account", Some(account_matches)) => match account_matches.subcommand() {
+            ("add", Some(arg_matches)) => {
+                let price = value_t!(arg_matches, "price", f64).ok();
+                let when = naivedate_of(&value_t_or_exit!(arg_matches, "when", String)).unwrap();
+                let signature = value_t!(arg_matches, "transaction", Signature).ok();
+                let address = pubkey_of(arg_matches, "address").unwrap();
+                let description = value_t!(arg_matches, "description", String)
+                    .ok()
+                    .unwrap_or_else(String::default);
+
+                process_account_add(
+                    &mut db,
+                    &rpc_client,
+                    address,
+                    description,
+                    when,
+                    price,
+                    signature,
+                )
+                .await?;
+                process_account_sync(&mut db, &rpc_client, Some(address), &notifier).await?;
+            }
+            ("ls", Some(_arg_matches)) => {
+                process_account_list(&db).await?;
+            }
+            ("remove", Some(arg_matches)) => {
+                let address = pubkey_of(arg_matches, "address").unwrap();
+                let confirm = arg_matches.is_present("confirm");
+
+                if !confirm {
+                    println!("Add --confirm to remove {}", address);
+                    return Ok(());
+                }
+
+                db.remove_account(address)?;
+                println!("Removed {}", address);
+            }
+            ("sync", Some(arg_matches)) => {
+                let address = pubkey_of(arg_matches, "address");
+                process_account_sync(&mut db, &rpc_client, address, &notifier).await?;
+            }
+            _ => unreachable!(),
+        },
         (exchange, Some(exchange_matches)) => {
             assert!(exchanges.contains(&exchange), "Bug!");
             let exchange = Exchange::from_str(exchange)?;
@@ -598,12 +1005,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     )
                     .await?;
                     process_sync_exchange(&mut db, exchange, exchange_client.as_ref(), &notifier)
-                        .await?
+                        .await?;
                 }
                 ("sync", Some(_arg_matches)) => {
                     let exchange_client = exchange_client()?;
                     process_sync_exchange(&mut db, exchange, exchange_client.as_ref(), &notifier)
-                        .await?
+                        .await?;
                 }
                 ("api", Some(api_matches)) => match api_matches.subcommand() {
                     ("show", Some(_arg_matches)) => match db.get_exchange_credentials(exchange) {

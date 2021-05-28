@@ -1,8 +1,14 @@
 use {
-    crate::exchange::*,
+    crate::{exchange::*, field_as_string},
+    chrono::NaiveDate,
     pickledb::{PickleDb, PickleDbDumpPolicy},
     serde::{Deserialize, Serialize},
-    std::{fs, path::Path},
+    solana_sdk::{
+        clock::{Epoch, Slot},
+        pubkey::Pubkey,
+        signature::Signature,
+    },
+    std::{collections::HashMap, fs, path::Path},
     thiserror::Error,
 };
 
@@ -13,6 +19,12 @@ pub enum DbError {
 
     #[error("PickleDb: {0}")]
     PickleDb(#[from] pickledb::error::Error),
+
+    #[error("Account already exists: {0}")]
+    AccountAlreadyExists(Pubkey),
+
+    #[error("Account does not exist: {0}")]
+    AccountDoesNotExist(Pubkey),
 }
 
 pub type DbResult<T> = std::result::Result<T, DbError>;
@@ -60,6 +72,44 @@ pub struct OpenOrder {
     pub order_id: String,
 }
 
+#[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
+pub enum LotAcquistionKind {
+    EpochReward {
+        epoch: Epoch,
+        slot: Slot,
+    },
+    Transaction {
+        slot: Slot,
+        #[serde(with = "field_as_string")]
+        signature: Signature,
+    },
+    NotAvailable,
+}
+
+#[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
+pub struct LotAcquistion {
+    pub when: NaiveDate,
+    pub price: f64, // USD per SOL
+    pub kind: LotAcquistionKind,
+}
+
+#[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
+pub struct Lot {
+    pub lot_number: usize,
+    pub acquisition: LotAcquistion,
+    pub amount: u64,
+}
+
+#[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
+pub struct TrackedAccount {
+    #[serde(with = "field_as_string")]
+    pub address: Pubkey,
+    pub description: String,
+    pub last_update_epoch: Epoch,
+    pub last_update_balance: u64,
+    pub lots: Vec<Lot>,
+}
+
 impl Db {
     pub fn set_exchange_credentials(
         &mut self,
@@ -102,17 +152,21 @@ impl Db {
             .collect()
     }
 
+    pub fn save(&mut self) -> DbResult<()> {
+        Ok(self.db.dump()?)
+    }
+
     pub fn record_deposit(&mut self, deposit: PendingDeposit) -> DbResult<()> {
         if !self.db.lexists("deposits") {
             self.db.lcreate("deposits")?;
         }
         self.db.ladd("deposits", &deposit).unwrap();
-        Ok(self.db.dump()?)
+        self.save()
     }
 
     pub fn cancel_deposit(&mut self, deposit: &PendingDeposit) -> DbResult<()> {
         assert!(self.db.lrem_value("deposits", deposit)?);
-        Ok(self.db.dump()?)
+        self.save()
     }
 
     pub fn confirm_deposit(&mut self, deposit: &PendingDeposit) -> DbResult<()> {
@@ -132,12 +186,12 @@ impl Db {
             self.db.lcreate("orders")?;
         }
         self.db.ladd("orders", &order).unwrap();
-        Ok(self.db.dump()?)
+        self.save()
     }
 
     pub fn clear_order(&mut self, order: &OpenOrder) -> DbResult<()> {
         assert!(self.db.lrem_value("orders", order)?);
-        Ok(self.db.dump()?)
+        self.save()
     }
 
     pub fn pending_orders(&self, exchange: Exchange) -> Vec<OpenOrder> {
@@ -146,5 +200,93 @@ impl Db {
             .filter_map(|item_iter| item_iter.get_item::<OpenOrder>())
             .filter(|pending_order| pending_order.exchange == exchange)
             .collect()
+    }
+
+    pub fn add_account(&mut self, account: TrackedAccount) -> DbResult<()> {
+        if !self.db.lexists("accounts") {
+            self.db.lcreate("accounts")?;
+        }
+
+        if self.get_account(account.address).is_some() {
+            Err(DbError::AccountAlreadyExists(account.address))
+        } else {
+            self.db.ladd("accounts", &account).unwrap();
+            self.save()
+        }
+    }
+
+    pub fn update_account(&mut self, account: TrackedAccount) -> DbResult<()> {
+        let position = self
+            .get_account_position(account.address)
+            .ok_or(DbError::AccountDoesNotExist(account.address))?;
+        assert!(
+            self.db
+                .lpop::<TrackedAccount>("accounts", position)
+                .is_some(),
+            "Cannot update unknown account: {}",
+            account.address
+        );
+        self.db.ladd("accounts", &account).unwrap();
+        self.save()
+    }
+
+    pub fn remove_account(&mut self, address: Pubkey) -> DbResult<()> {
+        let position = self
+            .get_account_position(address)
+            .ok_or(DbError::AccountDoesNotExist(address))?;
+        assert!(
+            self.db
+                .lpop::<TrackedAccount>("accounts", position)
+                .is_some(),
+            "Cannot remove unknown account: {}",
+            address
+        );
+        self.save()
+    }
+
+    fn get_account_position(&self, address: Pubkey) -> Option<usize> {
+        if self.db.lexists("accounts") {
+            for (position, value) in self.db.liter("accounts").enumerate() {
+                if let Some(tracked_account) = value.get_item::<TrackedAccount>() {
+                    if tracked_account.address == address {
+                        return Some(position);
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    pub fn get_account(&self, address: Pubkey) -> Option<TrackedAccount> {
+        if !self.db.lexists("accounts") {
+            None
+        } else {
+            self.db
+                .liter("accounts")
+                .filter_map(|item_iter| item_iter.get_item::<TrackedAccount>())
+                .find(|tracked_account| tracked_account.address == address)
+        }
+    }
+
+    pub fn get_accounts(&self) -> HashMap<Pubkey, TrackedAccount> {
+        if !self.db.lexists("accounts") {
+            return HashMap::default();
+        }
+        self.db
+            .liter("accounts")
+            .filter_map(|item_iter| {
+                item_iter
+                    .get_item::<TrackedAccount>()
+                    .map(|ta| (ta.address, ta))
+            })
+            .collect()
+    }
+
+    pub fn next_lot_number(&mut self) -> usize {
+        let lot_number = self.db.get::<usize>("next_lot_number").unwrap_or(0);
+        self.db
+            .set::<usize>("next_lot_number", &(lot_number + 1))
+            .unwrap();
+        lot_number
     }
 }

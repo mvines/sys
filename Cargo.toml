@@ -6,11 +6,11 @@ license = "WTFPL"
 publish = false
 
 [dependencies]
-#ftx = { path = "../ftx" }
 ftx = { git = "https://github.com/fabianboesiger/ftx", rev = "48c19604a1df93ac62a147e5ee708c150b459a69" }
 async-trait = "0.1.50"
 chrono = "0.4"
 clap = "2.33"
+itertools = "0.10.0"
 pickledb = "0.4"
 reqwest = "0.11"
 rust_decimal = "^1.13.0"
@@ -23,6 +23,7 @@ solana-client = "=1.6.8"
 solana-logger = "=1.6.8"
 solana-remote-wallet = "=1.6.8"
 solana-sdk = "=1.6.8"
+solana-transaction-status = "=1.6.8"
 solana-stake-program = "=1.6.8"
 solana-vote-program = "=1.6.8"
 thiserror = "1.0"
