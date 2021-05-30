@@ -5,6 +5,7 @@ mod exchange;
 mod field_as_string;
 mod ftx_exchange;
 mod notifier;
+mod rpc_client_utils;
 
 use {
     chrono::prelude::*,
@@ -21,7 +22,7 @@ use {
         message::Message,
         native_token::{lamports_to_sol, sol_to_lamports, Sol},
         pubkey::Pubkey,
-        signature::Signature,
+        signature::{read_keypair_file, Signature, Signer},
         signers::Signers,
         system_instruction, system_program,
         transaction::Transaction,
@@ -325,7 +326,13 @@ async fn process_exchange_sell(
     Ok(())
 }
 
-fn println_lot(lot: &Lot, current_price: f64, total_gain: &mut f64, total_current_value: &mut f64) {
+fn println_lot(
+    lot: &Lot,
+    current_price: f64,
+    total_gain: &mut f64,
+    total_current_value: &mut f64,
+    notifier: Option<&Notifier>,
+) {
     let acquisition_value = lamports_to_sol(lot.amount) * lot.acquisition.price;
     let current_value = lamports_to_sol(lot.amount) * current_price;
     let gain = current_value - acquisition_value;
@@ -333,7 +340,7 @@ fn println_lot(lot: &Lot, current_price: f64, total_gain: &mut f64, total_curren
     *total_gain += gain;
     *total_current_value += current_value;
 
-    println!(
+    let msg = format!(
         "{:>3}. {} | ◎{:<10.2} at ${:<6.2} | gain: ${:<12.2} | acquisition value: ${:<12.2} now: ${:<12.2} | {:?}",
         lot.lot_number,
         lot.acquisition.when,
@@ -344,6 +351,9 @@ fn println_lot(lot: &Lot, current_price: f64, total_gain: &mut f64, total_curren
         current_value,
         lot.acquisition.kind,
     );
+
+    notifier.map(|notifier| notifier.send(&msg));
+    println!("{}", msg);
 }
 
 async fn process_account_add(
@@ -437,7 +447,7 @@ async fn process_account_add(
         acquisition: LotAcquistion { when, price, kind },
         amount,
     };
-    println_lot(&lot, current_price, &mut 0., &mut 0.);
+    println_lot(&lot, current_price, &mut 0., &mut 0., None);
 
     let account = TrackedAccount {
         address,
@@ -471,6 +481,7 @@ async fn process_account_list(db: &Db) -> Result<(), Box<dyn std::error::Error>>
                         current_price,
                         &mut total_gain,
                         &mut total_current_value,
+                        None,
                     );
                 }
             } else {
@@ -478,6 +489,16 @@ async fn process_account_list(db: &Db) -> Result<(), Box<dyn std::error::Error>>
             }
             println!();
         }
+
+        if let Some(sweep_stake_account) = db.get_sweep_stake_account() {
+            println!("Sweep stake account: {}", sweep_stake_account.address);
+            println!(
+                "Stake authority: {}",
+                sweep_stake_account.stake_authority.display()
+            );
+            println!();
+        }
+
         println!("Current price: ${:<.2}", current_price);
         println!("Current value: ${:<.2}", total_current_value);
         println!("Total gain:    ${:<.2}", total_gain);
@@ -489,7 +510,7 @@ async fn process_account_sync(
     db: &mut Db,
     rpc_client: &RpcClient,
     address: Option<Pubkey>,
-    _notifier: &Notifier,
+    notifier: &Notifier,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut accounts = match address {
         Some(address) => {
@@ -559,7 +580,7 @@ async fn process_account_sync(
                     },
                     amount: inflation_reward.amount,
                 };
-                println_lot(&lot, current_price, &mut 0., &mut 0.);
+                println_lot(&lot, current_price, &mut 0., &mut 0., Some(&notifier));
                 account.lots.push(lot);
             }
         }
@@ -586,7 +607,7 @@ async fn process_account_sync(
                 },
                 amount,
             };
-            println_lot(&lot, current_price, &mut 0., &mut 0.);
+            println_lot(&lot, current_price, &mut 0., &mut 0., Some(&notifier));
             account.lots.push(lot);
             account.last_update_balance = current_balance;
         }
@@ -599,6 +620,7 @@ async fn process_account_sync(
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    solana_logger::setup_with_default("solana=info");
     let default_db_path = "sell-your-sol";
     let default_when = {
         let today = Utc::now().date();
@@ -709,6 +731,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .takes_value(false)
                                 .help("Confirm the operation"),
                         ),
+                )
+                .subcommand(
+                    SubCommand::with_name("set-sweep-stake-account")
+                        .about("Set the sweep stake account")
+                        .arg(
+                            Arg::with_name("address")
+                                .index(1)
+                                .value_name("ADDRESS")
+                                .takes_value(true)
+                                .required(true)
+                                .validator(is_valid_pubkey)
+                                .help("Sweep stake account address"),
+                        )
+                        .arg(
+                            Arg::with_name("stake_authority")
+                                .index(2)
+                                .value_name("KEYPAIR")
+                                .takes_value(true)
+                                .help("Stake authority keypair"),
+                        )
                 )
                 .subcommand(
                     SubCommand::with_name("sync")
@@ -902,6 +944,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 db.remove_account(address)?;
                 println!("Removed {}", address);
+            }
+            ("set-sweep-stake-account", Some(arg_matches)) => {
+                let address = pubkey_of(arg_matches, "address").unwrap();
+                let stake_authority = std::fs::canonicalize(value_t_or_exit!(
+                    arg_matches,
+                    "stake_authority",
+                    PathBuf
+                ))?;
+
+                let stake_authority_keypair = read_keypair_file(&stake_authority)?;
+                let authorized = rpc_client_utils::get_stake_authorized(&rpc_client, address)?;
+
+                if authorized.staker != stake_authority_keypair.pubkey() {
+                    return Err("Stake authority mismatch".into());
+                }
+
+                db.set_sweep_stake_account(SweepStakeAccount {
+                    address,
+                    stake_authority,
+                })?;
+
+                println!("Sweep stake account set to {}", address);
             }
             ("sync", Some(arg_matches)) => {
                 let address = pubkey_of(arg_matches, "address");

@@ -8,7 +8,11 @@ use {
         pubkey::Pubkey,
         signature::Signature,
     },
-    std::{collections::HashMap, fs, path::Path},
+    std::{
+        collections::HashMap,
+        fs,
+        path::{Path, PathBuf},
+    },
     thiserror::Error,
 };
 
@@ -108,6 +112,13 @@ pub struct TrackedAccount {
     pub last_update_epoch: Epoch,
     pub last_update_balance: u64,
     pub lots: Vec<Lot>,
+}
+
+#[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
+pub struct SweepStakeAccount {
+    #[serde(with = "field_as_string")]
+    pub address: Pubkey,
+    pub stake_authority: PathBuf,
 }
 
 impl Db {
@@ -284,9 +295,24 @@ impl Db {
 
     pub fn next_lot_number(&mut self) -> usize {
         let lot_number = self.db.get::<usize>("next_lot_number").unwrap_or(0);
-        self.db
-            .set::<usize>("next_lot_number", &(lot_number + 1))
-            .unwrap();
+        self.db.set("next_lot_number", &(lot_number + 1)).unwrap();
         lot_number
+    }
+
+    pub fn get_sweep_stake_account(&self) -> Option<SweepStakeAccount> {
+        self.db.get("sweep-stake-account")
+    }
+
+    pub fn set_sweep_stake_account(
+        &mut self,
+        sweep_stake_account: SweepStakeAccount,
+    ) -> DbResult<()> {
+        let _ = self
+            .get_account_position(sweep_stake_account.address)
+            .ok_or(DbError::AccountDoesNotExist(sweep_stake_account.address))?;
+        self.db
+            .set("sweep-stake-account", &sweep_stake_account)
+            .unwrap();
+        self.save()
     }
 }
