@@ -22,7 +22,7 @@ use {
         message::Message,
         native_token::{lamports_to_sol, sol_to_lamports, Sol},
         pubkey::Pubkey,
-        signature::{read_keypair_file, Signature, Signer},
+        signature::{read_keypair_file, Keypair, Signature, Signer},
         signers::Signers,
         system_instruction, system_program,
         transaction::Transaction,
@@ -30,6 +30,37 @@ use {
     solana_transaction_status::UiTransactionEncoding,
     std::{path::PathBuf, process::exit, str::FromStr},
 };
+
+// TOOD: Remove `local_stake_instruction` once 1.6.11 ships and
+//              `solana_stake_program::stake_instruction::initialize` is public
+mod local_stake_instruction {
+    use {
+        solana_sdk::{
+            instruction::{AccountMeta, Instruction},
+            pubkey::Pubkey,
+            sysvar,
+        },
+        solana_stake_program::stake_state::*,
+    };
+
+    pub fn initialize(
+        stake_pubkey: &Pubkey,
+        authorized: &Authorized,
+        lockup: &Lockup,
+    ) -> Instruction {
+        Instruction::new_with_bincode(
+            solana_stake_program::id(),
+            &solana_stake_program::stake_instruction::StakeInstruction::Initialize(
+                *authorized,
+                *lockup,
+            ),
+            vec![
+                AccountMeta::new(*stake_pubkey, false),
+                AccountMeta::new_readonly(sysvar::rent::id(), false),
+            ],
+        )
+    }
+}
 
 fn naivedate_of(string: &str) -> Result<NaiveDate, String> {
     NaiveDate::parse_from_str(string, "%y/%m/%d")
@@ -229,7 +260,7 @@ async fn process_exchange_deposit<T: Signers>(
         return Err("Nothing to deposit".into());
     }
 
-    if lamports == 0 || from_account.lamports < lamports + minimum_balance {
+    if from_account.lamports < lamports + minimum_balance {
         return Err("From account has insufficient funds".into());
     }
 
@@ -506,6 +537,263 @@ async fn process_account_list(db: &Db) -> Result<(), Box<dyn std::error::Error>>
     Ok(())
 }
 
+async fn process_account_sweep<T: Signers>(
+    db: &mut Db,
+    rpc_client: &RpcClient,
+    from_address: Pubkey,
+    retain_amount: u64,
+    authority_address: Pubkey,
+    signers: T,
+    notifier: &Notifier,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (recent_blockhash, fee_calculator) = rpc_client.get_recent_blockhash()?;
+    let epoch_info = rpc_client.get_epoch_info()?;
+
+    let from_account = rpc_client
+        .get_account_with_commitment(&from_address, rpc_client.commitment())?
+        .value
+        .ok_or_else(|| format!("Account, {}, does not exist", from_address))?;
+
+    let authority_account = if from_address == authority_address {
+        from_account.clone()
+    } else {
+        rpc_client
+            .get_account_with_commitment(&authority_address, rpc_client.commitment())?
+            .value
+            .ok_or_else(|| format!("Authority account, {}, does not exist", authority_address))?
+    };
+
+    let num_transaction_signatures = 3;
+
+    if authority_account.lamports
+        < num_transaction_signatures * fee_calculator.lamports_per_signature
+    {
+        return Err(format!(
+            "Authority has insufficient funds for the transaction fee of {}",
+            Sol(num_transaction_signatures * fee_calculator.lamports_per_signature)
+        )
+        .into());
+    }
+
+    let transitory_stake_account = Keypair::new();
+
+    let (mut instructions, sweep_amount) = if from_account.owner == system_program::id() {
+        let lamports = if from_address == authority_address {
+            from_account.lamports.saturating_sub(
+                num_transaction_signatures * fee_calculator.lamports_per_signature + retain_amount,
+            )
+        } else {
+            from_account.lamports.saturating_sub(retain_amount)
+        };
+
+        (
+            vec![system_instruction::transfer(
+                &from_address,
+                &transitory_stake_account.pubkey(),
+                lamports,
+            )],
+            lamports,
+        )
+    } else if from_account.owner == solana_vote_program::id() {
+        let minimum_balance = rpc_client.get_minimum_balance_for_rent_exemption(
+            solana_vote_program::vote_state::VoteState::size_of(),
+        )?;
+
+        let lamports = from_account
+            .lamports
+            .saturating_sub(minimum_balance + retain_amount);
+
+        (
+            vec![solana_vote_program::vote_instruction::withdraw(
+                &from_address,
+                &authority_address,
+                lamports,
+                &transitory_stake_account.pubkey(),
+            )],
+            lamports,
+        )
+    } else if from_account.owner == solana_stake_program::id() {
+        let lamports = from_account.lamports.saturating_sub(retain_amount);
+
+        (
+            vec![solana_stake_program::stake_instruction::withdraw(
+                &from_address,
+                &authority_address,
+                &transitory_stake_account.pubkey(),
+                lamports,
+                None,
+            )],
+            lamports,
+        )
+    } else {
+        return Err(format!("Unsupported `from` account owner: {}", from_account.owner).into());
+    };
+
+    if sweep_amount < sol_to_lamports(1.) {
+        return Err(format!(
+            "{} has less than ◎1 to sweep ({})",
+            from_address,
+            Sol(sweep_amount)
+        )
+        .into());
+    }
+
+    println!("From address: {}", from_address);
+    if from_address != authority_address {
+        println!("Authority address: {}", authority_address);
+    }
+    println!("Sweep amount: {}", Sol(sweep_amount));
+    println!(
+        "Transitory stake address: {}",
+        transitory_stake_account.pubkey()
+    );
+
+    let sweep_stake_account = db
+        .get_sweep_stake_account()
+        .ok_or("Sweep stake account not configured")?;
+    let stake_authority_keypair = read_keypair_file(&sweep_stake_account.stake_authority)?;
+
+    let (authorized, vote_account_address) =
+        rpc_client_utils::get_stake_authorized(&rpc_client, sweep_stake_account.address)?;
+
+    if authorized.staker != stake_authority_keypair.pubkey() {
+        return Err("Stake authority mismatch".into());
+    }
+
+    instructions.append(&mut vec![
+        system_instruction::allocate(
+            &transitory_stake_account.pubkey(),
+            std::mem::size_of::<solana_stake_program::stake_state::StakeState>() as u64,
+        ),
+        system_instruction::assign(
+            &transitory_stake_account.pubkey(),
+            &solana_stake_program::id(),
+        ),
+        local_stake_instruction::initialize(
+            &transitory_stake_account.pubkey(),
+            &authorized,
+            &solana_stake_program::stake_state::Lockup::default(),
+        ),
+        solana_stake_program::stake_instruction::delegate_stake(
+            &transitory_stake_account.pubkey(),
+            &stake_authority_keypair.pubkey(),
+            &vote_account_address,
+        ),
+    ]);
+
+    let message = Message::new(&instructions, Some(&authority_address));
+    assert_eq!(
+        fee_calculator.calculate_fee(&message),
+        num_transaction_signatures * fee_calculator.lamports_per_signature
+    );
+
+    let mut transaction = Transaction::new_unsigned(message);
+    transaction.message.recent_blockhash = recent_blockhash;
+    let simulation_result = rpc_client.simulate_transaction(&transaction)?.value;
+    if simulation_result.err.is_some() {
+        return Err(format!("Simulation failure: {:?}", simulation_result).into());
+    }
+
+    let msg = format!(
+        "Sweeping {} from {} into {} (via {})",
+        Sol(sweep_amount),
+        from_address,
+        sweep_stake_account.address,
+        transitory_stake_account.pubkey(),
+    );
+
+    transaction.partial_sign(&signers, recent_blockhash);
+    transaction.try_sign(
+        &[&transitory_stake_account, &stake_authority_keypair],
+        recent_blockhash,
+    )?;
+    println!("Transaction signature: {}", transaction.signatures[0]);
+
+    let org_from_tracked_account = db
+        .get_account(from_address)
+        .ok_or_else(|| format!("{} is not a tracked", from_address))?;
+    let mut from_tracked_account = org_from_tracked_account.clone();
+    if from_tracked_account.last_update_balance < sweep_amount {
+        return Err(format!(
+            "Insufficient tracked funds in {}.  Last update balance is {}",
+            from_address,
+            Sol(from_tracked_account.last_update_balance)
+        )
+        .into());
+    }
+    from_tracked_account
+        .lots
+        .sort_by_key(|lot| lot.acquisition.when);
+    from_tracked_account.lots.reverse();
+
+    let transitory_lots = {
+        let mut transitory_lots = vec![];
+        let mut sweep_amount_remaining = sweep_amount;
+        while sweep_amount_remaining > 0 {
+            let mut lot = from_tracked_account.lots.pop().unwrap();
+            if lot.amount <= sweep_amount_remaining {
+                sweep_amount_remaining -= lot.amount;
+                transitory_lots.push(lot);
+            } else {
+                let mut split_lot = lot.clone();
+                split_lot.amount = sweep_amount_remaining;
+                lot.amount -= sweep_amount_remaining;
+                transitory_lots.push(split_lot);
+                from_tracked_account.lots.push(lot);
+                sweep_amount_remaining = 0;
+            }
+        }
+        transitory_lots
+    };
+
+    let org_transitory_sweep_stake_accounts = db.get_transitory_sweep_stake_accounts();
+    let mut transitory_sweep_stake_accounts = org_transitory_sweep_stake_accounts.clone();
+    transitory_sweep_stake_accounts.push(TransitorySweepStakeAccount {
+        address: transitory_stake_account.pubkey(),
+        from_address,
+    });
+    db.set_transitory_sweep_stake_accounts(&transitory_sweep_stake_accounts)?;
+    db.add_account(TrackedAccount {
+        address: transitory_stake_account.pubkey(),
+        description: "Transitory sweep stake".to_string(),
+        last_update_epoch: epoch_info.epoch,
+        last_update_balance: sweep_amount,
+        lots: transitory_lots,
+    })?;
+    db.update_account(from_tracked_account)?;
+
+    loop {
+        match rpc_client.send_and_confirm_transaction_with_spinner(&transaction) {
+            Ok(_) => break,
+            Err(err) => {
+                println!("Send transaction failed: {:?}", err);
+            }
+        }
+        match rpc_client.get_fee_calculator_for_blockhash(&recent_blockhash) {
+            Err(err) => {
+                println!("Failed to get fee calculator: {:?}", err);
+            }
+            Ok(None) => {
+                //db.cancel_deposit(&pending_deposit).expect("cancel_deposit");
+                // undo save on failure...
+                // method to merge lots on undo...
+
+                db.update_account(org_from_tracked_account)?;
+                db.remove_account(transitory_stake_account.pubkey())?;
+                db.set_transitory_sweep_stake_accounts(&org_transitory_sweep_stake_accounts)?;
+                return Err("Sweep failed: {}".into());
+            }
+            Ok(_) => {
+                println!("Blockhash has not yet expired, retrying transaction...");
+            }
+        };
+    }
+
+    notifier.send(&msg).await;
+    println!("{}", msg);
+    Ok(())
+}
+
 async fn process_account_sync(
     db: &mut Db,
     rpc_client: &RpcClient,
@@ -753,6 +1041,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         )
                 )
                 .subcommand(
+                    SubCommand::with_name("sweep")
+                        .about("Sweep SOL into the sweep stake account")
+                        .arg(
+                            Arg::with_name("address")
+                                .index(1)
+                                .value_name("ADDRESS")
+                                .takes_value(true)
+                                .required(true)
+                                .validator(is_valid_pubkey)
+                                .help("Source address to sweep from"),
+                        )
+                        .arg(
+                            Arg::with_name("authority")
+                                .index(2)
+                                .value_name("KEYPAIR")
+                                .takes_value(true)
+                                .required(true)
+                                .validator(is_valid_signer)
+                                .help("Source account authority keypair"),
+                        )
+                        .arg(
+                            Arg::with_name("retain")
+                                .short("r")
+                                .long("retain")
+                                .value_name("SOL")
+                                .takes_value(true)
+                                .validator(is_parsable::<f64>)
+                                .help("Amount of SOL to retain in the source account [default: 0]"),
+                        ),
+                )
+                .subcommand(
                     SubCommand::with_name("sync")
                         .about("Synchronize account")
                         .arg(
@@ -883,7 +1202,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let app_matches = app.get_matches();
     let db_path = value_t_or_exit!(app_matches, "db_path", PathBuf);
     let rpc_client = RpcClient::new_with_commitment(
-        "https://api.mainnet-beta.solana.com".to_string(),
+        //"https://api.mainnet-beta.solana.com".to_string(),
+        "http://localhost:8899".to_string(),
         CommitmentConfig::confirmed(),
     );
     let mut wallet_manager = None;
@@ -954,7 +1274,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ))?;
 
                 let stake_authority_keypair = read_keypair_file(&stake_authority)?;
-                let authorized = rpc_client_utils::get_stake_authorized(&rpc_client, address)?;
+                let (authorized, _vote_account_address) =
+                    rpc_client_utils::get_stake_authorized(&rpc_client, address)?;
 
                 if authorized.staker != stake_authority_keypair.pubkey() {
                     return Err("Stake authority mismatch".into());
@@ -967,8 +1288,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 println!("Sweep stake account set to {}", address);
             }
+            ("sweep", Some(arg_matches)) => {
+                let from_address = pubkey_of(arg_matches, "address").unwrap();
+                let (authority_signer, authority_address) =
+                    signer_of(arg_matches, "authority", &mut wallet_manager)?;
+                let authority_address = authority_address.expect("authority_address");
+                let authority_signer = authority_signer.expect("authority_signer");
+                let retain_amount =
+                    sol_to_lamports(value_t!(arg_matches, "retain", f64).unwrap_or(0.));
+
+                process_account_sweep(
+                    &mut db,
+                    &rpc_client,
+                    from_address,
+                    retain_amount,
+                    authority_address,
+                    vec![authority_signer],
+                    &notifier,
+                )
+                .await?;
+            }
             ("sync", Some(arg_matches)) => {
                 let address = pubkey_of(arg_matches, "address");
+
+                // TODO: when sweeping transitory_stake_accounts, if any accounts don't exist then
+                //       just remove them (and associated account/lots too).
+                //       The transaction might have failed...
+
                 process_account_sync(&mut db, &rpc_client, address, &notifier).await?;
             }
             _ => unreachable!(),

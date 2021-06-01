@@ -121,6 +121,15 @@ pub struct SweepStakeAccount {
     pub stake_authority: PathBuf,
 }
 
+#[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
+pub struct TransitorySweepStakeAccount {
+    #[serde(with = "field_as_string")]
+    pub address: Pubkey,
+
+    #[serde(with = "field_as_string")]
+    pub from_address: Pubkey,
+}
+
 impl Db {
     pub fn set_exchange_credentials(
         &mut self,
@@ -312,6 +321,25 @@ impl Db {
             .ok_or(DbError::AccountDoesNotExist(sweep_stake_account.address))?;
         self.db
             .set("sweep-stake-account", &sweep_stake_account)
+            .unwrap();
+        self.save()
+    }
+
+    pub fn get_transitory_sweep_stake_accounts(&self) -> Vec<TransitorySweepStakeAccount> {
+        self.db
+            .get("transitory-sweep-stake-accounts")
+            .unwrap_or_default()
+    }
+
+    pub fn set_transitory_sweep_stake_accounts(
+        &mut self,
+        transitory_sweep_stake_accounts: &[TransitorySweepStakeAccount],
+    ) -> DbResult<()> {
+        self.db
+            .set(
+                "transitory-sweep-stake-accounts",
+                &transitory_sweep_stake_accounts.iter().collect::<Vec<_>>(),
+            )
             .unwrap();
         self.save()
     }
