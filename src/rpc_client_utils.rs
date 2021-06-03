@@ -1,6 +1,6 @@
 use {
     solana_client::{rpc_client::RpcClient, rpc_response::StakeActivationState},
-    solana_sdk::{account_utils::StateMut, pubkey::Pubkey},
+    solana_sdk::{account::Account, account_utils::StateMut, pubkey::Pubkey},
     solana_stake_program::stake_state::{Authorized, StakeState},
 };
 
@@ -22,4 +22,37 @@ pub fn get_stake_authorized(
         Ok(StakeState::Stake(meta, stake)) => Ok((meta.authorized, stake.delegation.voter_pubkey)),
         _ => Err(format!("Invalid stake account: {}", stake_account_address).into()),
     }
+}
+
+pub fn stake_accounts_have_same_credits_observed(
+    stake_account1: &Account,
+    stake_account2: &Account,
+) -> Result<bool, Box<dyn std::error::Error>> {
+    use solana_stake_program::stake_state::Stake;
+
+    let stake_state1 = bincode::deserialize(stake_account1.data.as_slice())
+        .map_err(|err| format!("Invalid stake account 1: {}", err))?;
+    let stake_state2 = bincode::deserialize(stake_account2.data.as_slice())
+        .map_err(|err| format!("Invalid stake account 2: {}", err))?;
+
+    if let (
+        StakeState::Stake(
+            _,
+            Stake {
+                delegation: _,
+                credits_observed: credits_observed1,
+            },
+        ),
+        StakeState::Stake(
+            _,
+            Stake {
+                delegation: _,
+                credits_observed: credits_observed2,
+            },
+        ),
+    ) = (stake_state1, stake_state2)
+    {
+        return Ok(credits_observed1 == credits_observed2);
+    }
+    Ok(false)
 }

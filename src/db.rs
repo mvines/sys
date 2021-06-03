@@ -5,12 +5,13 @@ use {
     serde::{Deserialize, Serialize},
     solana_sdk::{
         clock::{Epoch, Slot},
+        native_token::lamports_to_sol,
         pubkey::Pubkey,
         signature::Signature,
     },
     std::{
-        collections::HashMap,
-        fs,
+        collections::{HashMap, HashSet},
+        fmt, fs,
         path::{Path, PathBuf},
     },
     thiserror::Error,
@@ -29,6 +30,12 @@ pub enum DbError {
 
     #[error("Account does not exist: {0}")]
     AccountDoesNotExist(Pubkey),
+
+    #[error("Pending transfer with signature does not exist: {0}")]
+    PendingTransferDoesNotExist(Signature),
+
+    #[error("Account has insufficient balance: {0}")]
+    AccountHasInsufficientBalance(Pubkey),
 }
 
 pub type DbResult<T> = std::result::Result<T, DbError>;
@@ -54,12 +61,17 @@ pub fn new<P: AsRef<Path>>(db_path: P) -> DbResult<Db> {
         PickleDb::new_json(credentials_db_filename, PickleDbDumpPolicy::DumpUponRequest)
     };
 
-    Ok(Db { db, credentials_db })
+    Ok(Db {
+        db,
+        credentials_db,
+        auto_save: true,
+    })
 }
 
 pub struct Db {
     db: PickleDb,
     credentials_db: PickleDb,
+    auto_save: bool,
 }
 
 #[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
@@ -67,6 +79,16 @@ pub struct PendingDeposit {
     pub exchange: Exchange,
     pub tx_id: String, // transaction signature of the deposit
     pub amount: f64,   // amount of SOL deposited
+}
+
+#[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
+pub struct PendingTransfer {
+    #[serde(with = "field_as_string")]
+    pub signature: Signature, // transaction signature of the transfer
+
+    pub from_address: Pubkey,
+    pub to_address: Pubkey,
+    pub lots: Vec<Lot>,
 }
 
 #[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
@@ -90,6 +112,18 @@ pub enum LotAcquistionKind {
     NotAvailable,
 }
 
+impl fmt::Display for LotAcquistionKind {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            LotAcquistionKind::EpochReward { epoch, .. } => write!(f, "epoch {} reward", epoch),
+            LotAcquistionKind::Transaction { signature, .. } => write!(f, "{}", signature),
+            LotAcquistionKind::NotAvailable => {
+                write!(f, "other")
+            }
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
 pub struct LotAcquistion {
     pub when: NaiveDate,
@@ -101,7 +135,23 @@ pub struct LotAcquistion {
 pub struct Lot {
     pub lot_number: usize,
     pub acquisition: LotAcquistion,
-    pub amount: u64,
+    pub amount: u64, // lamports
+}
+
+impl Lot {
+    // Figure the amount of income that the Lot incurred
+    pub fn income(&self) -> f64 {
+        match self.acquisition.kind {
+            LotAcquistionKind::EpochReward { .. } | LotAcquistionKind::NotAvailable => {
+                self.acquisition.price * lamports_to_sol(self.amount)
+            }
+            LotAcquistionKind::Transaction { .. } => 0.,
+        }
+    }
+    // Figure the current cap gain/loss for the Lot
+    pub fn cap_gain(&self, current_price: f64) -> f64 {
+        (current_price - self.acquisition.price) * lamports_to_sol(self.amount)
+    }
 }
 
 #[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
@@ -114,6 +164,72 @@ pub struct TrackedAccount {
     pub lots: Vec<Lot>,
 }
 
+impl TrackedAccount {
+    fn assert_lot_balance(&self) {
+        let lot_balance: u64 = self.lots.iter().map(|lot| lot.amount).sum();
+        assert_eq!(
+            lot_balance, self.last_update_balance,
+            "Lot balance mismatch: {:?}",
+            self
+        );
+    }
+
+    fn extract_lots(&mut self, db: &mut Db, amount: u64) -> DbResult<Vec<Lot>> {
+        if self.last_update_balance < amount {
+            return Err(DbError::AccountHasInsufficientBalance(self.address));
+        }
+
+        let mut lots = std::mem::take(&mut self.lots);
+        lots.sort_by_key(|lot| lot.acquisition.when);
+        lots.reverse();
+
+        let mut extracted_lots = vec![];
+        let mut amount_remaining = amount;
+        for mut lot in lots {
+            if amount_remaining > 0 {
+                if lot.amount <= amount_remaining {
+                    amount_remaining -= lot.amount;
+                    extracted_lots.push(lot);
+                } else {
+                    let split_lot = Lot {
+                        lot_number: db.next_lot_number(),
+                        acquisition: lot.acquisition.clone(),
+                        amount: amount_remaining,
+                    };
+                    lot.amount -= amount_remaining;
+                    extracted_lots.push(split_lot);
+                    self.lots.push(lot);
+                    amount_remaining = 0;
+                }
+            } else {
+                self.lots.push(lot);
+            }
+        }
+
+        self.last_update_balance -= amount;
+        self.assert_lot_balance();
+        Ok(extracted_lots)
+    }
+
+    fn merge_lots(&mut self, lots: Vec<Lot>) {
+        let mut amount = 0;
+        for lot in lots {
+            amount += lot.amount;
+            if let Some(mut existing_lot) = self
+                .lots
+                .iter_mut()
+                .find(|l| l.acquisition == lot.acquisition)
+            {
+                existing_lot.amount += lot.amount;
+            } else {
+                self.lots.push(lot);
+            }
+        }
+        self.last_update_balance += amount;
+        self.assert_lot_balance();
+    }
+}
+
 #[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
 pub struct SweepStakeAccount {
     #[serde(with = "field_as_string")]
@@ -122,12 +238,9 @@ pub struct SweepStakeAccount {
 }
 
 #[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
-pub struct TransitorySweepStakeAccount {
+pub struct TransitorySweepStake {
     #[serde(with = "field_as_string")]
     pub address: Pubkey,
-
-    #[serde(with = "field_as_string")]
-    pub from_address: Pubkey,
 }
 
 impl Db {
@@ -172,8 +285,16 @@ impl Db {
             .collect()
     }
 
-    pub fn save(&mut self) -> DbResult<()> {
-        Ok(self.db.dump()?)
+    fn auto_save(&mut self, auto_save: bool) -> DbResult<()> {
+        self.auto_save = auto_save;
+        self.save()
+    }
+
+    fn save(&mut self) -> DbResult<()> {
+        if self.auto_save {
+            self.db.dump()?;
+        }
+        Ok(())
     }
 
     pub fn record_deposit(&mut self, deposit: PendingDeposit) -> DbResult<()> {
@@ -222,7 +343,9 @@ impl Db {
             .collect()
     }
 
-    pub fn add_account(&mut self, account: TrackedAccount) -> DbResult<()> {
+    pub fn add_account_no_save(&mut self, account: TrackedAccount) -> DbResult<()> {
+        account.assert_lot_balance();
+
         if !self.db.lexists("accounts") {
             self.db.lcreate("accounts")?;
         }
@@ -231,11 +354,18 @@ impl Db {
             Err(DbError::AccountAlreadyExists(account.address))
         } else {
             self.db.ladd("accounts", &account).unwrap();
-            self.save()
+            Ok(())
         }
     }
 
+    pub fn add_account(&mut self, account: TrackedAccount) -> DbResult<()> {
+        self.add_account_no_save(account)?;
+        self.save()
+    }
+
     pub fn update_account(&mut self, account: TrackedAccount) -> DbResult<()> {
+        account.assert_lot_balance();
+
         let position = self
             .get_account_position(account.address)
             .ok_or(DbError::AccountDoesNotExist(account.address))?;
@@ -250,7 +380,7 @@ impl Db {
         self.save()
     }
 
-    pub fn remove_account(&mut self, address: Pubkey) -> DbResult<()> {
+    fn remove_account_no_save(&mut self, address: Pubkey) -> DbResult<()> {
         let position = self
             .get_account_position(address)
             .ok_or(DbError::AccountDoesNotExist(address))?;
@@ -261,6 +391,11 @@ impl Db {
             "Cannot remove unknown account: {}",
             address
         );
+        Ok(())
+    }
+
+    pub fn remove_account(&mut self, address: Pubkey) -> DbResult<()> {
+        self.remove_account_no_save(address)?;
         self.save()
     }
 
@@ -302,6 +437,7 @@ impl Db {
             .collect()
     }
 
+    // The caller must call `save()`...
     pub fn next_lot_number(&mut self) -> usize {
         let lot_number = self.db.get::<usize>("next_lot_number").unwrap_or(0);
         self.db.set("next_lot_number", &(lot_number + 1)).unwrap();
@@ -325,22 +461,143 @@ impl Db {
         self.save()
     }
 
-    pub fn get_transitory_sweep_stake_accounts(&self) -> Vec<TransitorySweepStakeAccount> {
+    pub fn get_transitory_sweep_stake_addresses(&self) -> HashSet<Pubkey> {
         self.db
-            .get("transitory-sweep-stake-accounts")
+            .get::<Vec<TransitorySweepStake>>("transitory-sweep-stake-accounts")
             .unwrap_or_default()
+            .into_iter()
+            .map(|tss| tss.address)
+            .collect()
     }
 
-    pub fn set_transitory_sweep_stake_accounts(
+    pub fn add_transitory_sweep_stake_address(
         &mut self,
-        transitory_sweep_stake_accounts: &[TransitorySweepStakeAccount],
+        address: Pubkey,
+        current_epoch: Epoch,
     ) -> DbResult<()> {
+        let mut transitory_sweep_stake_addresses = self.get_transitory_sweep_stake_addresses();
+
+        if transitory_sweep_stake_addresses.contains(&address) {
+            Err(DbError::AccountAlreadyExists(address))
+        } else {
+            transitory_sweep_stake_addresses.insert(address);
+            self.set_transitory_sweep_stake_addresses(transitory_sweep_stake_addresses)
+        }?;
+
+        self.add_account_no_save(TrackedAccount {
+            address,
+            description: "Transitory stake account".to_string(),
+            last_update_balance: 0,
+            last_update_epoch: current_epoch,
+            lots: vec![],
+        })
+    }
+
+    pub fn remove_transitory_sweep_stake_address(&mut self, address: Pubkey) -> DbResult<()> {
+        let _ = self.remove_account_no_save(address);
+
+        let mut transitory_sweep_stake_addresses = self.get_transitory_sweep_stake_addresses();
+
+        if !transitory_sweep_stake_addresses.contains(&address) {
+            Err(DbError::AccountDoesNotExist(address))
+        } else {
+            transitory_sweep_stake_addresses.remove(&address);
+            self.set_transitory_sweep_stake_addresses(transitory_sweep_stake_addresses)
+        }
+    }
+
+    fn set_transitory_sweep_stake_addresses<T>(
+        &mut self,
+        transitory_sweep_stake_addresses: T,
+    ) -> DbResult<()>
+    where
+        T: IntoIterator<Item = Pubkey>,
+    {
         self.db
             .set(
                 "transitory-sweep-stake-accounts",
-                &transitory_sweep_stake_accounts.iter().collect::<Vec<_>>(),
+                &transitory_sweep_stake_addresses
+                    .into_iter()
+                    .map(|address| TransitorySweepStake { address })
+                    .collect::<Vec<_>>(),
             )
             .unwrap();
         self.save()
+    }
+
+    pub fn record_transfer(
+        &mut self,
+        signature: Signature,
+        from_address: Pubkey,
+        amount: Option<u64>, // None = all
+        to_address: Pubkey,
+    ) -> DbResult<()> {
+        let mut pending_transfers = self.pending_transfers();
+
+        let mut from_account = self
+            .get_account(from_address)
+            .ok_or(DbError::AccountDoesNotExist(from_address))?;
+        let _to_account = self
+            .get_account(to_address)
+            .ok_or(DbError::AccountDoesNotExist(to_address))?;
+
+        pending_transfers.push(PendingTransfer {
+            signature,
+            from_address,
+            to_address,
+            lots: from_account
+                .extract_lots(self, amount.unwrap_or(from_account.last_update_balance))?,
+        });
+
+        self.db.set("transfers", &pending_transfers).unwrap();
+        self.update_account(from_account) // `update_account` calls `save`...
+    }
+
+    fn complete_transfer(&mut self, signature: Signature, success: bool) -> DbResult<()> {
+        let mut pending_transfers = self.pending_transfers();
+
+        let PendingTransfer {
+            signature,
+            from_address,
+            to_address,
+            lots,
+        } = pending_transfers
+            .iter()
+            .find(|pt| pt.signature == signature)
+            .ok_or(DbError::PendingTransferDoesNotExist(signature))?
+            .clone();
+
+        pending_transfers.retain(|pt| pt.signature != signature);
+        self.db.set("transfers", &pending_transfers).unwrap();
+
+        let mut from_account = self
+            .get_account(from_address)
+            .ok_or(DbError::AccountDoesNotExist(from_address))?;
+        let mut to_account = self
+            .get_account(to_address)
+            .ok_or(DbError::AccountDoesNotExist(to_address))?;
+
+        if success {
+            to_account.merge_lots(lots);
+        } else {
+            from_account.merge_lots(lots);
+        }
+
+        self.auto_save(false)?;
+        self.update_account(to_account)?;
+        self.update_account(from_account)?;
+        self.auto_save(true)
+    }
+
+    pub fn cancel_transfer(&mut self, signature: Signature) -> DbResult<()> {
+        self.complete_transfer(signature, false)
+    }
+
+    pub fn confirm_transfer(&mut self, signature: Signature) -> DbResult<()> {
+        self.complete_transfer(signature, true)
+    }
+
+    pub fn pending_transfers(&self) -> Vec<PendingTransfer> {
+        self.db.get("transfers").unwrap_or_default()
     }
 }
