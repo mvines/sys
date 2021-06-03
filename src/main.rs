@@ -910,6 +910,7 @@ async fn process_account_sync(
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     solana_logger::setup_with_default("solana=info");
     let default_db_path = "sell-your-sol";
+    let default_json_rpc_url = "https://api.mainnet-beta.solana.com";
     let default_when = {
         let today = Utc::now().date();
         format!("{}/{}/{}", today.year(), today.month(), today.day())
@@ -931,6 +932,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .default_value(default_db_path)
                 .global(true)
                 .help("Database path"),
+        )
+        .arg(
+            Arg::with_name("json_rpc_url")
+                .short("u")
+                .long("url")
+                .value_name("URL")
+                .takes_value(true)
+                .global(true)
+                .validator(is_url_or_moniker)
+                .default_value(default_json_rpc_url)
+                .help("JSON RPC URL for the cluster"),
         )
         .subcommand(
             SubCommand::with_name("price")
@@ -1202,8 +1214,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let app_matches = app.get_matches();
     let db_path = value_t_or_exit!(app_matches, "db_path", PathBuf);
     let rpc_client = RpcClient::new_with_commitment(
-        //"https://api.mainnet-beta.solana.com".to_string(),
-        "http://localhost:8899".to_string(),
+            normalize_to_url_if_moniker(value_t_or_exit!(
+                app_matches,
+                "json_rpc_url",
+                String
+            )),
         CommitmentConfig::confirmed(),
     );
     let mut wallet_manager = None;
