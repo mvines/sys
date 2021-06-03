@@ -31,37 +31,6 @@ use {
     std::{path::PathBuf, process::exit, str::FromStr},
 };
 
-// TOOD: Remove `local_stake_instruction` once 1.6.11 ships and
-//              `solana_stake_program::stake_instruction::initialize` is public
-mod local_stake_instruction {
-    use {
-        solana_sdk::{
-            instruction::{AccountMeta, Instruction},
-            pubkey::Pubkey,
-            sysvar,
-        },
-        solana_stake_program::stake_state::*,
-    };
-
-    pub fn initialize(
-        stake_pubkey: &Pubkey,
-        authorized: &Authorized,
-        lockup: &Lockup,
-    ) -> Instruction {
-        Instruction::new_with_bincode(
-            solana_stake_program::id(),
-            &solana_stake_program::stake_instruction::StakeInstruction::Initialize(
-                *authorized,
-                *lockup,
-            ),
-            vec![
-                AccountMeta::new(*stake_pubkey, false),
-                AccountMeta::new_readonly(sysvar::rent::id(), false),
-            ],
-        )
-    }
-}
-
 fn naivedate_of(string: &str) -> Result<NaiveDate, String> {
     NaiveDate::parse_from_str(string, "%y/%m/%d")
         .or_else(|_| NaiveDate::parse_from_str(string, "%Y/%m/%d"))
@@ -399,7 +368,7 @@ async fn process_account_add(
     let (when, amount, last_update_epoch, kind) = match signature {
         Some(signature) => {
             let confirmed_transaction =
-                rpc_client.get_confirmed_transaction(&signature, UiTransactionEncoding::Base64)?;
+                rpc_client.get_transaction(&signature, UiTransactionEncoding::Base64)?;
 
             let slot = confirmed_transaction.slot;
             let when = match confirmed_transaction.block_time {
@@ -669,7 +638,7 @@ async fn process_account_sweep<T: Signers>(
             &transitory_stake_account.pubkey(),
             &solana_stake_program::id(),
         ),
-        local_stake_instruction::initialize(
+        solana_stake_program::stake_instruction::initialize(
             &transitory_stake_account.pubkey(),
             &authorized,
             &solana_stake_program::stake_state::Lockup::default(),
@@ -1214,11 +1183,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let app_matches = app.get_matches();
     let db_path = value_t_or_exit!(app_matches, "db_path", PathBuf);
     let rpc_client = RpcClient::new_with_commitment(
-            normalize_to_url_if_moniker(value_t_or_exit!(
-                app_matches,
-                "json_rpc_url",
-                String
-            )),
+        normalize_to_url_if_moniker(value_t_or_exit!(app_matches, "json_rpc_url", String)),
         CommitmentConfig::confirmed(),
     );
     let mut wallet_manager = None;
