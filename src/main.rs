@@ -326,7 +326,7 @@ async fn process_exchange_sell(
     Ok(())
 }
 
-fn println_lot(
+async fn println_lot(
     lot: &Lot,
     current_price: f64,
     total_income: &mut f64,
@@ -354,7 +354,9 @@ fn println_lot(
         lot.acquisition.kind,
     );
 
-    notifier.map(|notifier| notifier.send(&msg));
+    if let Some(notifier) = notifier {
+        notifier.send(&msg).await;
+    }
     println!("{}", msg);
 }
 
@@ -452,7 +454,7 @@ async fn process_account_add(
         acquisition: LotAcquistion { when, price, kind },
         amount,
     };
-    println_lot(&lot, current_price, &mut 0., &mut 0., &mut 0., None);
+    println_lot(&lot, current_price, &mut 0., &mut 0., &mut 0., None).await;
 
     let account = TrackedAccount {
         address,
@@ -489,7 +491,8 @@ async fn process_account_list(db: &Db) -> Result<(), Box<dyn std::error::Error>>
                         &mut total_gain,
                         &mut total_current_value,
                         None,
-                    );
+                    )
+                    .await;
                 }
             } else {
                 println!("  No lots");
@@ -756,6 +759,9 @@ async fn process_account_sync(
         return Ok(());
     }
 
+    process_account_sync_pending_transfers(db, rpc_client).await?;
+    process_account_sync_sweep(db, rpc_client, notifier).await?;
+
     let current_price = coin_gecko::get_current_price().await?;
 
     let addresses: Vec<Pubkey> = accounts
@@ -783,8 +789,11 @@ async fn process_account_sync(
         return Ok(());
     }
 
+    // Look for inflationary rewards
     for epoch in start_epoch..=stop_epoch {
-        println!("Processing epoch: {}", epoch);
+        let msg = format!("Processing epoch: {}", epoch);
+        notifier.send(&msg).await;
+        println!("{}", msg);
 
         let inflation_rewards = rpc_client.get_inflation_reward(&addresses, Some(epoch))?;
 
@@ -811,7 +820,11 @@ async fn process_account_sync(
                     },
                     amount: inflation_reward.amount,
                 };
-                println!("  {}: {}", account.address, account.description);
+
+                let msg = format!("{}: {}", account.address, account.description);
+                notifier.send(&msg).await;
+                println!("{}", msg);
+
                 println_lot(
                     &lot,
                     current_price,
@@ -819,17 +832,27 @@ async fn process_account_sync(
                     &mut 0.,
                     &mut 0.,
                     Some(&notifier),
-                );
+                )
+                .await;
                 account.lots.push(lot);
             }
         }
     }
+
+    // Look for unexpected balance changes (such as transaction and rent rewards)
     for mut account in accounts.iter_mut() {
         account.last_update_epoch = stop_epoch;
 
         let current_balance = rpc_client.get_balance(&account.address)?;
 
-        if current_balance > account.last_update_balance + sol_to_lamports(1.) {
+        if current_balance < account.last_update_balance {
+            println!(
+                "\nWarning: {} balance is less than expected. Actual: {}, expected: {}\n",
+                account.address,
+                Sol(current_balance),
+                Sol(account.last_update_balance)
+            );
+        } else if current_balance > account.last_update_balance + sol_to_lamports(1.) {
             let slot = epoch_info.absolute_slot;
             let (when, price) = coin_gecko::get_block_date_and_price(&rpc_client, slot).await?;
             let amount = current_balance - account.last_update_balance;
@@ -843,7 +866,11 @@ async fn process_account_sync(
                 },
                 amount,
             };
-            println!("  {}: {}", account.address, account.description);
+
+            let msg = format!("{}: {}", account.address, account.description);
+            notifier.send(&msg).await;
+            println!("{}", msg);
+
             println_lot(
                 &lot,
                 current_price,
@@ -851,7 +878,8 @@ async fn process_account_sync(
                 &mut 0.,
                 &mut 0.,
                 Some(&notifier),
-            );
+            )
+            .await;
             account.lots.push(lot);
             account.last_update_balance = current_balance;
         }
@@ -859,8 +887,6 @@ async fn process_account_sync(
         db.update_account(account.clone())?;
     }
 
-    process_account_sync_pending_transfers(db, rpc_client).await?;
-    process_account_sync_sweep(db, rpc_client, notifier).await?;
     Ok(())
 }
 
@@ -1168,6 +1194,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .index(2)
                                 .value_name("KEYPAIR")
                                 .takes_value(true)
+                                .required(true)
                                 .help("Stake authority keypair"),
                         )
                 )

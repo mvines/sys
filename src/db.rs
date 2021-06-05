@@ -181,7 +181,12 @@ impl TrackedAccount {
 
         let mut lots = std::mem::take(&mut self.lots);
         lots.sort_by_key(|lot| lot.acquisition.when);
-        lots.reverse();
+
+        if !lots.is_empty() {
+            // Assume the oldest lot is the rent-reserve. Extract it as the last resort
+            let first_lot = lots.remove(0);
+            lots.push(first_lot);
+        }
 
         let mut extracted_lots = vec![];
         let mut amount_remaining = amount;
@@ -205,6 +210,8 @@ impl TrackedAccount {
                 self.lots.push(lot);
             }
         }
+        self.lots.sort_by_key(|lot| lot.acquisition.when);
+        extracted_lots.sort_by_key(|lot| lot.acquisition.when);
 
         self.last_update_balance -= amount;
         self.assert_lot_balance();
