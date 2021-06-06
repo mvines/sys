@@ -34,8 +34,14 @@ pub enum DbError {
     #[error("Pending transfer with signature does not exist: {0}")]
     PendingTransferDoesNotExist(Signature),
 
+    #[error("Pending deposit with signature does not exist: {0}")]
+    PendingDepositDoesNotExist(Signature),
+
     #[error("Account has insufficient balance: {0}")]
     AccountHasInsufficientBalance(Pubkey),
+
+    #[error("Open order not exist: {0}")]
+    OpenOrderDoesNotExist(String),
 }
 
 pub type DbResult<T> = std::result::Result<T, DbError>;
@@ -76,9 +82,9 @@ pub struct Db {
 
 #[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
 pub struct PendingDeposit {
+    pub signature: Signature, // transaction signature of the deposit
     pub exchange: Exchange,
-    pub tx_id: String, // transaction signature of the deposit
-    pub amount: f64,   // amount of SOL deposited
+    pub amount: u64,
 }
 
 #[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
@@ -86,8 +92,11 @@ pub struct PendingTransfer {
     #[serde(with = "field_as_string")]
     pub signature: Signature, // transaction signature of the transfer
 
+    #[serde(with = "field_as_string")]
     pub from_address: Pubkey,
+    #[serde(with = "field_as_string")]
     pub to_address: Pubkey,
+
     pub lots: Vec<Lot>,
 }
 
@@ -96,6 +105,10 @@ pub struct OpenOrder {
     pub exchange: Exchange,
     pub pair: String,
     pub order_id: String,
+    pub lots: Vec<Lot>,
+
+    #[serde(with = "field_as_string")]
+    pub deposit_address: Pubkey,
 }
 
 #[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
@@ -155,6 +168,35 @@ impl Lot {
 }
 
 #[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
+pub enum LotDisposalKind {
+    Usd {
+        exchange: Exchange,
+        pair: String,
+        order_id: String,
+    },
+}
+
+impl fmt::Display for LotDisposalKind {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            LotDisposalKind::Usd {
+                exchange,
+                pair,
+                order_id,
+            } => write!(f, "{:?} {}, order {}", exchange, pair, order_id),
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
+pub struct DisposedLot {
+    pub lot: Lot,
+    pub when: NaiveDate,
+    pub price: f64, // USD per SOL
+    pub kind: LotDisposalKind,
+}
+
+#[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
 pub struct TrackedAccount {
     #[serde(with = "field_as_string")]
     pub address: Pubkey,
@@ -165,16 +207,17 @@ pub struct TrackedAccount {
 }
 
 impl TrackedAccount {
-    fn assert_lot_balance(&self) {
+    fn assert_lot_balance(&self) -> u64 {
         let lot_balance: u64 = self.lots.iter().map(|lot| lot.amount).sum();
         assert_eq!(
             lot_balance, self.last_update_balance,
             "Lot balance mismatch: {:?}",
             self
         );
+        lot_balance
     }
 
-    fn extract_lots(&mut self, db: &mut Db, amount: u64) -> DbResult<Vec<Lot>> {
+    pub fn extract_lots(&mut self, db: &mut Db, amount: u64) -> DbResult<Vec<Lot>> {
         if self.last_update_balance < amount {
             return Err(DbError::AccountHasInsufficientBalance(self.address));
         }
@@ -212,6 +255,10 @@ impl TrackedAccount {
         }
         self.lots.sort_by_key(|lot| lot.acquisition.when);
         extracted_lots.sort_by_key(|lot| lot.acquisition.when);
+        assert_eq!(
+            extracted_lots.iter().map(|el| el.amount).sum::<u64>(),
+            amount
+        );
 
         self.last_update_balance -= amount;
         self.assert_lot_balance();
@@ -304,49 +351,156 @@ impl Db {
         Ok(())
     }
 
-    pub fn record_deposit(&mut self, deposit: PendingDeposit) -> DbResult<()> {
+    pub fn record_deposit(
+        &mut self,
+        signature: Signature,
+        from_address: Pubkey,
+        amount: u64,
+        exchange: Exchange,
+        deposit_address: Pubkey,
+    ) -> DbResult<()> {
         if !self.db.lexists("deposits") {
             self.db.lcreate("deposits")?;
         }
+
+        let deposit = PendingDeposit {
+            signature,
+            exchange,
+            amount,
+        };
         self.db.ladd("deposits", &deposit).unwrap();
-        self.save()
+
+        self.record_transfer(signature, from_address, Some(amount), deposit_address)
+        // `record_transfer` calls `save`...
     }
 
-    pub fn cancel_deposit(&mut self, deposit: &PendingDeposit) -> DbResult<()> {
-        assert!(self.db.lrem_value("deposits", deposit)?);
-        self.save()
+    fn complete_deposit(&mut self, signature: Signature, success: bool) -> DbResult<()> {
+        let mut pending_deposits = self.pending_deposits(None);
+
+        let PendingDeposit { signature, .. } = pending_deposits
+            .iter()
+            .find(|pd| pd.signature == signature)
+            .ok_or(DbError::PendingDepositDoesNotExist(signature))?
+            .clone();
+
+        pending_deposits.retain(|pd| pd.signature != signature);
+        self.db.set("deposits", &pending_deposits).unwrap();
+
+        self.complete_transfer(signature, success) // `complete_transfer` calls `save`...
     }
 
-    pub fn confirm_deposit(&mut self, deposit: &PendingDeposit) -> DbResult<()> {
-        self.cancel_deposit(deposit)
+    pub fn cancel_deposit(&mut self, signature: Signature) -> DbResult<()> {
+        self.complete_deposit(signature, true)
     }
 
-    pub fn pending_deposits(&self, exchange: Exchange) -> Vec<PendingDeposit> {
+    pub fn confirm_deposit(&mut self, signature: Signature) -> DbResult<()> {
+        self.complete_deposit(signature, true)
+    }
+
+    pub fn pending_deposits(&self, exchange: Option<Exchange>) -> Vec<PendingDeposit> {
+        if !self.db.lexists("deposits") {
+            return Vec::default();
+        }
         self.db
             .liter("deposits")
             .filter_map(|item_iter| item_iter.get_item::<PendingDeposit>())
-            .filter(|pending_deposit| pending_deposit.exchange == exchange)
+            .filter(|pending_deposit| {
+                if let Some(exchange) = exchange {
+                    pending_deposit.exchange == exchange
+                } else {
+                    true
+                }
+            })
             .collect()
     }
 
-    pub fn record_order(&mut self, order: OpenOrder) -> DbResult<()> {
-        if !self.db.lexists("orders") {
-            self.db.lcreate("orders")?;
+    pub fn record_order(
+        &mut self,
+        deposit_account: TrackedAccount,
+        exchange: Exchange,
+        pair: String,
+        order_id: String,
+        lots: Vec<Lot>,
+    ) -> DbResult<()> {
+        let mut open_orders = self.open_orders(None);
+        open_orders.push(OpenOrder {
+            exchange,
+            pair,
+            order_id,
+            lots,
+            deposit_address: deposit_account.address,
+        });
+        self.db.set("orders", &open_orders).unwrap();
+        self.update_account(deposit_account) // `update_account` calls `save`...
+    }
+
+    fn complete_order(
+        &mut self,
+        order_id: &str,
+        filled: Option<(f64 /* USD per SOL */, NaiveDate)>,
+    ) -> DbResult<()> {
+        let mut open_orders = self.open_orders(None);
+
+        let OpenOrder {
+            exchange,
+            pair,
+            order_id,
+            lots,
+            deposit_address,
+        } = open_orders
+            .iter()
+            .find(|o| o.order_id == order_id)
+            .ok_or(DbError::OpenOrderDoesNotExist(order_id.to_string()))?
+            .clone();
+
+        open_orders.retain(|o| o.order_id != order_id);
+        self.db.set("orders", &open_orders).unwrap();
+
+        if let Some((price, when)) = filled {
+            let mut disposed_lots = self.disposed_lots();
+            for lot in lots {
+                disposed_lots.push(DisposedLot {
+                    lot,
+                    when,
+                    price,
+                    kind: LotDisposalKind::Usd {
+                        exchange,
+                        pair: pair.clone(),
+                        order_id: order_id.clone(),
+                    },
+                });
+            }
+            self.db.set("disposed-lots", &disposed_lots).unwrap();
+            self.save()
+        } else {
+            let mut deposit_account = self
+                .get_account(deposit_address)
+                .ok_or(DbError::AccountDoesNotExist(deposit_address))?;
+
+            deposit_account.merge_lots(lots);
+            self.update_account(deposit_account) // `update_account` calls `save`...
         }
-        self.db.ladd("orders", &order).unwrap();
-        self.save()
     }
 
-    pub fn clear_order(&mut self, order: &OpenOrder) -> DbResult<()> {
-        assert!(self.db.lrem_value("orders", order)?);
-        self.save()
+    pub fn cancel_order(&mut self, order_id: &str) -> DbResult<()> {
+        self.complete_order(order_id, None)
     }
 
-    pub fn pending_orders(&self, exchange: Exchange) -> Vec<OpenOrder> {
-        self.db
-            .liter("orders")
-            .filter_map(|item_iter| item_iter.get_item::<OpenOrder>())
-            .filter(|pending_order| pending_order.exchange == exchange)
+    pub fn confirm_order(&mut self, order_id: &str, price: f64, when: NaiveDate) -> DbResult<()> {
+        self.complete_order(order_id, Some((price, when)))
+    }
+
+    pub fn open_orders(&self, exchange: Option<Exchange>) -> Vec<OpenOrder> {
+        let orders: Vec<OpenOrder> = self.db.get("orders").unwrap_or_default();
+        orders
+            .into_iter()
+            .filter(|order| {
+                if let Some(exchange) = exchange {
+                    order.exchange == exchange
+                } else {
+                    true
+                }
+            })
             .collect()
     }
 
@@ -606,5 +760,9 @@ impl Db {
 
     pub fn pending_transfers(&self) -> Vec<PendingTransfer> {
         self.db.get("transfers").unwrap_or_default()
+    }
+
+    pub fn disposed_lots(&self) -> Vec<DisposedLot> {
+        self.db.get("disposed-lots").unwrap_or_default()
     }
 }

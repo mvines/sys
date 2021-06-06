@@ -47,28 +47,54 @@ fn app_version() -> String {
     })
 }
 
+fn add_exchange_deposit_address_to_db(
+    db: &mut Db,
+    exchange: Exchange,
+    deposit_address: Pubkey,
+    rpc_client: &RpcClient,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if db.get_account(deposit_address).is_none() {
+        let epoch = rpc_client.get_epoch_info()?.epoch;
+        db.add_account(TrackedAccount {
+            address: deposit_address,
+            description: format!("{:?}", exchange),
+            last_update_epoch: epoch,
+            last_update_balance: 0,
+            lots: vec![],
+        })?;
+    }
+    Ok(())
+}
+
 async fn process_sync_exchange(
     db: &mut Db,
     exchange: Exchange,
     exchange_client: &dyn ExchangeClient,
+    rpc_client: &RpcClient,
     notifier: &Notifier,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let deposit_address = exchange_client.deposit_address().await?;
+    add_exchange_deposit_address_to_db(db, exchange, deposit_address, rpc_client)?;
+
     let recent_deposits = exchange_client.recent_deposits().await?;
 
-    for pending_deposit in db.pending_deposits(exchange) {
+    for pending_deposit in db.pending_deposits(Some(exchange)) {
         if let Some(deposit_info) = recent_deposits
             .iter()
-            .find(|deposit_info| deposit_info.tx_id == pending_deposit.tx_id)
+            .find(|deposit_info| deposit_info.tx_id == pending_deposit.signature.to_string())
         {
-            let missing_lamports =
-                sol_to_lamports((deposit_info.amount - pending_deposit.amount).abs());
+            let missing_lamports = (sol_to_lamports(deposit_info.amount) as i64
+                - (pending_deposit.amount as i64))
+                .abs();
             if missing_lamports >= 10 {
                 let msg = format!(
                     "Error! Deposit amount mismatch for {}! Actual amount: ◎{}, expected amount: ◎{}",
-                    pending_deposit.tx_id, deposit_info.amount, pending_deposit.amount
+                    pending_deposit.signature, deposit_info.amount, pending_deposit.amount
                 );
                 println!("{}", msg);
                 notifier.send(&format!("{:?}: {}", exchange, msg)).await;
+
+                // TODO: Do something more here...?
             } else {
                 if missing_lamports != 0 {
                     // Binance will occasionally steal a lamport or two...
@@ -80,24 +106,26 @@ async fn process_sync_exchange(
                     notifier.send(&format!("{:?}: {}", exchange, msg)).await;
                 }
 
+                db.confirm_deposit(pending_deposit.signature)?;
+
                 let msg = format!(
-                    "◎{} deposit successful ({})",
-                    pending_deposit.amount, pending_deposit.tx_id
+                    "{} deposit successful ({})",
+                    Sol(pending_deposit.amount),
+                    pending_deposit.signature
                 );
                 println!("{}", msg);
                 notifier.send(&format!("{:?}: {}", exchange, msg)).await;
-
-                db.confirm_deposit(&pending_deposit)?;
             }
         } else {
             println!(
-                "◎{} deposit pending ({})",
-                pending_deposit.amount, pending_deposit.tx_id
+                "{} deposit pending ({})",
+                Sol(pending_deposit.amount),
+                pending_deposit.signature
             );
         }
     }
 
-    for order_info in db.pending_orders(exchange) {
+    for order_info in db.open_orders(Some(exchange)) {
         let order_status = exchange_client
             .sell_order_status(&order_info.pair, &order_info.order_id)
             .await?;
@@ -116,15 +144,22 @@ async fn process_sync_exchange(
             }
         } else {
             let msg = if (order_status.amount - order_status.filled_amount).abs() < f64::EPSILON {
+                // TODO: Use date from exchange order!
+                let today = {
+                    let today = Local::now().date();
+                    NaiveDate::from_ymd(today.year(), today.month(), today.day())
+                };
+
+                db.confirm_order(&order_info.order_id, order_status.price, today)?;
                 format!("Order filled: {}", order_summary)
             } else if order_status.filled_amount < f64::EPSILON {
+                db.cancel_order(&order_info.order_id)?;
                 format!("Order cancelled: {}", order_summary)
             } else {
                 panic!("TODO: Handle partial execution upon cancel");
             };
             println!("{}", msg);
             notifier.send(&format!("{:?}: {}", exchange, msg)).await;
-            db.clear_order(&order_info)?;
         }
     }
     Ok(())
@@ -133,7 +168,7 @@ async fn process_sync_exchange(
 #[allow(clippy::too_many_arguments)]
 async fn process_exchange_deposit<T: Signers>(
     db: &mut Db,
-    rpc_client: RpcClient,
+    rpc_client: &RpcClient,
     exchange: Exchange,
     deposit_address: Pubkey,
     amount: Option<u64>,
@@ -233,7 +268,6 @@ async fn process_exchange_deposit<T: Signers>(
         return Err("From account has insufficient funds".into());
     }
 
-    let amount = lamports_to_sol(lamports);
     println!("From address: {}", from_address);
     if from_address != authority_address {
         println!("Authority address: {}", authority_address);
@@ -254,16 +288,10 @@ async fn process_exchange_deposit<T: Signers>(
     }
 
     transaction.try_sign(&signers, recent_blockhash)?;
-    println!("Transaction signature: {}", transaction.signatures[0]);
+    let signature = transaction.signatures[0];
+    println!("Transaction signature: {}", signature);
 
-    let pending_deposit = PendingDeposit {
-        tx_id: transaction.signatures[0].to_string(),
-        exchange,
-        amount,
-    };
-
-    db.record_deposit(pending_deposit.clone())?;
-
+    db.record_deposit(signature, from_address, lamports, exchange, deposit_address)?;
     loop {
         match rpc_client.send_and_confirm_transaction_with_spinner(&transaction) {
             Ok(_) => return Ok(()),
@@ -276,7 +304,7 @@ async fn process_exchange_deposit<T: Signers>(
                 println!("Failed to get fee calculator: {:?}", err);
             }
             Ok(None) => {
-                db.cancel_deposit(&pending_deposit).expect("cancel_deposit");
+                db.cancel_deposit(signature).expect("cancel_deposit");
                 return Err("Deposit failed: {}".into());
             }
             Ok(_) => {
@@ -314,15 +342,26 @@ async fn process_exchange_sell(
         return Err("Order price is less than bid price".into());
     }
 
+    let deposit_address = exchange_client.deposit_address().await?;
+    let mut deposit_account = db.get_account(deposit_address).ok_or_else(|| {
+        format!(
+            "Exchange deposit account does not exist: {}",
+            deposit_address
+        )
+    })?;
+
+    let order_lots = deposit_account.extract_lots(db, sol_to_lamports(amount))?;
+    println!("Lots");
+    for lot in &order_lots {
+        println_lot(lot, price, &mut 0., &mut 0., &mut 0., None).await;
+    }
+
     let order_id = exchange_client
         .place_sell_order(&pair, price, amount)
         .await?;
+    println!("Order Id: {}", order_id);
 
-    db.record_order(OpenOrder {
-        exchange,
-        pair: pair.clone(),
-        order_id,
-    })?;
+    db.record_order(deposit_account, exchange, pair, order_id, order_lots)?;
     Ok(())
 }
 
@@ -360,6 +399,36 @@ async fn println_lot(
     println!("{}", msg);
 }
 
+async fn println_disposed_lot(
+    disposed_lot: &DisposedLot,
+    total_income: &mut f64,
+    total_cap_gain: &mut f64,
+    notifier: Option<&Notifier>,
+) {
+    let cap_gain = disposed_lot.lot.cap_gain(disposed_lot.price);
+    let income = disposed_lot.lot.income();
+
+    *total_income += income;
+    *total_cap_gain += cap_gain;
+
+    let msg = format!(
+        "{:>3}. {} | ◎{:<10.2} at ${:<6.2} | income: ${:<12.2} | sold at ${:6.2} for gain of ${:<12.2} | {} | {}",
+        disposed_lot.lot.lot_number,
+        disposed_lot.lot.acquisition.when,
+        lamports_to_sol(disposed_lot.lot.amount),
+        disposed_lot.lot.acquisition.price,
+        income,
+        disposed_lot.price,
+        cap_gain,
+        disposed_lot.lot.acquisition.kind,
+        disposed_lot.kind,
+    );
+
+    if let Some(notifier) = notifier {
+        notifier.send(&msg).await;
+    }
+    println!("{}", msg);
+}
 async fn process_account_add(
     db: &mut Db,
     rpc_client: &RpcClient,
@@ -476,7 +545,8 @@ async fn process_account_list(db: &Db) -> Result<(), Box<dyn std::error::Error>>
         let current_price = coin_gecko::get_current_price().await?;
 
         let mut total_income = 0.;
-        let mut total_gain = 0.;
+        let mut total_unrealized_gain = 0.;
+        let mut total_realized_gain = 0.;
         let mut total_current_value = 0.;
 
         for account in accounts.values() {
@@ -488,7 +558,7 @@ async fn process_account_list(db: &Db) -> Result<(), Box<dyn std::error::Error>>
                         lot,
                         current_price,
                         &mut total_income,
-                        &mut total_gain,
+                        &mut total_unrealized_gain,
                         &mut total_current_value,
                         None,
                     )
@@ -496,6 +566,21 @@ async fn process_account_list(db: &Db) -> Result<(), Box<dyn std::error::Error>>
                 }
             } else {
                 println!("  No lots");
+            }
+            println!();
+        }
+
+        let disposed_lots = db.disposed_lots();
+        if !disposed_lots.is_empty() {
+            println!("Disposed Lots:");
+            for disposed_lot in disposed_lots {
+                println_disposed_lot(
+                    &disposed_lot,
+                    &mut total_income,
+                    &mut total_realized_gain,
+                    None,
+                )
+                .await;
             }
             println!();
         }
@@ -509,10 +594,11 @@ async fn process_account_list(db: &Db) -> Result<(), Box<dyn std::error::Error>>
             println!();
         }
 
-        println!("Current price:  ${:<.2}", current_price);
-        println!("Current value:  ${:<.2}", total_current_value);
-        println!("Total income:   ${:<.2}", total_income);
-        println!("Total cap gain: ${:<.2}", total_gain);
+        println!("Current price:             ${:<.2}", current_price);
+        println!("Current value:             ${:<.2}", total_current_value);
+        println!("Total income:              ${:<.2}", total_income);
+        println!("Total unrealized cap gain: ${:<.2}", total_unrealized_gain);
+        println!("Total realized cap gain:   ${:<.2}", total_realized_gain);
     }
     Ok(())
 }
@@ -1065,7 +1151,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let default_db_path = "sell-your-sol";
     let default_json_rpc_url = "https://api.mainnet-beta.solana.com";
     let default_when = {
-        let today = Utc::now().date();
+        let today = Local::now().date();
         format!("{}/{}/{}", today.year(), today.month(), today.day())
     };
     let exchanges = ["binance", "binanceus", "ftx", "ftxus"];
@@ -1395,8 +1481,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             for (exchange, exchange_credentials) in db.get_configured_exchanges() {
                 println!("Synchronizing {:?}...", exchange);
                 let exchange_client = exchange_client_new(exchange, exchange_credentials)?;
-                process_sync_exchange(&mut db, exchange, exchange_client.as_ref(), &notifier)
-                    .await?
+                process_sync_exchange(
+                    &mut db,
+                    exchange,
+                    exchange_client.as_ref(),
+                    &rpc_client,
+                    &notifier,
+                )
+                .await?
             }
         }
         ("account", Some(account_matches)) => match account_matches.subcommand() {
@@ -1546,10 +1638,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                     let exchange_client = exchange_client()?;
                     let deposit_address = exchange_client.deposit_address().await?;
+                    add_exchange_deposit_address_to_db(
+                        &mut db,
+                        exchange,
+                        deposit_address,
+                        &rpc_client,
+                    )?;
 
                     process_exchange_deposit(
                         &mut db,
-                        rpc_client,
+                        &rpc_client,
                         exchange,
                         deposit_address,
                         amount,
@@ -1558,8 +1656,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         vec![authority_signer],
                     )
                     .await?;
-                    process_sync_exchange(&mut db, exchange, exchange_client.as_ref(), &notifier)
-                        .await?;
+                    process_sync_exchange(
+                        &mut db,
+                        exchange,
+                        exchange_client.as_ref(),
+                        &rpc_client,
+                        &notifier,
+                    )
+                    .await?;
                 }
                 ("sell", Some(arg_matches)) => {
                     let pair = value_t_or_exit!(arg_matches, "pair", String);
@@ -1582,13 +1686,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         price,
                     )
                     .await?;
-                    process_sync_exchange(&mut db, exchange, exchange_client.as_ref(), &notifier)
-                        .await?;
+                    process_sync_exchange(
+                        &mut db,
+                        exchange,
+                        exchange_client.as_ref(),
+                        &rpc_client,
+                        &notifier,
+                    )
+                    .await?;
                 }
                 ("sync", Some(_arg_matches)) => {
                     let exchange_client = exchange_client()?;
-                    process_sync_exchange(&mut db, exchange, exchange_client.as_ref(), &notifier)
-                        .await?;
+                    process_sync_exchange(
+                        &mut db,
+                        exchange,
+                        exchange_client.as_ref(),
+                        &rpc_client,
+                        &notifier,
+                    )
+                    .await?;
                 }
                 ("api", Some(api_matches)) => match api_matches.subcommand() {
                     ("show", Some(_arg_matches)) => match db.get_exchange_credentials(exchange) {
