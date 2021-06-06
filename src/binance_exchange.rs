@@ -148,7 +148,7 @@ impl ExchangeClient for BinanceExchangeClient {
             .balances
             .iter()
             .find(|b| b.asset == "SOL")
-            .ok_or_else(|| "No SOL balance")?;
+            .ok_or("No SOL balance")?;
 
         let free = sol_balance.free.parse::<f64>()?;
         let locked = sol_balance.locked.parse::<f64>()?;
