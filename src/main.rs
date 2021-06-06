@@ -517,11 +517,13 @@ async fn process_account_list(db: &Db) -> Result<(), Box<dyn std::error::Error>>
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn process_account_sweep<T: Signers>(
     db: &mut Db,
     rpc_client: &RpcClient,
     from_address: Pubkey,
     retain_amount: u64,
+    no_sweep_ok: bool,
     from_authority_address: Pubkey,
     signers: T,
     notifier: &Notifier,
@@ -630,12 +632,17 @@ async fn process_account_sweep<T: Signers>(
     };
 
     if sweep_amount < sol_to_lamports(1.) {
-        return Err(format!(
+        let msg = format!(
             "{} has less than ◎1 to sweep ({})",
             from_address,
             Sol(sweep_amount)
-        )
-        .into());
+        );
+        return if no_sweep_ok {
+            println!("{}", msg);
+            Ok(())
+        } else {
+            Err(msg.into())
+        };
     }
 
     println!("From address: {}", from_address);
@@ -1221,6 +1228,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .help("Source account authority keypair"),
                         )
                         .arg(
+                            Arg::with_name("no_sweep_ok")
+                                .long("no-sweep-ok")
+                                .takes_value(false)
+                                .help("Exit successfully if a sweep is not possible due to low source account balance"),
+                        )
+                        .arg(
                             Arg::with_name("retain")
                                 .short("r")
                                 .long("retain")
@@ -1454,12 +1467,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let from_authority_signer = from_authority_signer.expect("authority_signer");
                 let retain_amount =
                     sol_to_lamports(value_t!(arg_matches, "retain", f64).unwrap_or(0.));
+                let no_sweep_ok = arg_matches.is_present("no_sweep_ok");
 
                 process_account_sweep(
                     &mut db,
                     &rpc_client,
                     from_address,
                     retain_amount,
+                    no_sweep_ok,
                     from_authority_address,
                     vec![from_authority_signer],
                     &notifier,
