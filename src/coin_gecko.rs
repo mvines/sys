@@ -44,7 +44,7 @@ pub async fn get_price(when: NaiveDate) -> Result<f64, Box<dyn std::error::Error
 }
 
 pub async fn get_current_price() -> Result<f64, Box<dyn std::error::Error>> {
-    let today = Utc::now().date();
+    let today = Local::now().date();
     get_price(NaiveDate::from_ymd(
         today.year(),
         today.month(),
