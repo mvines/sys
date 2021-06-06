@@ -948,7 +948,8 @@ async fn process_account_sync_sweep(
     for transitory_sweep_stake_address in transitory_sweep_stake_addresses {
         println!(
             "Considering merging transitory stake {}",
-            transitory_sweep_stake_address);
+            transitory_sweep_stake_address
+        );
 
         let transitory_sweep_stake_account = match rpc_client
             .get_account_with_commitment(&transitory_sweep_stake_address, rpc_client.commitment())?
