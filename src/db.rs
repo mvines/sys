@@ -450,7 +450,7 @@ impl Db {
         } = open_orders
             .iter()
             .find(|o| o.order_id == order_id)
-            .ok_or(DbError::OpenOrderDoesNotExist(order_id.to_string()))?
+            .ok_or_else(|| DbError::OpenOrderDoesNotExist(order_id.to_string()))?
             .clone();
 
         open_orders.retain(|o| o.order_id != order_id);

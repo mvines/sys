@@ -143,11 +143,12 @@ impl ExchangeClient for BinanceExchangeClient {
             .get_account()
             .json::<AccountInfo>()
             .await?;
+
         let sol_balance = account_info
             .balances
             .iter()
             .find(|b| b.asset == "SOL")
-            .expect("SOL");
+            .ok_or_else(|| "No SOL balance")?;
 
         let free = sol_balance.free.parse::<f64>()?;
         let locked = sol_balance.locked.parse::<f64>()?;
