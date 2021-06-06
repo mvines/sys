@@ -947,9 +947,8 @@ async fn process_account_sync_sweep(
 
     for transitory_sweep_stake_address in transitory_sweep_stake_addresses {
         println!(
-            "Considering merging transitory stake {} into {}",
-            transitory_sweep_stake_address, sweep_stake_account_info.address,
-        );
+            "Considering merging transitory stake {}",
+            transitory_sweep_stake_address);
 
         let transitory_sweep_stake_account = match rpc_client
             .get_account_with_commitment(&transitory_sweep_stake_address, rpc_client.commitment())?
@@ -957,7 +956,7 @@ async fn process_account_sync_sweep(
         {
             None => {
                 println!(
-                    "Transitory sweep stake account does not exist, removing it: {}",
+                    "  Transitory sweep stake account does not exist, removing it: {}",
                     transitory_sweep_stake_address
                 );
                 db.remove_transitory_sweep_stake_address(transitory_sweep_stake_address)?;
@@ -977,7 +976,7 @@ async fn process_account_sync_sweep(
 
         if transient_stake_activation.state != StakeActivationState::Active {
             println!(
-                "Transitory stake is not yet active: {:?}",
+                "  Transitory stake is not yet active: {:?}",
                 transient_stake_activation
             );
             continue;
@@ -988,11 +987,12 @@ async fn process_account_sync_sweep(
             &transitory_sweep_stake_account,
         )? {
             println!(
-                "Transitory stake credits observed mismatch with sweep stake account: {}",
+                "  Transitory stake credits observed mismatch with sweep stake account: {}",
                 transitory_sweep_stake_address
             );
             continue;
         }
+        println!("  Merging into sweep stake account");
 
         let message = Message::new(
             &solana_stake_program::stake_instruction::merge(
