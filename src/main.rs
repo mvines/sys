@@ -403,6 +403,7 @@ async fn println_disposed_lot(
     disposed_lot: &DisposedLot,
     total_income: &mut f64,
     total_cap_gain: &mut f64,
+    total_current_value: &mut f64,
     notifier: Option<&Notifier>,
 ) {
     let cap_gain = disposed_lot.lot.cap_gain(disposed_lot.price);
@@ -410,6 +411,7 @@ async fn println_disposed_lot(
 
     *total_income += income;
     *total_cap_gain += cap_gain;
+    *total_current_value += income + cap_gain;
 
     let msg = format!(
         "{:>3}. {} | ◎{:<10.2} at ${:<6.2} | income: ${:<12.2} | sold at ${:6.2} for gain of ${:<12.2} | {} | {}",
@@ -578,6 +580,7 @@ async fn process_account_list(db: &Db) -> Result<(), Box<dyn std::error::Error>>
                     &disposed_lot,
                     &mut total_income,
                     &mut total_realized_gain,
+                    &mut total_current_value,
                     None,
                 )
                 .await;
