@@ -1,6 +1,7 @@
 use {
     crate::{binance_exchange, ftx_exchange},
     async_trait::async_trait,
+    chrono::NaiveDate,
     serde::{Deserialize, Serialize},
     solana_sdk::pubkey::Pubkey,
     std::str::FromStr,
@@ -67,6 +68,7 @@ pub struct SellOrderStatus {
     pub price: f64,
     pub amount: f64,
     pub filled_amount: f64,
+    pub last_update: NaiveDate,
 }
 
 #[async_trait]

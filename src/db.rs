@@ -206,6 +206,41 @@ pub struct TrackedAccount {
     pub lots: Vec<Lot>,
 }
 
+fn split_lots(db: &mut Db, lots: Vec<Lot>, amount: u64) -> (Vec<Lot>, Vec<Lot>) {
+    let mut extracted_lots = vec![];
+    let mut remaining_lots = vec![];
+
+    let mut amount_remaining = amount;
+    for mut lot in lots {
+        if amount_remaining > 0 {
+            if lot.amount <= amount_remaining {
+                amount_remaining -= lot.amount;
+                extracted_lots.push(lot);
+            } else {
+                let split_lot = Lot {
+                    lot_number: db.next_lot_number(),
+                    acquisition: lot.acquisition.clone(),
+                    amount: amount_remaining,
+                };
+                lot.amount -= amount_remaining;
+                extracted_lots.push(split_lot);
+                remaining_lots.push(lot);
+                amount_remaining = 0;
+            }
+        } else {
+            remaining_lots.push(lot);
+        }
+    }
+    remaining_lots.sort_by_key(|lot| lot.acquisition.when);
+    extracted_lots.sort_by_key(|lot| lot.acquisition.when);
+    assert_eq!(
+        extracted_lots.iter().map(|el| el.amount).sum::<u64>(),
+        amount
+    );
+
+    (extracted_lots, remaining_lots)
+}
+
 impl TrackedAccount {
     fn assert_lot_balance(&self) -> u64 {
         let lot_balance: u64 = self.lots.iter().map(|lot| lot.amount).sum();
@@ -231,35 +266,9 @@ impl TrackedAccount {
             lots.push(first_lot);
         }
 
-        let mut extracted_lots = vec![];
-        let mut amount_remaining = amount;
-        for mut lot in lots {
-            if amount_remaining > 0 {
-                if lot.amount <= amount_remaining {
-                    amount_remaining -= lot.amount;
-                    extracted_lots.push(lot);
-                } else {
-                    let split_lot = Lot {
-                        lot_number: db.next_lot_number(),
-                        acquisition: lot.acquisition.clone(),
-                        amount: amount_remaining,
-                    };
-                    lot.amount -= amount_remaining;
-                    extracted_lots.push(split_lot);
-                    self.lots.push(lot);
-                    amount_remaining = 0;
-                }
-            } else {
-                self.lots.push(lot);
-            }
-        }
-        self.lots.sort_by_key(|lot| lot.acquisition.when);
-        extracted_lots.sort_by_key(|lot| lot.acquisition.when);
-        assert_eq!(
-            extracted_lots.iter().map(|el| el.amount).sum::<u64>(),
-            amount
-        );
+        let (extracted_lots, remaining_lots) = split_lots(db, lots, amount);
 
+        self.lots = remaining_lots;
         self.last_update_balance -= amount;
         self.assert_lot_balance();
         Ok(extracted_lots)
@@ -414,7 +423,7 @@ impl Db {
             .collect()
     }
 
-    pub fn record_order(
+    pub fn open_order(
         &mut self,
         deposit_account: TrackedAccount,
         exchange: Exchange,
@@ -434,10 +443,13 @@ impl Db {
         self.update_account(deposit_account) // `update_account` calls `save`...
     }
 
-    fn complete_order(
+    pub fn close_order(
         &mut self,
         order_id: &str,
-        filled: Option<(f64 /* USD per SOL */, NaiveDate)>,
+        amount: u64,
+        filled_amount: u64,
+        price: f64,
+        when: NaiveDate,
     ) -> DbResult<()> {
         let mut open_orders = self.open_orders(None);
 
@@ -456,9 +468,16 @@ impl Db {
         open_orders.retain(|o| o.order_id != order_id);
         self.db.set("orders", &open_orders).unwrap();
 
-        if let Some((price, when)) = filled {
+        let lot_balance: u64 = lots.iter().map(|lot| lot.amount).sum();
+        assert_eq!(lot_balance, amount, "Order lot balance mismatch");
+        assert!(filled_amount <= amount);
+
+        let (sold_lots, cancelled_lots) = split_lots(self, lots, filled_amount);
+
+        self.auto_save(false)?;
+        if !sold_lots.is_empty() {
             let mut disposed_lots = self.disposed_lots();
-            for lot in lots {
+            for lot in sold_lots {
                 disposed_lots.push(DisposedLot {
                     lot,
                     when,
@@ -471,23 +490,17 @@ impl Db {
                 });
             }
             self.db.set("disposed-lots", &disposed_lots).unwrap();
-            self.save()
-        } else {
+        }
+
+        if !cancelled_lots.is_empty() {
             let mut deposit_account = self
                 .get_account(deposit_address)
                 .ok_or(DbError::AccountDoesNotExist(deposit_address))?;
 
-            deposit_account.merge_lots(lots);
-            self.update_account(deposit_account) // `update_account` calls `save`...
+            deposit_account.merge_lots(cancelled_lots);
+            self.update_account(deposit_account)?;
         }
-    }
-
-    pub fn cancel_order(&mut self, order_id: &str) -> DbResult<()> {
-        self.complete_order(order_id, None)
-    }
-
-    pub fn confirm_order(&mut self, order_id: &str, price: f64, when: NaiveDate) -> DbResult<()> {
-        self.complete_order(order_id, Some((price, when)))
+        self.auto_save(true)
     }
 
     pub fn open_orders(&self, exchange: Option<Exchange>) -> Vec<OpenOrder> {

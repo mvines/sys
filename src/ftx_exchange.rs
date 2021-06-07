@@ -1,6 +1,7 @@
 use {
     crate::exchange::*,
     async_trait::async_trait,
+    chrono::prelude::*,
     ftx::rest::{OrderSide, OrderStatus, OrderType, Rest},
     rust_decimal::prelude::ToPrimitive,
     solana_sdk::pubkey::Pubkey,
@@ -146,11 +147,18 @@ impl ExchangeClient for FtxExchangeClient {
         assert_eq!(order_info.r#type, OrderType::Limit);
         assert_eq!(pair, ftx_to_binance_pair(&order_info.market)?);
 
+        // TODO: use `order_info.created_at` instead?
+        let last_update = {
+            let today = Local::now().date();
+            NaiveDate::from_ymd(today.year(), today.month(), today.day())
+        };
+
         Ok(SellOrderStatus {
             open: order_info.status != OrderStatus::Closed,
             price: order_info.price,
             amount: order_info.size,
             filled_amount: order_info.filled_size,
+            last_update,
         })
     }
 }

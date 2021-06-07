@@ -143,20 +143,19 @@ async fn process_sync_exchange(
                 println!("Open order: {}", order_summary);
             }
         } else {
+            db.close_order(
+                &order_info.order_id,
+                sol_to_lamports(order_status.amount),
+                sol_to_lamports(order_status.filled_amount),
+                order_status.price,
+                order_status.last_update,
+            )?;
             let msg = if (order_status.amount - order_status.filled_amount).abs() < f64::EPSILON {
-                // TODO: Use date from exchange order!
-                let today = {
-                    let today = Local::now().date();
-                    NaiveDate::from_ymd(today.year(), today.month(), today.day())
-                };
-
-                db.confirm_order(&order_info.order_id, order_status.price, today)?;
                 format!("Order filled: {}", order_summary)
             } else if order_status.filled_amount < f64::EPSILON {
-                db.cancel_order(&order_info.order_id)?;
                 format!("Order cancelled: {}", order_summary)
             } else {
-                panic!("TODO: Handle partial execution upon cancel");
+                format!("Order partially filled: {}", order_summary)
             };
             println!("{}", msg);
             notifier.send(&format!("{:?}: {}", exchange, msg)).await;
@@ -361,7 +360,7 @@ async fn process_exchange_sell(
         .await?;
     println!("Order Id: {}", order_id);
 
-    db.record_order(deposit_account, exchange, pair, order_id, order_lots)?;
+    db.open_order(deposit_account, exchange, pair, order_id, order_lots)?;
     Ok(())
 }
 

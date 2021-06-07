@@ -1,5 +1,9 @@
 use {
-    crate::exchange::*, async_trait::async_trait, serde::Deserialize, solana_sdk::pubkey::Pubkey,
+    crate::exchange::*,
+    async_trait::async_trait,
+    chrono::{Local, TimeZone},
+    serde::Deserialize,
+    solana_sdk::pubkey::Pubkey,
     tokio_binance::AccountClient,
 };
 
@@ -89,6 +93,8 @@ struct Order {
     symbol: String,
     time_in_force: String,
     r#type: String,
+    time: i64,
+    update_time: i64,
 }
 
 #[async_trait]
@@ -256,11 +262,17 @@ impl ExchangeClient for BinanceExchangeClient {
             }
         };
 
+        let last_update = Local
+            .timestamp(order.update_time / 1000, 0)
+            .date()
+            .naive_local();
+
         Ok(SellOrderStatus {
             open,
             price: order.price.parse()?,
             amount: order.orig_qty.parse()?,
             filled_amount: order.executed_qty.parse()?,
+            last_update,
         })
     }
 }
