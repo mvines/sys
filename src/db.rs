@@ -404,7 +404,7 @@ impl Db {
     }
 
     pub fn cancel_deposit(&mut self, signature: Signature) -> DbResult<()> {
-        self.complete_deposit(signature, true)
+        self.complete_deposit(signature, false)
     }
 
     pub fn confirm_deposit(&mut self, signature: Signature) -> DbResult<()> {
