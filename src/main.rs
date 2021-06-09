@@ -61,6 +61,7 @@ fn add_exchange_deposit_address_to_db(
             last_update_epoch: epoch,
             last_update_balance: 0,
             lots: vec![],
+            no_sync: Some(true),
         })?;
     }
     Ok(())
@@ -533,6 +534,7 @@ async fn process_account_add(
         last_update_epoch,
         last_update_balance: lot.amount,
         lots: vec![lot],
+        no_sync: None,
     };
     db.add_account(account)?;
 
@@ -873,7 +875,7 @@ async fn process_account_sync(
                 .ok_or_else(|| format!("{} does not exist", address))?]
         }
         None => db.get_accounts().values().cloned().collect(),
-    };
+    }.into_iter().filter(|account| !account.no_sync.unwrap_or_default()).collect::<Vec<_>>();
 
     if accounts.is_empty() {
         println!("No accounts to sync");

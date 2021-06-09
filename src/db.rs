@@ -208,6 +208,7 @@ pub struct TrackedAccount {
     pub last_update_epoch: Epoch,
     pub last_update_balance: u64,
     pub lots: Vec<Lot>,
+    pub no_sync: Option<bool>,
 }
 
 fn split_lots(db: &mut Db, lots: Vec<Lot>, amount: u64) -> (Vec<Lot>, Vec<Lot>) {
@@ -698,6 +699,7 @@ impl Db {
             last_update_balance: 0,
             last_update_epoch: current_epoch,
             lots: vec![],
+            no_sync: None,
         })
     }
 
