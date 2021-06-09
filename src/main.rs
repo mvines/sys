@@ -15,6 +15,7 @@ use {
     db::*,
     exchange::*,
     notifier::*,
+    separator::FixedPlaceSeparatable,
     solana_clap_utils::{self, input_parsers::*, input_validators::*},
     solana_client::{rpc_client::RpcClient, rpc_response::StakeActivationState},
     solana_sdk::{
@@ -382,14 +383,14 @@ async fn println_lot(
     *total_current_value += current_value;
 
     let msg = format!(
-        "{:>3}. {} | ◎{:<10.2} at ${:<6.2} | current value: ${:<12.2} | income: ${:<12.2} | cap gain: ${:<12.2} | {}",
+        "{:>3}. {} | ◎{:<17.9} at ${:<6} | current value: ${:<14} | income: ${:<11} | cap gain: ${:<14} | {}",
         lot.lot_number,
         lot.acquisition.when,
         lamports_to_sol(lot.amount),
-        lot.acquisition.price,
-        current_value,
-        income,
-        cap_gain,
+        lot.acquisition.price.separated_string_with_fixed_place(2),
+        current_value.separated_string_with_fixed_place(2),
+        income.separated_string_with_fixed_place(2),
+        cap_gain.separated_string_with_fixed_place(2),
         lot.acquisition.kind,
     );
 
@@ -414,14 +415,14 @@ async fn println_disposed_lot(
     *total_current_value += income + cap_gain;
 
     let msg = format!(
-        "{:>3}. {} | ◎{:<10.2} at ${:<6.2} | income: ${:<12.2} | sold at ${:6.2} for gain of ${:<12.2} | {} | {}",
+        "{:>3}. {} | ◎{:<17.9} at ${:<6} | income: ${:<11} | sold at ${:6} for gain of ${:<14} | {} | {}",
         disposed_lot.lot.lot_number,
         disposed_lot.lot.acquisition.when,
         lamports_to_sol(disposed_lot.lot.amount),
-        disposed_lot.lot.acquisition.price,
-        income,
-        disposed_lot.price,
-        cap_gain,
+        disposed_lot.lot.acquisition.price.separated_string_with_fixed_place(2),
+        income.separated_string_with_fixed_place(2),
+        disposed_lot.price.separated_string_with_fixed_place(2),
+        cap_gain.separated_string_with_fixed_place(2),
         disposed_lot.lot.acquisition.kind,
         disposed_lot.kind,
     );
@@ -624,11 +625,26 @@ async fn process_account_list(db: &Db) -> Result<(), Box<dyn std::error::Error>>
             println!();
         }
 
-        println!("Current price:             ${:<.2}", current_price);
-        println!("Current value:             ${:<.2}", total_current_value);
-        println!("Total income:              ${:<.2}", total_income);
-        println!("Total unrealized cap gain: ${:<.2}", total_unrealized_gain);
-        println!("Total realized cap gain:   ${:<.2}", total_realized_gain);
+        println!(
+            "Current price:             ${}",
+            current_price.separated_string_with_fixed_place(2)
+        );
+        println!(
+            "Current value:             ${}",
+            total_current_value.separated_string_with_fixed_place(2)
+        );
+        println!(
+            "Total income:              ${}",
+            total_income.separated_string_with_fixed_place(2)
+        );
+        println!(
+            "Total unrealized cap gain: ${}",
+            total_unrealized_gain.separated_string_with_fixed_place(2)
+        );
+        println!(
+            "Total realized cap gain:   ${}",
+            total_realized_gain.separated_string_with_fixed_place(2)
+        );
     }
     Ok(())
 }
@@ -875,7 +891,10 @@ async fn process_account_sync(
                 .ok_or_else(|| format!("{} does not exist", address))?]
         }
         None => db.get_accounts().values().cloned().collect(),
-    }.into_iter().filter(|account| !account.no_sync.unwrap_or_default()).collect::<Vec<_>>();
+    }
+    .into_iter()
+    .filter(|account| !account.no_sync.unwrap_or_default())
+    .collect::<Vec<_>>();
 
     if accounts.is_empty() {
         println!("No accounts to sync");

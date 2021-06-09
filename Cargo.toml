@@ -6,12 +6,13 @@ license = "WTFPL"
 publish = false
 
 [dependencies]
-bincode = "1.3.3"
-ftx = { git = "https://github.com/fabianboesiger/ftx", rev = "48c19604a1df93ac62a147e5ee708c150b459a69" }
 async-trait = "0.1.50"
+bincode = "1.3.3"
 chrono = "0.4"
 clap = "2.33"
+ftx = { git = "https://github.com/fabianboesiger/ftx", rev = "48c19604a1df93ac62a147e5ee708c150b459a69" }
 itertools = "0.10.0"
+separator = "0.4.1"
 pickledb = "0.4"
 reqwest = "0.11"
 rust_decimal = "^1.13.0"
@@ -24,8 +25,8 @@ solana-client = "=1.7.0"
 solana-logger = "=1.7.0"
 solana-remote-wallet = "=1.7.0"
 solana-sdk = "=1.7.0"
-solana-transaction-status = "=1.7.0"
 solana-stake-program = "=1.7.0"
+solana-transaction-status = "=1.7.0"
 solana-vote-program = "=1.7.0"
 thiserror = "1.0"
 tokio = { version = "1", features = ["macros", "time"] }

@@ -2467,6 +2467,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "separator"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f97841a747eef040fcd2e7b3b9a220a7205926e60488e673d9e4926d27772ce5"
+
+[[package]]
 name = "serde"
 version = "1.0.125"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3318,6 +3324,7 @@ dependencies = [
  "pickledb",
  "reqwest",
  "rust_decimal",
+ "separator",
  "serde",
  "serde_json",
  "solana-clap-utils",
