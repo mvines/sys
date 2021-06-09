@@ -258,9 +258,6 @@ impl TrackedAccount {
     }
 
     pub fn extract_lots(&mut self, db: &mut Db, amount: u64) -> DbResult<Vec<Lot>> {
-        let b = self.lots.iter().map(|el| el.amount).sum::<u64>();
-        self.last_update_balance = b;
-
         if self.last_update_balance < amount {
             return Err(DbError::AccountHasInsufficientBalance(self.address));
         }
