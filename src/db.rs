@@ -174,6 +174,9 @@ pub enum LotDisposalKind {
         pair: String,
         order_id: String,
     },
+    Other {
+        description: String,
+    },
 }
 
 impl fmt::Display for LotDisposalKind {
@@ -184,6 +187,7 @@ impl fmt::Display for LotDisposalKind {
                 pair,
                 order_id,
             } => write!(f, "{:?} {}, order {}", exchange, pair, order_id),
+            LotDisposalKind::Other { description } => write!(f, "{}", description),
         }
     }
 }
@@ -501,6 +505,36 @@ impl Db {
             self.update_account(deposit_account)?;
         }
         self.auto_save(true)
+    }
+
+    pub fn record_disposal(
+        &mut self,
+        from_address: Pubkey,
+        amount: u64,
+        description: String,
+        when: NaiveDate,
+        price: f64,
+    ) -> DbResult<Vec<DisposedLot>> {
+        let mut from_account = self
+            .get_account(from_address)
+            .ok_or(DbError::AccountDoesNotExist(from_address))?;
+
+        let mut disposed_lots = self.disposed_lots();
+
+        let lots = from_account.extract_lots(self, amount)?;
+        for lot in lots {
+            disposed_lots.push(DisposedLot {
+                lot,
+                when,
+                price,
+                kind: LotDisposalKind::Other {
+                    description: description.clone(),
+                },
+            });
+        }
+        self.db.set("disposed-lots", &disposed_lots)?;
+        self.update_account(from_account)?; // `update_account` calls `save`...
+        Ok(disposed_lots)
     }
 
     pub fn open_orders(&self, exchange: Option<Exchange>) -> Vec<OpenOrder> {

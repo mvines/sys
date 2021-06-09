@@ -430,6 +430,7 @@ async fn println_disposed_lot(
     }
     println!("{}", msg);
 }
+
 async fn process_account_add(
     db: &mut Db,
     rpc_client: &RpcClient,
@@ -535,6 +536,31 @@ async fn process_account_add(
     };
     db.add_account(account)?;
 
+    Ok(())
+}
+
+async fn process_account_dispose(
+    db: &mut Db,
+    address: Pubkey,
+    amount: f64,
+    description: String,
+    when: NaiveDate,
+    price: Option<f64>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let price = match price {
+        Some(price) => price,
+        None => coin_gecko::get_price(when).await?,
+    };
+
+    let disposed_lots =
+        db.record_disposal(address, sol_to_lamports(amount), description, when, price)?;
+    if !disposed_lots.is_empty() {
+        println!("Disposed Lots:");
+        for disposed_lot in disposed_lots {
+            println_disposed_lot(&disposed_lot, &mut 0., &mut 0., &mut 0., None).await;
+        }
+        println!();
+    }
     Ok(())
 }
 
@@ -1253,6 +1279,56 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .help("Acquisition price per SOL [default: market price on acquisition date]"),
                         ),
                 )
+                .subcommand(
+                    SubCommand::with_name("dispose")
+                        .about("Manually record the disposal of account lots")
+                        .arg(
+                            Arg::with_name("address")
+                                .index(1)
+                                .value_name("ADDRESS")
+                                .takes_value(true)
+                                .required(true)
+                                .validator(is_valid_pubkey)
+                                .help("Account that the SOL was disposed from"),
+                        )
+                        .arg(
+                            Arg::with_name("amount")
+                                .index(2)
+                                .value_name("AMOUNT")
+                                .takes_value(true)
+                                .validator(is_amount)
+                                .required(true)
+                                .help("Amount of SOL that was disposed from the account"),
+                        )
+                        .arg(
+                            Arg::with_name("description")
+                                .short("d")
+                                .long("description")
+                                .value_name("TEXT")
+                                .takes_value(true)
+                                .help("Description to associate with the disposal event"),
+                        )
+                        .arg(
+                            Arg::with_name("when")
+                                .short("w")
+                                .long("when")
+                                .value_name("YY/MM/DD")
+                                .takes_value(true)
+                                .required(true)
+                                .default_value(&default_when)
+                                .validator(|value| naivedate_of(&value).map(|_| ()))
+                                .help("Disposal date"),
+                        )
+                        .arg(
+                            Arg::with_name("price")
+                                .short("p")
+                                .long("price")
+                                .value_name("USD")
+                                .takes_value(true)
+                                .validator(is_parsable::<f64>)
+                                .help("Disposal price per SOL [default: market price on disposal date]"),
+                        ),
+                )
                 .subcommand(SubCommand::with_name("ls").about("List registered accounts"))
                 .subcommand(
                     SubCommand::with_name("remove")
@@ -1514,6 +1590,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 )
                 .await?;
                 process_account_sync(&mut db, &rpc_client, Some(address), &notifier).await?;
+            }
+            ("dispose", Some(arg_matches)) => {
+                let address = pubkey_of(arg_matches, "address").unwrap();
+                let amount = value_t_or_exit!(arg_matches, "amount", f64);
+                let description = value_t!(arg_matches, "description", String)
+                    .ok()
+                    .unwrap_or_else(String::default);
+                let when = naivedate_of(&value_t_or_exit!(arg_matches, "when", String)).unwrap();
+                let price = value_t!(arg_matches, "price", f64).ok();
+
+                process_account_dispose(&mut db, address, amount, description, when, price).await?;
             }
             ("ls", Some(_arg_matches)) => {
                 process_account_list(&db).await?;
