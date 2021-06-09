@@ -93,8 +93,8 @@ struct Order {
     symbol: String,
     time_in_force: String,
     r#type: String,
-    time: i64,
-    update_time: i64,
+    time: Option<i64>,
+    update_time: Option<i64>,
 }
 
 #[async_trait]
@@ -263,7 +263,7 @@ impl ExchangeClient for BinanceExchangeClient {
         };
 
         let last_update = Local
-            .timestamp(order.update_time / 1000, 0)
+            .timestamp(order.update_time.unwrap_or_default() / 1000, 0)
             .date()
             .naive_local();
 
