@@ -4,6 +4,7 @@ use {
     chrono::prelude::*,
     ftx::rest::{OrderSide, OrderStatus, OrderType, Rest},
     rust_decimal::prelude::ToPrimitive,
+    separator::FixedPlaceSeparatable,
     solana_sdk::pubkey::Pubkey,
 };
 
@@ -91,8 +92,14 @@ impl ExchangeClient for FtxExchangeClient {
             "Ask: ${}, Bid: ${}, Last: ${}",
             market.ask, market.bid, market.last,
         );
-        println!("24h Volume: ${}", market.volume_usd24h,);
-
+        println!(
+            "24h Volume: ${}",
+            market
+                .volume_usd24h
+                .to_f64()
+                .unwrap()
+                .separated_string_with_fixed_place(2)
+        );
         Ok(())
     }
 
