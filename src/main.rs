@@ -585,17 +585,31 @@ async fn process_account_list(db: &Db) -> Result<(), Box<dyn std::error::Error>>
             if !account.lots.is_empty() {
                 let mut lots = account.lots.iter().collect::<Vec<_>>();
                 lots.sort_by_key(|lot| lot.acquisition.when);
+
+                let mut account_income = 0.;
+                let mut account_unrealized_gain = 0.;
+                let mut account_current_value = 0.;
+
                 for lot in lots {
                     println_lot(
                         lot,
                         current_price,
-                        &mut total_income,
-                        &mut total_unrealized_gain,
-                        &mut total_current_value,
+                        &mut account_income,
+                        &mut account_unrealized_gain,
+                        &mut account_current_value,
                         None,
                     )
                     .await;
                 }
+                println!(
+                    "    Account value: ${}, income: ${}, unrealized cap gain: ${}",
+                    account_current_value.separated_string_with_fixed_place(2),
+                    account_income.separated_string_with_fixed_place(2),
+                    account_unrealized_gain.separated_string_with_fixed_place(2),
+                );
+                total_unrealized_gain += account_unrealized_gain;
+                total_income += account_income;
+                total_current_value += account_current_value;
             } else {
                 println!("  No lots");
             }
@@ -606,16 +620,31 @@ async fn process_account_list(db: &Db) -> Result<(), Box<dyn std::error::Error>>
         disposed_lots.sort_by_key(|lot| lot.when);
         if !disposed_lots.is_empty() {
             println!("Disposed Lots:");
+
+            let mut disposed_income = 0.;
+            let mut disposed_realized_gain = 0.;
+            let mut disposed_current_value = 0.;
+
             for disposed_lot in disposed_lots {
                 println_disposed_lot(
                     &disposed_lot,
-                    &mut total_income,
-                    &mut total_realized_gain,
-                    &mut total_current_value,
+                    &mut disposed_income,
+                    &mut disposed_realized_gain,
+                    &mut disposed_current_value,
                     None,
                 )
                 .await;
             }
+            println!(
+                "    Disposed value: ${}, income: ${}, realized cap gain: ${}",
+                disposed_current_value.separated_string_with_fixed_place(2),
+                disposed_income.separated_string_with_fixed_place(2),
+                disposed_realized_gain.separated_string_with_fixed_place(2),
+            );
+            total_realized_gain += disposed_realized_gain;
+            total_income += disposed_income;
+            total_current_value += disposed_current_value;
+
             println!();
         }
 
@@ -628,24 +657,25 @@ async fn process_account_list(db: &Db) -> Result<(), Box<dyn std::error::Error>>
             println!();
         }
 
+        println!("Summary");
         println!(
-            "Current price:             ${}",
+            "  Current spot price:        ${}",
             current_price.separated_string_with_fixed_place(2)
         );
         println!(
-            "Current value:             ${}",
+            "  Total value:               ${}",
             total_current_value.separated_string_with_fixed_place(2)
         );
         println!(
-            "Total income:              ${}",
+            "  Total income:              ${}",
             total_income.separated_string_with_fixed_place(2)
         );
         println!(
-            "Total unrealized cap gain: ${}",
+            "  Total unrealized cap gain: ${}",
             total_unrealized_gain.separated_string_with_fixed_place(2)
         );
         println!(
-            "Total realized cap gain:   ${}",
+            "  Total realized cap gain:   ${}",
             total_realized_gain.separated_string_with_fixed_place(2)
         );
     }
