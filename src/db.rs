@@ -10,7 +10,7 @@ use {
         signature::Signature,
     },
     std::{
-        collections::{HashMap, HashSet},
+        collections::{BTreeMap, HashSet},
         fmt, fs,
         path::{Path, PathBuf},
     },
@@ -632,9 +632,9 @@ impl Db {
         }
     }
 
-    pub fn get_accounts(&self) -> HashMap<Pubkey, TrackedAccount> {
+    pub fn get_accounts(&self) -> BTreeMap<Pubkey, TrackedAccount> {
         if !self.db.lexists("accounts") {
-            return HashMap::default();
+            return BTreeMap::default();
         }
         self.db
             .liter("accounts")

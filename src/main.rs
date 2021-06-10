@@ -583,7 +583,9 @@ async fn process_account_list(db: &Db) -> Result<(), Box<dyn std::error::Error>>
             println!("{}: {}", account.address.to_string(), account.description);
 
             if !account.lots.is_empty() {
-                for lot in &account.lots {
+                let mut lots = account.lots.iter().collect::<Vec<_>>();
+                lots.sort_by_key(|lot| lot.acquisition.when);
+                for lot in lots {
                     println_lot(
                         lot,
                         current_price,
@@ -600,7 +602,8 @@ async fn process_account_list(db: &Db) -> Result<(), Box<dyn std::error::Error>>
             println!();
         }
 
-        let disposed_lots = db.disposed_lots();
+        let mut disposed_lots = db.disposed_lots();
+        disposed_lots.sort_by_key(|lot| lot.when);
         if !disposed_lots.is_empty() {
             println!("Disposed Lots:");
             for disposed_lot in disposed_lots {
