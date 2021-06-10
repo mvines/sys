@@ -45,7 +45,10 @@ impl ExchangeClient for FtxExchangeClient {
             .get_wallet_balances()
             .await
             .map_err(|err| format!("{:?}", err))?;
-        let sol_balance = balances.iter().find(|b| b.coin == "SOL").expect("SOL");
+        let sol_balance = balances
+            .iter()
+            .find(|b| b.coin == "SOL")
+            .ok_or("No SOL balance")?;
 
         Ok(ExchangeBalance {
             available: sol_balance.free,
