@@ -3,7 +3,7 @@ use {
     async_trait::async_trait,
     chrono::prelude::*,
     ftx::rest::{OrderSide, OrderStatus, OrderType, Rest},
-    rust_decimal::prelude::ToPrimitive,
+    rust_decimal::prelude::*,
     separator::FixedPlaceSeparatable,
     solana_sdk::pubkey::Pubkey,
 };
@@ -52,8 +52,8 @@ impl ExchangeClient for FtxExchangeClient {
             .ok_or("No SOL balance")?;
 
         Ok(ExchangeBalance {
-            available: sol_balance.free,
-            total: sol_balance.total,
+            available: sol_balance.free.to_f64().unwrap(),
+            total: sol_balance.total.to_f64().unwrap(),
         })
     }
 
@@ -69,7 +69,7 @@ impl ExchangeClient for FtxExchangeClient {
                     if let Some(tx_id) = wd.txid {
                         return Some(DepositInfo {
                             tx_id,
-                            amount: wd.size,
+                            amount: wd.size.to_f64().unwrap(),
                         });
                     }
                 }
@@ -129,9 +129,12 @@ impl ExchangeClient for FtxExchangeClient {
             .place_order(
                 &pair,
                 OrderSide::Sell,
-                Some(price),
+                Some(FromPrimitive::from_f64(price).unwrap()),
                 OrderType::Limit,
-                amount,
+                FromPrimitive::from_f64(amount).unwrap(),
+                None,
+                None,
+                None,
                 None,
             )
             .await
@@ -165,9 +168,9 @@ impl ExchangeClient for FtxExchangeClient {
 
         Ok(SellOrderStatus {
             open: order_info.status != OrderStatus::Closed,
-            price: order_info.price,
-            amount: order_info.size,
-            filled_amount: order_info.filled_size,
+            price: order_info.price.unwrap_or_default().to_f64().unwrap(),
+            amount: order_info.size.to_f64().unwrap(),
+            filled_amount: order_info.filled_size.to_f64().unwrap(),
             last_update,
         })
     }
