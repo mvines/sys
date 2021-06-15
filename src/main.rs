@@ -1344,7 +1344,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 )
                 .subcommand(
                     SubCommand::with_name("dispose")
-                        .about("Manually record the disposal of account lots")
+                        .about("Manually record the disposal of SOL from an account")
                         .arg(
                             Arg::with_name("address")
                                 .index(1)
