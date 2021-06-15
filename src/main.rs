@@ -578,6 +578,8 @@ async fn process_account_list(db: &Db) -> Result<(), Box<dyn std::error::Error>>
         let mut total_unrealized_gain = 0.;
         let mut total_current_value = 0.;
 
+        let open_orders = db.open_orders(None);
+
         for account in accounts.values() {
             println!(
                 "{}: ◎{} - {}",
@@ -588,7 +590,12 @@ async fn process_account_list(db: &Db) -> Result<(), Box<dyn std::error::Error>>
             account.assert_lot_balance();
             total_held_lamports += account.last_update_balance;
 
-            if !account.lots.is_empty() {
+            let open_orders = open_orders
+                .iter()
+                .filter(|oo| oo.deposit_address == account.address)
+                .collect::<Vec<_>>();
+
+            if !account.lots.is_empty() || !open_orders.is_empty() {
                 let mut lots = account.lots.iter().collect::<Vec<_>>();
                 lots.sort_by_key(|lot| lot.acquisition.when);
 
@@ -607,6 +614,24 @@ async fn process_account_list(db: &Db) -> Result<(), Box<dyn std::error::Error>>
                     )
                     .await;
                 }
+
+                for open_order in open_orders {
+                    let mut lots = open_order.lots.iter().collect::<Vec<_>>();
+                    lots.sort_by_key(|lot| lot.acquisition.when);
+                    println!("(open order {} - {})", open_order.order_id, open_order.pair);
+                    for lot in lots {
+                        println_lot(
+                            lot,
+                            current_price,
+                            &mut account_income,
+                            &mut account_unrealized_gain,
+                            &mut account_current_value,
+                            None,
+                        )
+                        .await;
+                    }
+                }
+
                 println!(
                     "    Value: ${}, income: ${}, unrealized cap gain: ${}",
                     account_current_value.separated_string_with_fixed_place(2),
