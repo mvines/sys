@@ -82,6 +82,7 @@ pub struct Db {
 
 #[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
 pub struct PendingDeposit {
+    #[serde(with = "field_as_string")]
     pub signature: Signature, // transaction signature of the deposit
     pub exchange: Exchange,
     pub amount: u64,
