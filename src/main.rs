@@ -580,7 +580,13 @@ async fn process_account_list(db: &Db) -> Result<(), Box<dyn std::error::Error>>
         let mut total_current_value = 0.;
 
         for account in accounts.values() {
-            println!("{}: {}", account.address.to_string(), account.description);
+            println!(
+                "{}: ◎{} - {}",
+                account.address.to_string(),
+                lamports_to_sol(account.last_update_balance).separated_string_with_fixed_place(2),
+                account.description
+            );
+            account.assert_lot_balance();
 
             if !account.lots.is_empty() {
                 let mut lots = account.lots.iter().collect::<Vec<_>>();
@@ -602,7 +608,7 @@ async fn process_account_list(db: &Db) -> Result<(), Box<dyn std::error::Error>>
                     .await;
                 }
                 println!(
-                    "    Account value: ${}, income: ${}, unrealized cap gain: ${}",
+                    "    Value: ${}, income: ${}, unrealized cap gain: ${}",
                     account_current_value.separated_string_with_fixed_place(2),
                     account_income.separated_string_with_fixed_place(2),
                     account_unrealized_gain.separated_string_with_fixed_place(2),
@@ -621,11 +627,13 @@ async fn process_account_list(db: &Db) -> Result<(), Box<dyn std::error::Error>>
         if !disposed_lots.is_empty() {
             println!("Disposed Lots:");
 
+            let mut disposed_lamports = 0;
             let mut disposed_income = 0.;
             let mut disposed_realized_gain = 0.;
             let mut disposed_current_value = 0.;
 
             for disposed_lot in disposed_lots {
+                disposed_lamports += disposed_lot.lot.amount;
                 println_disposed_lot(
                     &disposed_lot,
                     &mut disposed_income,
@@ -636,7 +644,8 @@ async fn process_account_list(db: &Db) -> Result<(), Box<dyn std::error::Error>>
                 .await;
             }
             println!(
-                "    Disposed value: ${}, income: ${}, realized cap gain: ${}",
+                "    Disposed ◎{}, value: ${}, income: ${}, realized cap gain: ${}",
+                lamports_to_sol(disposed_lamports).separated_string_with_fixed_place(2),
                 disposed_current_value.separated_string_with_fixed_place(2),
                 disposed_income.separated_string_with_fixed_place(2),
                 disposed_realized_gain.separated_string_with_fixed_place(2),

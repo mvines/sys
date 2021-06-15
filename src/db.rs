@@ -247,14 +247,13 @@ fn split_lots(db: &mut Db, lots: Vec<Lot>, amount: u64) -> (Vec<Lot>, Vec<Lot>) 
 }
 
 impl TrackedAccount {
-    fn assert_lot_balance(&self) -> u64 {
+    pub fn assert_lot_balance(&self) {
         let lot_balance: u64 = self.lots.iter().map(|lot| lot.amount).sum();
         assert_eq!(
             lot_balance, self.last_update_balance,
             "Lot balance mismatch: {:?}",
             self
         );
-        lot_balance
     }
 
     pub fn extract_lots(&mut self, db: &mut Db, amount: u64) -> DbResult<Vec<Lot>> {
