@@ -575,8 +575,8 @@ async fn process_account_list(db: &Db) -> Result<(), Box<dyn std::error::Error>>
         let current_price = coin_gecko::get_current_price().await?;
 
         let mut total_income = 0.;
+        let mut total_held_lamports = 0;
         let mut total_unrealized_gain = 0.;
-        let mut total_realized_gain = 0.;
         let mut total_current_value = 0.;
 
         for account in accounts.values() {
@@ -587,6 +587,7 @@ async fn process_account_list(db: &Db) -> Result<(), Box<dyn std::error::Error>>
                 account.description
             );
             account.assert_lot_balance();
+            total_held_lamports += account.last_update_balance;
 
             if !account.lots.is_empty() {
                 let mut lots = account.lots.iter().collect::<Vec<_>>();
@@ -644,16 +645,12 @@ async fn process_account_list(db: &Db) -> Result<(), Box<dyn std::error::Error>>
                 .await;
             }
             println!(
-                "    Disposed ◎{}, value: ${}, income: ${}, realized cap gain: ${}",
+                "    Disposed ◎{}, value: ${}, income: ${}, realized cap gains: ${}",
                 lamports_to_sol(disposed_lamports).separated_string_with_fixed_place(2),
                 disposed_current_value.separated_string_with_fixed_place(2),
                 disposed_income.separated_string_with_fixed_place(2),
                 disposed_realized_gain.separated_string_with_fixed_place(2),
             );
-            total_realized_gain += disposed_realized_gain;
-            total_income += disposed_income;
-            total_current_value += disposed_current_value;
-
             println!();
         }
 
@@ -666,26 +663,26 @@ async fn process_account_list(db: &Db) -> Result<(), Box<dyn std::error::Error>>
             println!();
         }
 
-        println!("Summary");
+        println!("Current Holdings Summary:");
         println!(
-            "  Current spot price:        ${}",
+            "  Price per SOL:        ${}",
             current_price.separated_string_with_fixed_place(2)
         );
         println!(
-            "  Total value:               ${}",
+            "  Balance:              ◎{}",
+            lamports_to_sol(total_held_lamports).separated_string_with_fixed_place(2)
+        );
+        println!(
+            "  Value:                ${}",
             total_current_value.separated_string_with_fixed_place(2)
         );
         println!(
-            "  Total income:              ${}",
+            "  Income:               ${}",
             total_income.separated_string_with_fixed_place(2)
         );
         println!(
-            "  Total unrealized cap gain: ${}",
+            "  Unrealized cap gains: ${}",
             total_unrealized_gain.separated_string_with_fixed_place(2)
-        );
-        println!(
-            "  Total realized cap gain:   ${}",
-            total_realized_gain.separated_string_with_fixed_place(2)
         );
     }
     Ok(())
