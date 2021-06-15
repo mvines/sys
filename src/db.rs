@@ -82,10 +82,9 @@ pub struct Db {
 
 #[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
 pub struct PendingDeposit {
-    #[serde(with = "field_as_string")]
-    pub signature: Signature, // transaction signature of the deposit
     pub exchange: Exchange,
     pub amount: u64,
+    pub transfer: PendingTransfer,
 }
 
 #[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
@@ -377,30 +376,38 @@ impl Db {
             self.db.lcreate("deposits")?;
         }
 
+        let mut from_account = self
+            .get_account(from_address)
+            .ok_or(DbError::AccountDoesNotExist(from_address))?;
+
         let deposit = PendingDeposit {
-            signature,
             exchange,
             amount,
+            transfer: PendingTransfer {
+                signature,
+                from_address,
+                to_address: deposit_address,
+                lots: from_account.extract_lots(self, amount)?,
+            },
         };
         self.db.ladd("deposits", &deposit).unwrap();
 
-        self.record_transfer(signature, from_address, Some(amount), deposit_address)
-        // `record_transfer` calls `save`...
+        self.update_account(from_account) // `update_account` calls `save`...
     }
 
     fn complete_deposit(&mut self, signature: Signature, success: bool) -> DbResult<()> {
         let mut pending_deposits = self.pending_deposits(None);
 
-        let PendingDeposit { signature, .. } = pending_deposits
+        let PendingDeposit { transfer, .. } = pending_deposits
             .iter()
-            .find(|pd| pd.signature == signature)
+            .find(|pd| pd.transfer.signature == signature)
             .ok_or(DbError::PendingDepositDoesNotExist(signature))?
             .clone();
 
-        pending_deposits.retain(|pd| pd.signature != signature);
+        pending_deposits.retain(|pd| pd.transfer.signature != signature);
         self.db.set("deposits", &pending_deposits).unwrap();
 
-        self.complete_transfer(signature, success) // `complete_transfer` calls `save`...
+        self.complete_transfer_or_deposit(transfer, success) // `complete_transfer_or_deposit` calls `save`...
     }
 
     pub fn cancel_deposit(&mut self, signature: Signature) -> DbResult<()> {
@@ -763,22 +770,17 @@ impl Db {
         self.update_account(from_account) // `update_account` calls `save`...
     }
 
-    fn complete_transfer(&mut self, signature: Signature, success: bool) -> DbResult<()> {
-        let mut pending_transfers = self.pending_transfers();
-
+    fn complete_transfer_or_deposit(
+        &mut self,
+        pending_transfer: PendingTransfer,
+        success: bool,
+    ) -> DbResult<()> {
         let PendingTransfer {
-            signature,
             from_address,
             to_address,
             lots,
-        } = pending_transfers
-            .iter()
-            .find(|pt| pt.signature == signature)
-            .ok_or(DbError::PendingTransferDoesNotExist(signature))?
-            .clone();
-
-        pending_transfers.retain(|pt| pt.signature != signature);
-        self.db.set("transfers", &pending_transfers).unwrap();
+            ..
+        } = pending_transfer;
 
         let mut from_account = self
             .get_account(from_address)
@@ -797,6 +799,21 @@ impl Db {
         self.update_account(to_account)?;
         self.update_account(from_account)?;
         self.auto_save(true)
+    }
+
+    fn complete_transfer(&mut self, signature: Signature, success: bool) -> DbResult<()> {
+        let mut pending_transfers = self.pending_transfers();
+
+        let transfer = pending_transfers
+            .iter()
+            .find(|pt| pt.signature == signature)
+            .ok_or(DbError::PendingTransferDoesNotExist(signature))?
+            .clone();
+
+        pending_transfers.retain(|pt| pt.signature != signature);
+        self.db.set("transfers", &pending_transfers).unwrap();
+
+        self.complete_transfer_or_deposit(transfer, success) // `complete_transfer_or_deposit` calls `save`...
     }
 
     pub fn cancel_transfer(&mut self, signature: Signature) -> DbResult<()> {

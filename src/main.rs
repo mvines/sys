@@ -81,17 +81,16 @@ async fn process_sync_exchange(
     let recent_deposits = exchange_client.recent_deposits().await?;
 
     for pending_deposit in db.pending_deposits(Some(exchange)) {
-        if let Some(deposit_info) = recent_deposits
-            .iter()
-            .find(|deposit_info| deposit_info.tx_id == pending_deposit.signature.to_string())
-        {
+        if let Some(deposit_info) = recent_deposits.iter().find(|deposit_info| {
+            deposit_info.tx_id == pending_deposit.transfer.signature.to_string()
+        }) {
             let missing_lamports = (sol_to_lamports(deposit_info.amount) as i64
                 - (pending_deposit.amount as i64))
                 .abs();
             if missing_lamports >= 10 {
                 let msg = format!(
                     "Error! Deposit amount mismatch for {}! Actual amount: ◎{}, expected amount: ◎{}",
-                    pending_deposit.signature, deposit_info.amount, pending_deposit.amount
+                    pending_deposit.transfer.signature, deposit_info.amount, pending_deposit.amount
                 );
                 println!("{}", msg);
                 notifier.send(&format!("{:?}: {}", exchange, msg)).await;
@@ -108,12 +107,12 @@ async fn process_sync_exchange(
                     notifier.send(&format!("{:?}: {}", exchange, msg)).await;
                 }
 
-                db.confirm_deposit(pending_deposit.signature)?;
+                db.confirm_deposit(pending_deposit.transfer.signature)?;
 
                 let msg = format!(
                     "{} deposit successful ({})",
                     Sol(pending_deposit.amount),
-                    pending_deposit.signature
+                    pending_deposit.transfer.signature
                 );
                 println!("{}", msg);
                 notifier.send(&format!("{:?}: {}", exchange, msg)).await;
@@ -122,7 +121,7 @@ async fn process_sync_exchange(
             println!(
                 "{} deposit pending ({})",
                 Sol(pending_deposit.amount),
-                pending_deposit.signature
+                pending_deposit.transfer.signature
             );
         }
     }
