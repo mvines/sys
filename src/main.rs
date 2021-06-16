@@ -941,6 +941,101 @@ async fn process_account_sweep<T: Signers>(
     Ok(())
 }
 
+async fn process_account_withdraw_from_sweep(
+    db: &mut Db,
+    rpc_client: &RpcClient,
+    amount: u64,
+    description: String,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (recent_blockhash, _fee_calculator) = rpc_client.get_recent_blockhash()?;
+
+    let sweep_stake_account = db
+        .get_sweep_stake_account()
+        .ok_or("Sweep stake account not configured")?;
+    let sweep_stake_authority_keypair = read_keypair_file(&sweep_stake_account.stake_authority)?;
+
+    let withdrawal_stake_account = Keypair::new();
+
+    let mut instructions = solana_stake_program::stake_instruction::split(
+        &sweep_stake_account.address,
+        &sweep_stake_authority_keypair.pubkey(),
+        amount,
+        &withdrawal_stake_account.pubkey(),
+    );
+    instructions.push(solana_stake_program::stake_instruction::deactivate_stake(
+        &withdrawal_stake_account.pubkey(),
+        &sweep_stake_authority_keypair.pubkey(),
+    ));
+
+    let message = Message::new(&instructions, Some(&sweep_stake_authority_keypair.pubkey()));
+
+    let mut transaction = Transaction::new_unsigned(message);
+    transaction.message.recent_blockhash = recent_blockhash;
+    let simulation_result = rpc_client.simulate_transaction(&transaction)?.value;
+    if simulation_result.err.is_some() {
+        return Err(format!("Simulation failure: {:?}", simulation_result).into());
+    }
+
+    println!(
+        "Withdrawing and deactivating {} from {} into {}",
+        Sol(amount),
+        sweep_stake_account.address,
+        withdrawal_stake_account.pubkey(),
+    );
+
+    transaction.try_sign(
+        &[&withdrawal_stake_account, &sweep_stake_authority_keypair],
+        recent_blockhash,
+    )?;
+
+    let signature = transaction.signatures[0];
+    println!("Transaction signature: {}", signature);
+
+    let epoch = rpc_client.get_epoch_info()?.epoch;
+    db.add_account(TrackedAccount {
+        address: withdrawal_stake_account.pubkey(),
+        description,
+        last_update_epoch: epoch.saturating_sub(1),
+        last_update_balance: 0,
+        lots: vec![],
+        no_sync: None,
+    })?;
+    db.record_transfer(
+        signature,
+        sweep_stake_account.address,
+        Some(amount),
+        withdrawal_stake_account.pubkey(),
+    )?;
+
+    loop {
+        match rpc_client.send_and_confirm_transaction_with_spinner(&transaction) {
+            Ok(_) => {
+                println!("Withdrawal confirmed: {}", signature);
+                db.confirm_transfer(signature)?;
+                break;
+            }
+            Err(err) => {
+                println!("Send transaction failed: {:?}", err);
+            }
+        }
+        match rpc_client.get_fee_calculator_for_blockhash(&recent_blockhash) {
+            Err(err) => {
+                println!("Failed to get fee calculator: {:?}", err);
+            }
+            Ok(None) => {
+                db.cancel_transfer(signature)?;
+                db.remove_account(withdrawal_stake_account.pubkey())?;
+                return Err("Withdrawal failed: {}".into());
+            }
+            Ok(_) => {
+                println!("Blockhash has not yet expired, retrying transaction...");
+            }
+        };
+    }
+
+    Ok(())
+}
+
 async fn process_account_sync(
     db: &mut Db,
     rpc_client: &RpcClient,
@@ -1492,6 +1587,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         ),
                 )
                 .subcommand(
+                    SubCommand::with_name("withdraw-from-sweep-account")
+                        .about("Withdraw SOL from the sweep stake account")
+                        .arg(
+                            Arg::with_name("amount")
+                                .index(1)
+                                .value_name("AMOUNT")
+                                .takes_value(true)
+                                .validator(is_amount)
+                                .required(true)
+                                .help("The amount to withdraw, in SOL"),
+                        )
+                        .arg(
+                            Arg::with_name("description")
+                                .short("d")
+                                .long("description")
+                                .value_name("TEXT")
+                                .takes_value(true)
+                                .help("Account description"),
+                        )
+                )
+                .subcommand(
                     SubCommand::with_name("sync")
                         .about("Synchronize account")
                         .arg(
@@ -1745,6 +1861,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     &notifier,
                 )
                 .await?;
+            }
+            ("withdraw-from-sweep-account", Some(arg_matches)) => {
+                let amount = sol_to_lamports(value_t_or_exit!(arg_matches, "amount", f64));
+                let description = value_t!(arg_matches, "description", String)
+                    .ok()
+                    .unwrap_or_else(|| format!("Sweep account withdrawal at {}", Local::now()));
+
+                process_account_withdraw_from_sweep(&mut db, &rpc_client, amount, description)
+                    .await?;
             }
             ("sync", Some(arg_matches)) => {
                 let address = pubkey_of(arg_matches, "address");
