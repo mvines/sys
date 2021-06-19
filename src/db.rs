@@ -256,13 +256,24 @@ impl TrackedAccount {
         );
     }
 
-    pub fn extract_lots(&mut self, db: &mut Db, amount: u64) -> DbResult<Vec<Lot>> {
-        if self.last_update_balance < amount {
-            return Err(DbError::AccountHasInsufficientBalance(self.address));
-        }
+    pub fn extract_lots(
+        &mut self,
+        db: &mut Db,
+        amount: u64,
+        lot_numbers: Option<HashSet<usize>>,
+    ) -> DbResult<Vec<Lot>> {
+        self.assert_lot_balance();
 
         let mut lots = std::mem::take(&mut self.lots);
         lots.sort_by_key(|lot| lot.acquisition.when);
+        if let Some(lot_numbers) = lot_numbers {
+            lots.retain(|lot| lot_numbers.contains(&lot.lot_number));
+        }
+
+        let balance: u64 = lots.iter().map(|lot| lot.amount).sum();
+        if balance < amount {
+            return Err(DbError::AccountHasInsufficientBalance(self.address));
+        }
 
         if !lots.is_empty() {
             // Assume the oldest lot is the rent-reserve. Extract it as the last resort
@@ -371,6 +382,7 @@ impl Db {
         amount: u64,
         exchange: Exchange,
         deposit_address: Pubkey,
+        lot_numbers: Option<HashSet<usize>>,
     ) -> DbResult<()> {
         if !self.db.lexists("deposits") {
             self.db.lcreate("deposits")?;
@@ -387,7 +399,7 @@ impl Db {
                 signature,
                 from_address,
                 to_address: deposit_address,
-                lots: from_account.extract_lots(self, amount)?,
+                lots: from_account.extract_lots(self, amount, lot_numbers)?,
             },
         };
         self.db.ladd("deposits", &deposit).unwrap();
@@ -529,7 +541,7 @@ impl Db {
 
         let mut disposed_lots = self.disposed_lots();
 
-        let lots = from_account.extract_lots(self, amount)?;
+        let lots = from_account.extract_lots(self, amount, None)?;
         for lot in lots {
             disposed_lots.push(DisposedLot {
                 lot,
@@ -748,6 +760,7 @@ impl Db {
         from_address: Pubkey,
         amount: Option<u64>, // None = all
         to_address: Pubkey,
+        lot_numbers: Option<HashSet<usize>>,
     ) -> DbResult<()> {
         let mut pending_transfers = self.pending_transfers();
 
@@ -762,8 +775,11 @@ impl Db {
             signature,
             from_address,
             to_address,
-            lots: from_account
-                .extract_lots(self, amount.unwrap_or(from_account.last_update_balance))?,
+            lots: from_account.extract_lots(
+                self,
+                amount.unwrap_or(from_account.last_update_balance),
+                lot_numbers,
+            )?,
         });
 
         self.db.set("transfers", &pending_transfers).unwrap();

@@ -10,7 +10,8 @@ mod rpc_client_utils;
 use {
     chrono::prelude::*,
     clap::{
-        crate_description, crate_name, value_t, value_t_or_exit, App, AppSettings, Arg, SubCommand,
+        crate_description, crate_name, value_t, value_t_or_exit, values_t, App, AppSettings, Arg,
+        SubCommand,
     },
     db::*,
     exchange::*,
@@ -29,7 +30,7 @@ use {
         transaction::Transaction,
     },
     solana_transaction_status::UiTransactionEncoding,
-    std::{path::PathBuf, process::exit, str::FromStr},
+    std::{collections::HashSet, path::PathBuf, process::exit, str::FromStr},
 };
 
 fn naivedate_of(string: &str) -> Result<NaiveDate, String> {
@@ -175,6 +176,7 @@ async fn process_exchange_deposit<T: Signers>(
     from_address: Pubkey,
     authority_address: Pubkey,
     signers: T,
+    lot_numbers: Option<HashSet<usize>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (recent_blockhash, fee_calculator) = rpc_client.get_recent_blockhash()?;
 
@@ -291,7 +293,14 @@ async fn process_exchange_deposit<T: Signers>(
     let signature = transaction.signatures[0];
     println!("Transaction signature: {}", signature);
 
-    db.record_deposit(signature, from_address, lamports, exchange, deposit_address)?;
+    db.record_deposit(
+        signature,
+        from_address,
+        lamports,
+        exchange,
+        deposit_address,
+        lot_numbers,
+    )?;
     loop {
         match rpc_client.send_and_confirm_transaction_with_spinner(&transaction) {
             Ok(_) => return Ok(()),
@@ -326,6 +335,7 @@ async fn process_exchange_sell(
     pair: String,
     amount: f64,
     price: LimitOrderPrice,
+    lot_numbers: Option<HashSet<usize>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let bid_ask = exchange_client.bid_ask(&pair).await?;
     println!("Symbol: {}", pair);
@@ -350,7 +360,7 @@ async fn process_exchange_sell(
         )
     })?;
 
-    let order_lots = deposit_account.extract_lots(db, sol_to_lamports(amount))?;
+    let order_lots = deposit_account.extract_lots(db, sol_to_lamports(amount), lot_numbers)?;
     println!("Lots");
     for lot in &order_lots {
         println_lot(lot, price, &mut 0., &mut 0., &mut 0., None).await;
@@ -908,6 +918,7 @@ async fn process_account_sweep<T: Signers>(
         from_address,
         Some(sweep_amount),
         transitory_stake_account.pubkey(),
+        None,
     )?;
 
     loop {
@@ -946,6 +957,7 @@ async fn process_account_withdraw_from_sweep(
     rpc_client: &RpcClient,
     amount: u64,
     description: String,
+    lot_numbers: Option<HashSet<usize>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (recent_blockhash, _fee_calculator) = rpc_client.get_recent_blockhash()?;
 
@@ -1005,6 +1017,7 @@ async fn process_account_withdraw_from_sweep(
         sweep_stake_account.address,
         Some(amount),
         withdrawal_stake_account.pubkey(),
+        lot_numbers,
     )?;
 
     loop {
@@ -1321,6 +1334,7 @@ async fn process_account_sync_sweep(
             transitory_sweep_stake_address,
             None,
             sweep_stake_account_info.address,
+            None,
         )?;
 
         loop {
@@ -1606,6 +1620,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .takes_value(true)
                                 .help("Account description"),
                         )
+                        .arg(
+                            Arg::with_name("lot_numbers")
+                                .long("lot")
+                                .value_name("LOT NUMBER")
+                                .takes_value(true)
+                                .multiple(true)
+                                .validator(is_parsable::<usize>)
+                                .help("Lot to fund the withdrawal from [default: first in, first out]"),
+                        )
                 )
                 .subcommand(
                     SubCommand::with_name("sync")
@@ -1676,6 +1699,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .help("The amount to send, in SOL; accepts keyword ALL"),
                         )
                         .arg(
+                            Arg::with_name("lot_numbers")
+                                .long("lot")
+                                .value_name("LOT NUMBER")
+                                .takes_value(true)
+                                .multiple(true)
+                                .validator(is_parsable::<usize>)
+                                .help(
+                                    "Lot to fund the deposit from [default: first in, first out]",
+                                ),
+                        )
+                        .arg(
                             Arg::with_name("from")
                                 .long("from")
                                 .value_name("FROM_ADDRESS")
@@ -1721,6 +1755,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .conflicts_with("at")
                                 .validator(is_parsable::<f64>)
                                 .help("Place a limit order at this amount over the current ask"),
+                        )
+                        .arg(
+                            Arg::with_name("lot_numbers")
+                                .long("lot")
+                                .value_name("LOT NUMBER")
+                                .takes_value(true)
+                                .multiple(true)
+                                .validator(is_parsable::<usize>)
+                                .help("Lots to sell from [default: first in, first out]"),
                         )
                         .arg(
                             Arg::with_name("pair")
@@ -1867,9 +1910,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let description = value_t!(arg_matches, "description", String)
                     .ok()
                     .unwrap_or_else(|| format!("Sweep account withdrawal at {}", Local::now()));
+                let lot_numbers = values_t!(arg_matches, "lot_numbers", usize)
+                    .ok()
+                    .map(|x| x.into_iter().collect());
 
-                process_account_withdraw_from_sweep(&mut db, &rpc_client, amount, description)
-                    .await?;
+                process_account_withdraw_from_sweep(
+                    &mut db,
+                    &rpc_client,
+                    amount,
+                    description,
+                    lot_numbers,
+                )
+                .await?;
             }
             ("sync", Some(arg_matches)) => {
                 let address = pubkey_of(arg_matches, "address");
@@ -1916,9 +1968,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         "ALL" => None,
                         amount => Some(sol_to_lamports(amount.parse().unwrap())),
                     };
-
                     let from_address =
                         pubkey_of_signer(arg_matches, "from", &mut wallet_manager)?.expect("from");
+                    let lot_numbers = values_t!(arg_matches, "lot_numbers", usize)
+                        .ok()
+                        .map(|x| x.into_iter().collect());
 
                     let (authority_signer, authority_address) = if arg_matches.is_present("by") {
                         signer_of(arg_matches, "by", &mut wallet_manager)?
@@ -1952,6 +2006,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         from_address,
                         authority_address,
                         vec![authority_signer],
+                        lot_numbers,
                     )
                     .await?;
                     process_sync_exchange(
@@ -1966,6 +2021,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ("sell", Some(arg_matches)) => {
                     let pair = value_t_or_exit!(arg_matches, "pair", String);
                     let amount = value_t_or_exit!(arg_matches, "amount", f64);
+                    let lot_numbers = values_t!(arg_matches, "lot_numbers", usize)
+                        .ok()
+                        .map(|x| x.into_iter().collect());
 
                     let price = if let Ok(price) = value_t!(arg_matches, "at", f64) {
                         LimitOrderPrice::At(price)
@@ -1982,6 +2040,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         pair,
                         amount,
                         price,
+                        lot_numbers,
                     )
                     .await?;
                     process_sync_exchange(
