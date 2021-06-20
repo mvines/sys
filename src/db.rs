@@ -128,7 +128,9 @@ pub enum LotAcquistionKind {
 impl fmt::Display for LotAcquistionKind {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            LotAcquistionKind::EpochReward { epoch, .. } => write!(f, "epoch {} reward", epoch),
+            LotAcquistionKind::EpochReward { epoch, slot } => {
+                write!(f, "epoch {} reward (slot {})", epoch, slot)
+            }
             LotAcquistionKind::Transaction { signature, .. } => write!(f, "{}", signature),
             LotAcquistionKind::NotAvailable => {
                 write!(f, "other")

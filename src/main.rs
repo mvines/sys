@@ -722,6 +722,155 @@ async fn process_account_list(db: &Db) -> Result<(), Box<dyn std::error::Error>>
     Ok(())
 }
 
+async fn process_account_xls(db: &Db, outfile: &str) -> Result<(), Box<dyn std::error::Error>> {
+    use simple_excel_writer::*;
+
+    let mut workbook = Workbook::create(outfile);
+
+    let mut sheet = workbook.create_sheet("Disposed SOL");
+    sheet.add_column(Column { width: 8. });
+    sheet.add_column(Column { width: 15. });
+    sheet.add_column(Column { width: 12. });
+    sheet.add_column(Column { width: 12. });
+    sheet.add_column(Column { width: 10. });
+    sheet.add_column(Column { width: 40. });
+    sheet.add_column(Column { width: 12. });
+    sheet.add_column(Column { width: 10. });
+    sheet.add_column(Column { width: 10. });
+    sheet.add_column(Column { width: 40. });
+
+    let mut disposed_lots = db.disposed_lots();
+    disposed_lots.sort_by_key(|lot| lot.when);
+
+    workbook.write_sheet(&mut sheet, |sheet_writer| {
+        sheet_writer.append_row(row![
+            "Lot No",
+            "Amount (SOL)",
+            "Income",
+            "Acq. Date",
+            "Acq. Price",
+            "Acquisition Description",
+            "Cap Gain",
+            "Sale Date",
+            "Sale Price",
+            "Sale Description"
+        ])?;
+
+        for disposed_lot in disposed_lots {
+            sheet_writer.append_row(row![
+                disposed_lot.lot.lot_number.to_string(),
+                lamports_to_sol(disposed_lot.lot.amount),
+                format!(
+                    "${}",
+                    disposed_lot
+                        .lot
+                        .income()
+                        .separated_string_with_fixed_place(2)
+                ),
+                disposed_lot.lot.acquisition.when.to_string(),
+                format!(
+                    "${}",
+                    disposed_lot
+                        .lot
+                        .acquisition
+                        .price
+                        .separated_string_with_fixed_place(2)
+                ),
+                disposed_lot.lot.acquisition.kind.to_string(),
+                format!(
+                    "${}",
+                    disposed_lot
+                        .lot
+                        .cap_gain(disposed_lot.price)
+                        .separated_string_with_fixed_place(2)
+                ),
+                disposed_lot.when.to_string(),
+                format!(
+                    "${}",
+                    disposed_lot.price.separated_string_with_fixed_place(2)
+                ),
+                disposed_lot.kind.to_string()
+            ])?;
+        }
+        Ok(())
+    })?;
+
+    let mut sheet = workbook.create_sheet("Current SOL Holdings");
+    sheet.add_column(Column { width: 8. });
+    sheet.add_column(Column { width: 15. });
+    sheet.add_column(Column { width: 12. });
+    sheet.add_column(Column { width: 12. });
+    sheet.add_column(Column { width: 10. });
+    sheet.add_column(Column { width: 40. });
+    sheet.add_column(Column { width: 40. });
+    sheet.add_column(Column { width: 50. });
+
+    let mut disposed_lots = db.disposed_lots();
+    disposed_lots.sort_by_key(|lot| lot.when);
+
+    workbook.write_sheet(&mut sheet, |sheet_writer| {
+        sheet_writer.append_row(row![
+            "Lot No",
+            "Amount (SOL)",
+            "Income",
+            "Acq. Date",
+            "Acq. Price",
+            "Acq. Description",
+            "Account Description",
+            "Account Address"
+        ])?;
+
+        for account in db.get_accounts().values() {
+            let mut lots = account.lots.iter().collect::<Vec<_>>();
+            lots.sort_by_key(|lot| lot.acquisition.when);
+
+            for lot in lots {
+                sheet_writer.append_row(row![
+                    lot.lot_number.to_string(),
+                    lamports_to_sol(lot.amount),
+                    format!("${}", lot.income().separated_string_with_fixed_place(2)),
+                    lot.acquisition.when.to_string(),
+                    format!(
+                        "${}",
+                        lot.acquisition.price.separated_string_with_fixed_place(2)
+                    ),
+                    lot.acquisition.kind.to_string(),
+                    account.description.as_str(),
+                    account.address.to_string()
+                ])?;
+            }
+        }
+
+        for open_order in db.open_orders(None) {
+            let mut lots = open_order.lots.iter().collect::<Vec<_>>();
+            lots.sort_by_key(|lot| lot.acquisition.when);
+
+            for lot in lots {
+                sheet_writer.append_row(row![
+                    lot.lot_number.to_string(),
+                    lamports_to_sol(lot.amount),
+                    format!("${}", lot.income().separated_string_with_fixed_place(2)),
+                    lot.acquisition.when.to_string(),
+                    format!(
+                        "${}",
+                        lot.acquisition.price.separated_string_with_fixed_place(2)
+                    ),
+                    lot.acquisition.kind.to_string(),
+                    format!("Open Order: {:?} {}", open_order.exchange, open_order.pair),
+                    open_order.deposit_address.to_string()
+                ])?;
+            }
+        }
+
+        Ok(())
+    })?;
+
+    workbook.close()?;
+    println!("Wrote {}", outfile);
+
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn process_account_sweep<T: Signers>(
     db: &mut Db,
@@ -1523,6 +1672,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         ),
                 )
                 .subcommand(SubCommand::with_name("ls").about("List registered accounts"))
+                .subcommand(SubCommand::with_name("xls")
+                        .about("Export an Excel spreadsheet file")
+                        .arg(
+                            Arg::with_name("outfile")
+                                .index(1)
+                                .value_name("FILEPATH")
+                                .takes_value(true)
+                                .help(".xls file to write"),
+                        ),
+                )
                 .subcommand(
                     SubCommand::with_name("remove")
                         .about("Unregister an account")
@@ -1847,6 +2006,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             ("ls", Some(_arg_matches)) => {
                 process_account_list(&db).await?;
+            }
+            ("xls", Some(arg_matches)) => {
+                let outfile = value_t_or_exit!(arg_matches, "outfile", String);
+                process_account_xls(&db, &outfile).await?;
             }
             ("remove", Some(arg_matches)) => {
                 let address = pubkey_of(arg_matches, "address").unwrap();
