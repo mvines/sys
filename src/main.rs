@@ -815,7 +815,7 @@ async fn process_account_xls(db: &Db, outfile: &str) -> Result<(), Box<dyn std::
             "Income",
             "Acq. Date",
             "Acq. Price",
-            "Acq. Description",
+            "Acquisition Description",
             "Account Description",
             "Account Address"
         ])?;
