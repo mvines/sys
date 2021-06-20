@@ -27,6 +27,7 @@ You can also run `./fetch-release.sh` to download the latest Linux and macOS bin
 * A _sweep stake account_ system, whereby vote account rewards can be automatically sweeped into a stake account and staked as quickly as possible
 * Historical SOL price information via CoinGecko
 * Data is contained in a local `sell-your-sol/` subdirectory that can be easily backed up, and is editable by hand if necessary
+* Excel export
 
 ## Examples
 _TODO..._
@@ -37,6 +38,5 @@ For now please explore the help system, `sys --help`. It aims to be self explani
 * Exchange integration is limited to deposits and placing limit orders. However `sys` will correctly handle orders cancelled from the primary exchange interface and/or partial fills
 * No FMV discount is computed for locked stake rewards
 * Accounts under `sys` management should not be manipulated outside of `sys`.  For example `sys` will get confused if you split some stake using the `solana` command-line tool, and probably assert
-* Export to a spreadsheet format for easy CPA consumption is TBD
 * You may have to write code to fix bugs or implement new features that are not required in my workflow
 
