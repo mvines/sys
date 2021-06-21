@@ -889,6 +889,20 @@ async fn process_account_sweep<T: Signers>(
         .value
         .ok_or_else(|| format!("Account, {}, does not exist", from_address))?;
 
+    let from_tracked_account = db
+        .get_account(from_address)
+        .ok_or_else(|| format!("Account, {}, is not tracked", from_address))?;
+
+    if from_account.lamports < from_tracked_account.last_update_balance {
+        return Err(format!(
+            "{}: On-chain account balance ({}) less than tracked balance ({})",
+            from_address,
+            Sol(from_account.lamports),
+            Sol(from_tracked_account.last_update_balance)
+        )
+        .into());
+    }
+
     let authority_account = if from_address == from_authority_address {
         from_account.clone()
     } else {
@@ -906,7 +920,14 @@ async fn process_account_sweep<T: Signers>(
     let sweep_stake_account = db
         .get_sweep_stake_account()
         .ok_or("Sweep stake account not configured")?;
-    let sweep_stake_authority_keypair = read_keypair_file(&sweep_stake_account.stake_authority)?;
+    let sweep_stake_authority_keypair = read_keypair_file(&sweep_stake_account.stake_authority)
+        .map_err(|err| {
+            format!(
+                "Failed to read {}: {}",
+                sweep_stake_account.stake_authority.display(),
+                err
+            )
+        })?;
 
     let (sweep_stake_authorized, sweep_stake_vote_account_address) =
         rpc_client_utils::get_stake_authorized(&rpc_client, sweep_stake_account.address)?;
@@ -935,11 +956,13 @@ async fn process_account_sweep<T: Signers>(
 
     let (mut instructions, sweep_amount) = if from_account.owner == system_program::id() {
         let lamports = if from_address == from_authority_address {
-            from_account.lamports.saturating_sub(
+            from_tracked_account.last_update_balance.saturating_sub(
                 num_transaction_signatures * fee_calculator.lamports_per_signature + retain_amount,
             )
         } else {
-            from_account.lamports.saturating_sub(retain_amount)
+            from_tracked_account
+                .last_update_balance
+                .saturating_sub(retain_amount)
         };
 
         (
@@ -955,8 +978,8 @@ async fn process_account_sweep<T: Signers>(
             solana_vote_program::vote_state::VoteState::size_of(),
         )?;
 
-        let lamports = from_account
-            .lamports
+        let lamports = from_tracked_account
+            .last_update_balance
             .saturating_sub(minimum_balance + retain_amount);
 
         (
@@ -969,7 +992,9 @@ async fn process_account_sweep<T: Signers>(
             lamports,
         )
     } else if from_account.owner == solana_stake_program::id() {
-        let lamports = from_account.lamports.saturating_sub(retain_amount);
+        let lamports = from_tracked_account
+            .last_update_balance
+            .saturating_sub(retain_amount);
 
         (
             vec![solana_stake_program::stake_instruction::withdraw(
