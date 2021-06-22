@@ -1138,7 +1138,14 @@ async fn process_account_withdraw_from_sweep(
     let sweep_stake_account = db
         .get_sweep_stake_account()
         .ok_or("Sweep stake account not configured")?;
-    let sweep_stake_authority_keypair = read_keypair_file(&sweep_stake_account.stake_authority)?;
+    let sweep_stake_authority_keypair = read_keypair_file(&sweep_stake_account.stake_authority)
+        .map_err(|err| {
+            format!(
+                "Failed to read {}: {}",
+                sweep_stake_account.stake_authority.display(),
+                err
+            )
+        })?;
 
     let withdrawal_stake_account = Keypair::new();
 
@@ -1408,7 +1415,13 @@ async fn process_account_sync_sweep(
         .ok_or("Sweep stake account is not configured")?;
 
     let sweep_stake_account_authority_keypair =
-        read_keypair_file(&sweep_stake_account_info.stake_authority)?;
+        read_keypair_file(&sweep_stake_account_info.stake_authority).map_err(|err| {
+            format!(
+                "Failed to read {}: {}",
+                sweep_stake_account_info.stake_authority.display(),
+                err
+            )
+        })?;
 
     let sweep_stake_account = rpc_client
         .get_account_with_commitment(&sweep_stake_account_info.address, rpc_client.commitment())?
@@ -2056,7 +2069,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     PathBuf
                 ))?;
 
-                let sweep_stake_authority_keypair = read_keypair_file(&stake_authority)?;
+                let sweep_stake_authority_keypair =
+                    read_keypair_file(&stake_authority).map_err(|err| {
+                        format!("Failed to read {}: {}", stake_authority.display(), err)
+                    })?;
                 let (sweep_stake_authorized, _vote_account_address) =
                     rpc_client_utils::get_stake_authorized(&rpc_client, address)?;
 
