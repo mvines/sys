@@ -1236,6 +1236,9 @@ async fn process_account_sync(
     address: Option<Pubkey>,
     notifier: &Notifier,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    process_account_sync_pending_transfers(db, rpc_client).await?;
+    process_account_sync_sweep(db, rpc_client, notifier).await?;
+
     let mut accounts = match address {
         Some(address) => {
             vec![db
@@ -1247,14 +1250,6 @@ async fn process_account_sync(
     .into_iter()
     .filter(|account| !account.no_sync.unwrap_or_default())
     .collect::<Vec<_>>();
-
-    if accounts.is_empty() {
-        println!("No accounts to sync");
-        return Ok(());
-    }
-
-    process_account_sync_pending_transfers(db, rpc_client).await?;
-    process_account_sync_sweep(db, rpc_client, notifier).await?;
 
     let current_price = coin_gecko::get_current_price().await?;
 
@@ -1460,6 +1455,26 @@ async fn process_account_sync_sweep(
                     "  Transitory sweep stake account does not exist, removing it: {}",
                     transitory_sweep_stake_address
                 );
+
+                if let Some(tracked_account) = db.get_account(transitory_sweep_stake_address) {
+                    if tracked_account.last_update_balance > 0 || !tracked_account.lots.is_empty() {
+                        panic!("Tracked account is not empty: {:?}", tracked_account);
+
+                        // TODO: Simulate a transfer to move the lots into the sweep account in
+                        // this case?
+                        /*
+                        let signature = Signature::default();
+                        db.record_transfer(
+                            signature,
+                            transitory_sweep_stake_address,
+                            None,
+                            sweep_stake_account_info.address,
+                            None,
+                        )?;
+                        db.confirm_transfer(signature)?;
+                        */
+                    }
+                }
                 db.remove_transitory_sweep_stake_address(transitory_sweep_stake_address)?;
                 continue;
             }
