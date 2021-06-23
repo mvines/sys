@@ -213,12 +213,24 @@ pub struct TrackedAccount {
     pub no_sync: Option<bool>,
 }
 
-fn split_lots(db: &mut Db, lots: Vec<Lot>, amount: u64) -> (Vec<Lot>, Vec<Lot>) {
+fn split_lots(
+    db: &mut Db,
+    lots: Vec<Lot>,
+    amount: u64,
+    lot_numbers: Option<HashSet<usize>>,
+) -> (Vec<Lot>, Vec<Lot>) {
     let mut extracted_lots = vec![];
     let mut remaining_lots = vec![];
 
     let mut amount_remaining = amount;
     for mut lot in lots {
+        if let Some(lot_numbers) = lot_numbers.as_ref() {
+            if !lot_numbers.contains(&lot.lot_number) {
+                remaining_lots.push(lot);
+                continue;
+            }
+        }
+
         if amount_remaining > 0 {
             if lot.amount <= amount_remaining {
                 amount_remaining -= lot.amount;
@@ -268,9 +280,6 @@ impl TrackedAccount {
 
         let mut lots = std::mem::take(&mut self.lots);
         lots.sort_by_key(|lot| lot.acquisition.when);
-        if let Some(lot_numbers) = lot_numbers {
-            lots.retain(|lot| lot_numbers.contains(&lot.lot_number));
-        }
 
         let balance: u64 = lots.iter().map(|lot| lot.amount).sum();
         if balance < amount {
@@ -283,7 +292,7 @@ impl TrackedAccount {
             lots.push(first_lot);
         }
 
-        let (extracted_lots, remaining_lots) = split_lots(db, lots, amount);
+        let (extracted_lots, remaining_lots) = split_lots(db, lots, amount, lot_numbers);
 
         self.lots = remaining_lots;
         self.last_update_balance -= amount;
@@ -498,7 +507,7 @@ impl Db {
         assert_eq!(lot_balance, amount, "Order lot balance mismatch");
         assert!(filled_amount <= amount);
 
-        let (sold_lots, cancelled_lots) = split_lots(self, lots, filled_amount);
+        let (sold_lots, cancelled_lots) = split_lots(self, lots, filled_amount, None);
 
         self.auto_save(false)?;
         if !sold_lots.is_empty() {
