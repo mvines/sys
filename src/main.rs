@@ -174,6 +174,7 @@ async fn process_exchange_deposit<T: Signers>(
     deposit_address: Pubkey,
     amount: Option<u64>,
     from_address: Pubkey,
+    if_balance_exceeds: Option<u64>,
     authority_address: Pubkey,
     signers: T,
     lot_numbers: Option<HashSet<usize>>,
@@ -270,6 +271,17 @@ async fn process_exchange_deposit<T: Signers>(
         return Err("From account has insufficient funds".into());
     }
 
+    if let Some(if_balance_exceeds) = if_balance_exceeds {
+        if from_account.lamports < if_balance_exceeds {
+            println!(
+                "Deposit declined because {} balance is less than {}",
+                from_address,
+                Sol(if_balance_exceeds)
+            );
+            return Ok(());
+        }
+    }
+
     println!("From address: {}", from_address);
     if from_address != authority_address {
         println!("Authority address: {}", authority_address);
@@ -328,6 +340,7 @@ enum LimitOrderPrice {
     AmountOverAsk(f64),
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn process_exchange_sell(
     db: &mut Db,
     exchange: Exchange,
@@ -335,6 +348,7 @@ async fn process_exchange_sell(
     pair: String,
     amount: f64,
     price: LimitOrderPrice,
+    if_balance_exceeds: Option<u64>,
     lot_numbers: Option<HashSet<usize>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let bid_ask = exchange_client.bid_ask(&pair).await?;
@@ -359,6 +373,17 @@ async fn process_exchange_sell(
             deposit_address
         )
     })?;
+
+    if let Some(if_balance_exceeds) = if_balance_exceeds {
+        if deposit_account.last_update_balance < if_balance_exceeds {
+            println!(
+                "Order declined because {:?} available balance is less than {}",
+                exchange,
+                Sol(if_balance_exceeds)
+            );
+            return Ok(());
+        }
+    }
 
     let order_lots = deposit_account.extract_lots(db, sol_to_lamports(amount), lot_numbers)?;
     println!("Lots");
@@ -1937,6 +1962,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .takes_value(true)
                                 .validator(is_valid_signer)
                                 .help("Optional authority of the FROM_ADDRESS"),
+                        )
+                        .arg(
+                            Arg::with_name("if_balance_exceeds")
+                                .long("if-balance-exceeds")
+                                .value_name("AMOUNT")
+                                .takes_value(true)
+                                .validator(is_amount)
+                                .help(
+                                    "Exit successfully without depositing if the \
+                                       source account balance is less than this amount",
+                                ),
                         ),
                 )
                 .subcommand(
@@ -1984,6 +2020,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .takes_value(true)
                                 .default_value("SOLUSDT")
                                 .help("Market to place the order at"),
+                        )
+                        .arg(
+                            Arg::with_name("if_balance_exceeds")
+                                .long("if-balance-exceeds")
+                                .value_name("AMOUNT")
+                                .takes_value(true)
+                                .validator(is_amount)
+                                .help(
+                                    "Exit successfully without placing a sell order if the \
+                                       exchange available balance is less than this amount",
+                                ),
                         ),
                 )
                 .subcommand(SubCommand::with_name("sync").about("Synchronize exchange")),
@@ -2187,6 +2234,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         "ALL" => None,
                         amount => Some(sol_to_lamports(amount.parse().unwrap())),
                     };
+                    let if_balance_exceeds = value_t!(arg_matches, "if_balance_exceeds", f64)
+                        .ok()
+                        .map(sol_to_lamports);
                     let from_address =
                         pubkey_of_signer(arg_matches, "from", &mut wallet_manager)?.expect("from");
                     let lot_numbers = values_t!(arg_matches, "lot_numbers", usize)
@@ -2223,6 +2273,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         deposit_address,
                         amount,
                         from_address,
+                        if_balance_exceeds,
                         authority_address,
                         vec![authority_signer],
                         lot_numbers,
@@ -2240,6 +2291,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ("sell", Some(arg_matches)) => {
                     let pair = value_t_or_exit!(arg_matches, "pair", String);
                     let amount = value_t_or_exit!(arg_matches, "amount", f64);
+                    let if_balance_exceeds = value_t!(arg_matches, "if_balance_exceeds", f64)
+                        .ok()
+                        .map(sol_to_lamports);
                     let lot_numbers = values_t!(arg_matches, "lot_numbers", usize)
                         .ok()
                         .map(|x| x.into_iter().collect());
@@ -2259,6 +2313,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         pair,
                         amount,
                         price,
+                        if_balance_exceeds,
                         lot_numbers,
                     )
                     .await?;
