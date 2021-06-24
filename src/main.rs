@@ -267,10 +267,6 @@ async fn process_exchange_deposit<T: Signers>(
         return Err("Nothing to deposit".into());
     }
 
-    if from_account.lamports < lamports + minimum_balance {
-        return Err("From account has insufficient funds".into());
-    }
-
     if let Some(if_balance_exceeds) = if_balance_exceeds {
         if from_account.lamports < if_balance_exceeds {
             println!(
@@ -280,6 +276,10 @@ async fn process_exchange_deposit<T: Signers>(
             );
             return Ok(());
         }
+    }
+
+    if from_account.lamports < lamports + minimum_balance {
+        return Err("From account has insufficient funds".into());
     }
 
     println!("From address: {}", from_address);
