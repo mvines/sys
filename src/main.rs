@@ -1631,6 +1631,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .default_value(default_json_rpc_url)
                 .help("JSON RPC URL for the cluster"),
         )
+        .arg(
+            Arg::with_name("verbose")
+                .short("v")
+                .long("verbose")
+                .takes_value(false)
+                .global(true)
+                .help("Show additional information"),
+        )
         .subcommand(
             SubCommand::with_name("price")
                 .about("Get historical SOL price from CoinGecko")
@@ -2039,6 +2047,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let app_matches = app.get_matches();
     let db_path = value_t_or_exit!(app_matches, "db_path", PathBuf);
+    let verbose = app_matches.is_present("verbose");
     let rpc_client = RpcClient::new_with_commitment(
         normalize_to_url_if_moniker(value_t_or_exit!(app_matches, "json_rpc_url", String)),
         CommitmentConfig::confirmed(),
@@ -2055,7 +2064,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ("price", Some(arg_matches)) => {
             let when = naivedate_of(&value_t_or_exit!(arg_matches, "when", String)).unwrap();
             let price = coin_gecko::get_price(when).await?;
-            println!("Price on {}: ${:.2}", when, price);
+            if verbose {
+                println!("Price on {}: ${:.2}", when, price);
+            } else {
+                println!("{:.2}", price);
+            }
         }
         ("sync", Some(_arg_matches)) => {
             for (exchange, exchange_credentials) in db.get_configured_exchanges() {
