@@ -9,6 +9,7 @@ mod rpc_client_utils;
 
 use {
     chrono::prelude::*,
+    chrono_humanize::HumanTime,
     clap::{
         crate_description, crate_name, value_t, value_t_or_exit, values_t, App, AppSettings, Arg,
         SubCommand,
@@ -132,8 +133,13 @@ async fn process_sync_exchange(
             .sell_order_status(&order_info.pair, &order_info.order_id)
             .await?;
         let order_summary = format!(
-            "{}: ◎{} at ${} (◎{} filled)",
-            order_info.pair, order_status.amount, order_status.price, order_status.filled_amount,
+            "{}: ◎{} at ${} (◎{} filled), created {}, id {}",
+            order_info.pair,
+            order_status.amount,
+            order_status.price,
+            order_status.filled_amount,
+            HumanTime::from(order_info.creation_time),
+            order_info.order_id,
         );
 
         if order_status.open {
@@ -407,7 +413,7 @@ async fn process_exchange_sell(
         .await?;
     println!("Order Id: {}", order_id);
 
-    db.open_order(deposit_account, exchange, pair, order_id, order_lots)?;
+    db.open_order(deposit_account, exchange, pair, price, order_id, order_lots)?;
     Ok(())
 }
 
@@ -664,7 +670,14 @@ async fn process_account_list(db: &Db) -> Result<(), Box<dyn std::error::Error>>
                 for open_order in open_orders {
                     let mut lots = open_order.lots.iter().collect::<Vec<_>>();
                     lots.sort_by_key(|lot| lot.acquisition.when);
-                    println!("(open order {} - {})", open_order.order_id, open_order.pair);
+                    println!(
+                        "(Open order: {} at ${}, {} lots, created {}, id {})",
+                        open_order.pair,
+                        open_order.price,
+                        lots.len(),
+                        HumanTime::from(open_order.creation_time),
+                        open_order.order_id,
+                    );
                     for lot in lots {
                         println_lot(
                             lot,

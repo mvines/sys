@@ -1,6 +1,6 @@
 use {
     crate::{exchange::*, field_as_string},
-    chrono::NaiveDate,
+    chrono::{prelude::*, NaiveDate},
     pickledb::{PickleDb, PickleDbDumpPolicy},
     serde::{Deserialize, Serialize},
     solana_sdk::{
@@ -102,8 +102,10 @@ pub struct PendingTransfer {
 
 #[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
 pub struct OpenOrder {
+    pub creation_time: DateTime<Utc>,
     pub exchange: Exchange,
     pub pair: String,
+    pub price: f64,
     pub order_id: String,
     pub lots: Vec<Lot>,
 
@@ -463,13 +465,16 @@ impl Db {
         deposit_account: TrackedAccount,
         exchange: Exchange,
         pair: String,
+        price: f64,
         order_id: String,
         lots: Vec<Lot>,
     ) -> DbResult<()> {
         let mut open_orders = self.open_orders(None);
         open_orders.push(OpenOrder {
+            creation_time: Utc::now(),
             exchange,
             pair,
+            price,
             order_id,
             lots,
             deposit_address: deposit_account.address,
@@ -494,6 +499,7 @@ impl Db {
             order_id,
             lots,
             deposit_address,
+            ..
         } = open_orders
             .iter()
             .find(|o| o.order_id == order_id)
