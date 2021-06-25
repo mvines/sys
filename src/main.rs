@@ -349,6 +349,7 @@ async fn process_exchange_sell(
     amount: f64,
     price: LimitOrderPrice,
     if_balance_exceeds: Option<u64>,
+    if_price_over: Option<f64>,
     lot_numbers: Option<HashSet<usize>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let bid_ask = exchange_client.bid_ask(&pair).await?;
@@ -361,6 +362,16 @@ async fn process_exchange_sell(
     };
 
     println!("Placing sell order for ◎{} at ${}", amount, price);
+
+    if let Some(if_price_over) = if_price_over {
+        if price <= if_price_over {
+            println!(
+                "Order declined because order price, {}, is not greater than {}",
+                price, if_price_over,
+            );
+            return Ok(());
+        }
+    }
 
     if bid_ask.bid_price > price {
         return Err("Order price is less than bid price".into());
@@ -2039,6 +2050,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     "Exit successfully without placing a sell order if the \
                                        exchange available balance is less than this amount",
                                 ),
+                        )
+                        .arg(
+                            Arg::with_name("if_price_over")
+                                .long("if-price-over")
+                                .value_name("AMOUNT")
+                                .takes_value(true)
+                                .validator(is_parsable::<f64>)
+                                .conflicts_with("at")
+                                .help(
+                                    "Exit successfully without placing a sell order if the \
+                                       order would be placed at a price that is less than \
+                                       or equal to this amount",
+                                ),
                         ),
                 )
                 .subcommand(SubCommand::with_name("sync").about("Synchronize exchange")),
@@ -2307,6 +2331,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let if_balance_exceeds = value_t!(arg_matches, "if_balance_exceeds", f64)
                         .ok()
                         .map(sol_to_lamports);
+                    let if_price_over = value_t!(arg_matches, "if_price_over", f64).ok();
                     let lot_numbers = values_t!(arg_matches, "lot_numbers", usize)
                         .ok()
                         .map(|x| x.into_iter().collect());
@@ -2327,6 +2352,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         amount,
                         price,
                         if_balance_exceeds,
+                        if_price_over,
                         lot_numbers,
                     )
                     .await?;
