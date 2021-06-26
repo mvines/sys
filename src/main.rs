@@ -400,6 +400,7 @@ async fn process_exchange_sell(
     if_balance_exceeds: Option<u64>,
     if_price_over: Option<f64>,
     lot_numbers: Option<HashSet<usize>>,
+    notifier: &Notifier,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let bid_ask = exchange_client.bid_ask(&pair).await?;
     println!("Symbol: {}", pair);
@@ -454,9 +455,12 @@ async fn process_exchange_sell(
     let order_id = exchange_client
         .place_sell_order(&pair, price, amount)
         .await?;
-    println!("Order Id: {}", order_id);
-
+    let msg = format!(
+        "Order created: {}: ◎{} at ${}, id {}",
+        pair, amount, price, order_id,
+    );
     db.open_order(deposit_account, exchange, pair, price, order_id, order_lots)?;
+    notifier.send(&format!("{:?}: {}", exchange, msg)).await;
     Ok(())
 }
 
@@ -2524,6 +2528,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         if_balance_exceeds,
                         if_price_over,
                         lot_numbers,
+                        &notifier,
                     )
                     .await?;
                     process_sync_exchange(
