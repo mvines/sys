@@ -850,29 +850,29 @@ async fn process_account_list(db: &Db) -> Result<(), Box<dyn std::error::Error>>
             println!();
         }
 
-        println!("Current Holdings Summary:");
+        println!("Current Holdings Summary");
         println!(
-            "  Price per SOL:        ${}",
+            "  Price per SOL:       ${}",
             current_price.separated_string_with_fixed_place(2)
         );
         println!(
-            "  Balance:              ◎{}",
+            "  Balance:             ◎{}",
             lamports_to_sol(total_held_lamports).separated_string_with_fixed_place(2)
         );
         println!(
-            "  Value:                ${}",
+            "  Value:               ${}",
             total_current_value.separated_string_with_fixed_place(2)
         );
         println!(
-            "  Income:               ${}",
+            "  Income:              ${}",
             total_income.separated_string_with_fixed_place(2)
         );
         println!(
-            "  Unrealized short-term cap gains: ${}",
+            "  Short-term cap gain: ${}",
             total_short_term_gain.separated_string_with_fixed_place(2)
         );
         println!(
-            "  Unrealized long-term cap gains: ${}",
+            "  Long-term cap gain:  ${}",
             total_long_term_gain.separated_string_with_fixed_place(2)
         );
     }
