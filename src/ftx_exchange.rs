@@ -143,6 +143,23 @@ impl ExchangeClient for FtxExchangeClient {
         Ok(order_info.id.to_string())
     }
 
+    async fn cancel_sell_order(
+        &self,
+        _pair: &str,
+        order_id: &OrderId,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let order_id = order_id.parse()?;
+
+        let result = self
+            .rest
+            .cancel_order(order_id)
+            .await
+            .map_err(|err| format!("{:?}", err))?;
+
+        println!("Result: {}", result);
+        Ok(())
+    }
+
     async fn sell_order_status(
         &self,
         pair: &str,

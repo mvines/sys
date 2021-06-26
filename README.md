@@ -20,7 +20,7 @@ You can also run `./fetch-release.sh` to download the latest Linux and macOS bin
 * Exchange integration with FTX, FTX US, Binance and Binance US
   * Fetch market info, SOL balance and sell order status
   * Deposit from a vote, stake or system account
-  * Initiate limit orders
+  * Initiate and cancel basic limit orders
 * Automatic epoch reward tracking for vote and stake accounts
 * Validator identity rewards are also automatically tracked at the epoch level, but not directly attributed to each individual block that rewards are credited
 * Lot management for all tracked accounts, through the disposal of SOL via an exchange sell order
@@ -35,7 +35,6 @@ _TODO..._
 For now please explore the help system, `sys --help`. It aims to be self explanitory.
 
 ## Limitations
-* Exchange integration is limited to deposits and placing limit orders. However `sys` will correctly handle orders cancelled from the primary exchange interface and/or partial fills
 * No FMV discount is computed for locked stake rewards
 * Accounts under `sys` management should not be manipulated outside of `sys`.  For example `sys` will get confused if you split some stake using the `solana` command-line tool, and probably assert
 * You may have to write code to fix bugs or implement new features that are not required in my workflow

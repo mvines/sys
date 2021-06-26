@@ -237,6 +237,18 @@ impl ExchangeClient for BinanceExchangeClient {
         Ok(response.client_order_id)
     }
 
+    async fn cancel_sell_order(
+        &self,
+        pair: &str,
+        order_id: &OrderId,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        self.account_client
+            .cancel_order(pair, tokio_binance::ID::ClientOId(order_id))
+            .json::<serde_json::Value>()
+            .await?;
+        Ok(())
+    }
+
     async fn sell_order_status(
         &self,
         pair: &str,

@@ -347,6 +347,39 @@ enum LimitOrderPrice {
 }
 
 #[allow(clippy::too_many_arguments)]
+async fn process_exchange_cancel(
+    db: &mut Db,
+    exchange: Exchange,
+    exchange_client: &dyn ExchangeClient,
+    order_ids: HashSet<String>,
+    max_create_time: Option<DateTime<Utc>>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut cancelled_count = 0;
+    for order_info in db.open_orders(Some(exchange)) {
+        let mut cancel = false;
+        if order_ids.contains(&order_info.order_id) {
+            cancel = true;
+        }
+        if let Some(ref max_create_time) = max_create_time {
+            if order_info.creation_time < *max_create_time {
+                cancel = true;
+            }
+        }
+
+        if cancel {
+            println!("Cancelling order {}", order_info.order_id);
+            cancelled_count += 1;
+            exchange_client
+                .cancel_sell_order(&order_info.pair, &order_info.order_id)
+                .await?
+        }
+    }
+
+    println!("{} orders cancelled", cancelled_count);
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn process_exchange_sell(
     db: &mut Db,
     exchange: Exchange,
@@ -2008,6 +2041,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         ),
                 )
                 .subcommand(
+                    SubCommand::with_name("cancel")
+                        .about("Cancel orders")
+                        .arg(
+                            Arg::with_name("order_id")
+                                .index(1)
+                                .value_name("ORDER ID")
+                                .takes_value(true)
+                                .multiple(true)
+                                .help("The order id to cancel"),
+                        )
+                        .arg(
+                            Arg::with_name("age")
+                                .long("age")
+                                .value_name("HOURS")
+                                .takes_value(true)
+                                .validator(is_parsable::<u32>)
+                                .conflicts_with("order_id")
+                                .help("Cancel orders older than this number of hours"),
+                        ),
+                )
+                .subcommand(
                     SubCommand::with_name("sell")
                         .about("Place an order to sell SOL")
                         .arg(
@@ -2329,6 +2383,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         lot_numbers,
                     )
                     .await?;
+                    process_sync_exchange(
+                        &mut db,
+                        exchange,
+                        exchange_client.as_ref(),
+                        &rpc_client,
+                        &notifier,
+                    )
+                    .await?;
+                }
+                ("cancel", Some(arg_matches)) => {
+                    let order_ids: HashSet<String> = values_t!(arg_matches, "order_id", String)
+                        .ok()
+                        .map(|x| x.into_iter().collect())
+                        .unwrap_or_default();
+
+                    let max_create_time = value_t!(arg_matches, "age", i64)
+                        .ok()
+                        .map(|age| Utc::now().checked_sub_signed(chrono::Duration::hours(age)))
+                        .flatten();
+
+                    let exchange_client = exchange_client()?;
+                    process_exchange_cancel(
+                        &mut db,
+                        exchange,
+                        exchange_client.as_ref(),
+                        order_ids,
+                        max_create_time,
+                    )
+                    .await?;
+
                     process_sync_exchange(
                         &mut db,
                         exchange,

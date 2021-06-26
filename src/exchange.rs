@@ -85,6 +85,12 @@ pub trait ExchangeClient {
         amount: f64,
     ) -> Result<OrderId, Box<dyn std::error::Error>>;
     #[allow(clippy::ptr_arg)]
+    async fn cancel_sell_order(
+        &self,
+        pair: &str,
+        order_id: &OrderId,
+    ) -> Result<(), Box<dyn std::error::Error>>;
+    #[allow(clippy::ptr_arg)]
     async fn sell_order_status(
         &self,
         pair: &str,
