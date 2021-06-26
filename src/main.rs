@@ -34,6 +34,16 @@ use {
     std::{collections::HashSet, path::PathBuf, process::exit, str::FromStr},
 };
 
+fn is_long_term_cap_gain(acquisition: NaiveDate, disposal: Option<NaiveDate>) -> bool {
+    let disposal = disposal.unwrap_or_else(|| {
+        let today = Local::now().date();
+        NaiveDate::from_ymd(today.year(), today.month(), today.day())
+    });
+
+    let hold_time = disposal - acquisition;
+    hold_time >= chrono::Duration::days(356)
+}
+
 fn naivedate_of(string: &str) -> Result<NaiveDate, String> {
     NaiveDate::parse_from_str(string, "%y/%m/%d")
         .or_else(|_| NaiveDate::parse_from_str(string, "%Y/%m/%d"))
@@ -438,7 +448,7 @@ async fn process_exchange_sell(
     let order_lots = deposit_account.extract_lots(db, sol_to_lamports(amount), lot_numbers)?;
     println!("Lots");
     for lot in &order_lots {
-        println_lot(lot, price, &mut 0., &mut 0., &mut 0., None).await;
+        println_lot(lot, price, &mut 0., &mut 0., &mut false, &mut 0., None).await;
     }
 
     let order_id = exchange_client
@@ -455,6 +465,7 @@ async fn println_lot(
     current_price: f64,
     total_income: &mut f64,
     total_cap_gain: &mut f64,
+    long_term_cap_gain: &mut bool,
     total_current_value: &mut f64,
     notifier: Option<&Notifier>,
 ) {
@@ -465,15 +476,21 @@ async fn println_lot(
     *total_income += income;
     *total_cap_gain += cap_gain;
     *total_current_value += current_value;
+    *long_term_cap_gain = is_long_term_cap_gain(lot.acquisition.when, None);
 
     let msg = format!(
-        "{:>3}. {} | ◎{:<17.9} at ${:<6} | current value: ${:<14} | income: ${:<11} | cap gain: ${:<14} | {}",
+        "{:>3}. {} | ◎{:<17.9} at ${:<6} | current value: ${:<14} | income: ${:<11} | {} cap gain: ${:<14} | {}",
         lot.lot_number,
         lot.acquisition.when,
         lamports_to_sol(lot.amount),
         lot.acquisition.price.separated_string_with_fixed_place(2),
         current_value.separated_string_with_fixed_place(2),
         income.separated_string_with_fixed_place(2),
+        if *long_term_cap_gain {
+            "long"
+        } else {
+            "short"
+        },
         cap_gain.separated_string_with_fixed_place(2),
         lot.acquisition.kind,
     );
@@ -488,24 +505,32 @@ async fn println_disposed_lot(
     disposed_lot: &DisposedLot,
     total_income: &mut f64,
     total_cap_gain: &mut f64,
+    long_term_cap_gain: &mut bool,
     total_current_value: &mut f64,
     notifier: Option<&Notifier>,
 ) {
     let cap_gain = disposed_lot.lot.cap_gain(disposed_lot.price);
     let income = disposed_lot.lot.income();
 
+    *long_term_cap_gain =
+        is_long_term_cap_gain(disposed_lot.lot.acquisition.when, Some(disposed_lot.when));
     *total_income += income;
-    *total_cap_gain += cap_gain;
     *total_current_value += income + cap_gain;
+    *total_cap_gain += cap_gain;
 
     let msg = format!(
-        "{:>3}. {} | ◎{:<17.9} at ${:<6} | income: ${:<11} | sold at ${:6} for gain of ${:<14} | {} | {}",
+        "{:>3}. {} | ◎{:<17.9} at ${:<6} | income: ${:<11} | sold at ${:6} {} cap gain: ${:<14} | {} | {}",
         disposed_lot.lot.lot_number,
         disposed_lot.lot.acquisition.when,
         lamports_to_sol(disposed_lot.lot.amount),
         disposed_lot.lot.acquisition.price.separated_string_with_fixed_place(2),
         income.separated_string_with_fixed_place(2),
         disposed_lot.price.separated_string_with_fixed_place(2),
+        if *long_term_cap_gain {
+            "long"
+        } else {
+            "short"
+        },
         cap_gain.separated_string_with_fixed_place(2),
         disposed_lot.lot.acquisition.kind,
         disposed_lot.kind,
@@ -611,7 +636,16 @@ async fn process_account_add(
         acquisition: LotAcquistion { when, price, kind },
         amount,
     };
-    println_lot(&lot, current_price, &mut 0., &mut 0., &mut 0., None).await;
+    println_lot(
+        &lot,
+        current_price,
+        &mut 0.,
+        &mut 0.,
+        &mut false,
+        &mut 0.,
+        None,
+    )
+    .await;
 
     let account = TrackedAccount {
         address,
@@ -644,7 +678,7 @@ async fn process_account_dispose(
     if !disposed_lots.is_empty() {
         println!("Disposed Lots:");
         for disposed_lot in disposed_lots {
-            println_disposed_lot(&disposed_lot, &mut 0., &mut 0., &mut 0., None).await;
+            println_disposed_lot(&disposed_lot, &mut 0., &mut 0., &mut false, &mut 0., None).await;
         }
         println!();
     }
@@ -660,7 +694,8 @@ async fn process_account_list(db: &Db) -> Result<(), Box<dyn std::error::Error>>
 
         let mut total_income = 0.;
         let mut total_held_lamports = 0;
-        let mut total_unrealized_gain = 0.;
+        let mut total_short_term_gain = 0.;
+        let mut total_long_term_gain = 0.;
         let mut total_current_value = 0.;
 
         let open_orders = db.open_orders(None);
@@ -685,19 +720,29 @@ async fn process_account_list(db: &Db) -> Result<(), Box<dyn std::error::Error>>
                 lots.sort_by_key(|lot| lot.acquisition.when);
 
                 let mut account_income = 0.;
-                let mut account_unrealized_gain = 0.;
                 let mut account_current_value = 0.;
+                let mut account_short_term_gain = 0.;
+                let mut account_long_term_gain = 0.;
 
                 for lot in lots {
+                    let mut account_unrealized_gain = 0.;
+                    let mut long_term_cap_gain = false;
                     println_lot(
                         lot,
                         current_price,
                         &mut account_income,
                         &mut account_unrealized_gain,
+                        &mut long_term_cap_gain,
                         &mut account_current_value,
                         None,
                     )
                     .await;
+
+                    if long_term_cap_gain {
+                        account_long_term_gain += account_unrealized_gain;
+                    } else {
+                        account_short_term_gain += account_unrealized_gain;
+                    }
                 }
 
                 for open_order in open_orders {
@@ -712,25 +757,36 @@ async fn process_account_list(db: &Db) -> Result<(), Box<dyn std::error::Error>>
                         open_order.order_id,
                     );
                     for lot in lots {
+                        let mut account_unrealized_gain = 0.;
+                        let mut long_term_cap_gain = false;
                         println_lot(
                             lot,
                             current_price,
                             &mut account_income,
                             &mut account_unrealized_gain,
+                            &mut long_term_cap_gain,
                             &mut account_current_value,
                             None,
                         )
                         .await;
+
+                        if long_term_cap_gain {
+                            account_long_term_gain += account_unrealized_gain;
+                        } else {
+                            account_short_term_gain += account_unrealized_gain;
+                        }
                     }
                 }
 
                 println!(
-                    "    Value: ${}, income: ${}, unrealized cap gain: ${}",
+                    "    Value: ${}, income: ${}, unrealized short-term cap gain: ${}, unrealized long-term cap gain: ${}",
                     account_current_value.separated_string_with_fixed_place(2),
                     account_income.separated_string_with_fixed_place(2),
-                    account_unrealized_gain.separated_string_with_fixed_place(2),
+                    account_short_term_gain.separated_string_with_fixed_place(2),
+                    account_long_term_gain.separated_string_with_fixed_place(2),
                 );
-                total_unrealized_gain += account_unrealized_gain;
+                total_short_term_gain += account_short_term_gain;
+                total_long_term_gain += account_long_term_gain;
                 total_income += account_income;
                 total_current_value += account_current_value;
             } else {
@@ -746,26 +802,37 @@ async fn process_account_list(db: &Db) -> Result<(), Box<dyn std::error::Error>>
 
             let mut disposed_lamports = 0;
             let mut disposed_income = 0.;
-            let mut disposed_realized_gain = 0.;
+            let mut disposed_short_term_cap_gain = 0.;
+            let mut disposed_long_term_cap_gain = 0.;
             let mut disposed_current_value = 0.;
 
             for disposed_lot in disposed_lots {
                 disposed_lamports += disposed_lot.lot.amount;
+                let mut long_term_cap_gain = false;
+                let mut disposed_cap_gain = 0.;
                 println_disposed_lot(
                     &disposed_lot,
                     &mut disposed_income,
-                    &mut disposed_realized_gain,
+                    &mut disposed_cap_gain,
+                    &mut long_term_cap_gain,
                     &mut disposed_current_value,
                     None,
                 )
                 .await;
+
+                if long_term_cap_gain {
+                    disposed_long_term_cap_gain += disposed_cap_gain;
+                } else {
+                    disposed_short_term_cap_gain += disposed_cap_gain;
+                }
             }
             println!(
-                "    Disposed ◎{}, value: ${}, income: ${}, realized cap gains: ${}",
+                "    Disposed ◎{}, value: ${}, income: ${}, short-term cap gain: ${}, long-term cap gain: ${}",
                 lamports_to_sol(disposed_lamports).separated_string_with_fixed_place(2),
                 disposed_current_value.separated_string_with_fixed_place(2),
                 disposed_income.separated_string_with_fixed_place(2),
-                disposed_realized_gain.separated_string_with_fixed_place(2),
+                disposed_short_term_cap_gain.separated_string_with_fixed_place(2),
+                disposed_long_term_cap_gain.separated_string_with_fixed_place(2),
             );
             println!();
         }
@@ -797,8 +864,12 @@ async fn process_account_list(db: &Db) -> Result<(), Box<dyn std::error::Error>>
             total_income.separated_string_with_fixed_place(2)
         );
         println!(
-            "  Unrealized cap gains: ${}",
-            total_unrealized_gain.separated_string_with_fixed_place(2)
+            "  Unrealized short-term cap gains: ${}",
+            total_short_term_gain.separated_string_with_fixed_place(2)
+        );
+        println!(
+            "  Unrealized long-term cap gains: ${}",
+            total_long_term_gain.separated_string_with_fixed_place(2)
         );
     }
     Ok(())
@@ -1401,6 +1472,7 @@ async fn process_account_sync(
                     current_price,
                     &mut 0.,
                     &mut 0.,
+                    &mut false,
                     &mut 0.,
                     Some(&notifier),
                 )
@@ -1447,6 +1519,7 @@ async fn process_account_sync(
                 current_price,
                 &mut 0.,
                 &mut 0.,
+                &mut false,
                 &mut 0.,
                 Some(&notifier),
             )
