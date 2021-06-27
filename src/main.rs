@@ -1028,6 +1028,97 @@ async fn process_account_xls(db: &Db, outfile: &str) -> Result<(), Box<dyn std::
     Ok(())
 }
 
+async fn process_account_merge<T: Signers>(
+    db: &mut Db,
+    rpc_client: &RpcClient,
+    from_address: Pubkey,
+    into_address: Pubkey,
+    authority_address: Pubkey,
+    signers: T,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (recent_blockhash, fee_calculator) = rpc_client.get_recent_blockhash()?;
+
+    let from_account = rpc_client
+        .get_account_with_commitment(&from_address, rpc_client.commitment())?
+        .value
+        .ok_or_else(|| format!("From account, {}, does not exist", from_address))?;
+
+    let authority_account = if from_address == authority_address {
+        from_account.clone()
+    } else {
+        rpc_client
+            .get_account_with_commitment(&authority_address, rpc_client.commitment())?
+            .value
+            .ok_or_else(|| format!("Authority account, {}, does not exist", authority_address))?
+    };
+
+    if authority_account.lamports < fee_calculator.lamports_per_signature {
+        return Err(format!(
+            "Authority has insufficient funds for the transaction fee of {}",
+            Sol(fee_calculator.lamports_per_signature)
+        )
+        .into());
+    }
+
+    let instructions = if from_account.owner == solana_stake_program::id() {
+        solana_stake_program::stake_instruction::merge(
+            &into_address,
+            &from_address,
+            &authority_address,
+        )
+    } else {
+        return Err(format!("Unsupported `from` account owner: {}", from_account.owner).into());
+    };
+
+    println!("Merging {} into {}", from_address, into_address);
+    if from_address != authority_address {
+        println!("Authority address: {}", authority_address);
+    }
+
+    let message = Message::new(&instructions, Some(&authority_address));
+    if fee_calculator.calculate_fee(&message) > authority_account.lamports {
+        return Err("Insufficient funds for transaction fee".into());
+    }
+
+    let mut transaction = Transaction::new_unsigned(message);
+    transaction.message.recent_blockhash = recent_blockhash;
+    let simulation_result = rpc_client.simulate_transaction(&transaction)?.value;
+    if simulation_result.err.is_some() {
+        return Err(format!("Simulation failure: {:?}", simulation_result).into());
+    }
+
+    transaction.try_sign(&signers, recent_blockhash)?;
+    let signature = transaction.signatures[0];
+    println!("Transaction signature: {}", signature);
+
+    db.record_transfer(signature, from_address, None, into_address, None)?;
+
+    loop {
+        match rpc_client.send_and_confirm_transaction_with_spinner(&transaction) {
+            Ok(_) => {
+                db.confirm_transfer(signature)?;
+                db.remove_account(from_address)?;
+                return Ok(());
+            }
+            Err(err) => {
+                println!("Send transaction failed: {:?}", err);
+            }
+        }
+        match rpc_client.get_fee_calculator_for_blockhash(&recent_blockhash) {
+            Err(err) => {
+                println!("Failed to get fee calculator: {:?}", err);
+            }
+            Ok(None) => {
+                db.cancel_transfer(signature)?;
+                return Err("Deposit failed: {}".into());
+            }
+            Ok(_) => {
+                println!("Blockhash has not yet expired, retrying transaction...");
+            }
+        };
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn process_account_sweep<T: Signers>(
     db: &mut Db,
@@ -1943,6 +2034,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         )
                 )
                 .subcommand(
+                    SubCommand::with_name("merge")
+                        .about("Merge one account into another")
+                        .arg(
+                            Arg::with_name("from_address")
+                                .index(1)
+                                .value_name("ADDRESS")
+                                .takes_value(true)
+                                .required(true)
+                                .validator(is_valid_pubkey)
+                                .help("Source address")
+                        )
+                        .arg(
+                            Arg::with_name("into_address")
+                                .long("into")
+                                .value_name("ADDRESS")
+                                .takes_value(true)
+                                .required(true)
+                                .validator(is_valid_pubkey)
+                                .help("Destination address")
+                        )
+                        .arg(
+                            Arg::with_name("by")
+                                .long("by")
+                                .value_name("KEYPAIR")
+                                .takes_value(true)
+                                .validator(is_valid_signer)
+                                .help("Optional authority for the merge"),
+                        )
+                )
+                .subcommand(
                     SubCommand::with_name("sweep")
                         .about("Sweep SOL into the sweep stake account")
                         .arg(
@@ -2329,6 +2450,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 })?;
 
                 println!("Sweep stake account set to {}", address);
+            }
+            ("merge", Some(arg_matches)) => {
+                let from_address = pubkey_of(arg_matches, "from_address").unwrap();
+                let into_address = pubkey_of(arg_matches, "into_address").unwrap();
+
+                let (authority_signer, authority_address) = if arg_matches.is_present("by") {
+                    signer_of(arg_matches, "by", &mut wallet_manager)?
+                } else {
+                    signer_of(arg_matches, "from_address", &mut wallet_manager).map_err(|err| {
+                        format!(
+                            "Authority not found, consider using the `--by` argument): {}",
+                            err
+                        )
+                    })?
+                };
+
+                let authority_address = authority_address.expect("authority_address");
+                let authority_signer = authority_signer.expect("authority_signer");
+
+                process_account_merge(
+                    &mut db,
+                    &rpc_client,
+                    from_address,
+                    into_address,
+                    authority_address,
+                    vec![authority_signer],
+                )
+                .await?;
             }
             ("sweep", Some(arg_matches)) => {
                 let from_address = pubkey_of(arg_matches, "address").unwrap();
