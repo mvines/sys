@@ -1110,7 +1110,7 @@ async fn process_account_merge<T: Signers>(
             }
             Ok(None) => {
                 db.cancel_transfer(signature)?;
-                return Err("Deposit failed: {}".into());
+                return Err("Merge failed: {}".into());
             }
             Ok(_) => {
                 println!("Blockhash has not yet expired, retrying transaction...");
