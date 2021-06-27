@@ -32,7 +32,7 @@ You can also run `./fetch-release.sh` to download the latest Linux and macOS bin
 ## Examples
 _TODO..._
 
-For now please explore the help system, `sys --help`. It aims to be self explanitory.
+For now please explore the help system, `sys --help`. It aims to be self explanatory.
 
 ## Limitations
 * No FMV discount is computed for locked stake rewards
