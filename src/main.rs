@@ -1067,6 +1067,7 @@ async fn process_account_merge<T: Signers>(
             &authority_address,
         )
     } else {
+        // TODO: Support merging two system accounts, and possibly other variations
         return Err(format!("Unsupported `from` account owner: {}", from_account.owner).into());
     };
 
@@ -1374,41 +1375,31 @@ async fn process_account_sweep<T: Signers>(
     Ok(())
 }
 
-async fn process_account_withdraw_from_sweep(
+#[allow(clippy::too_many_arguments)]
+async fn process_account_split<T: Signers>(
     db: &mut Db,
     rpc_client: &RpcClient,
+    from_address: Pubkey,
     amount: u64,
     description: String,
     lot_numbers: Option<HashSet<usize>>,
+    authority_address: Pubkey,
+    signers: T,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (recent_blockhash, _fee_calculator) = rpc_client.get_recent_blockhash()?;
 
-    let sweep_stake_account = db
-        .get_sweep_stake_account()
-        .ok_or("Sweep stake account not configured")?;
-    let sweep_stake_authority_keypair = read_keypair_file(&sweep_stake_account.stake_authority)
-        .map_err(|err| {
-            format!(
-                "Failed to read {}: {}",
-                sweep_stake_account.stake_authority.display(),
-                err
-            )
-        })?;
+    let into_account = Keypair::new();
 
-    let withdrawal_stake_account = Keypair::new();
+    // TODO: Support splitting two system accounts? Otherwise at least error cleanly when it's attempted
 
-    let mut instructions = solana_stake_program::stake_instruction::split(
-        &sweep_stake_account.address,
-        &sweep_stake_authority_keypair.pubkey(),
+    let instructions = solana_stake_program::stake_instruction::split(
+        &from_address,
+        &authority_address,
         amount,
-        &withdrawal_stake_account.pubkey(),
+        &into_account.pubkey(),
     );
-    instructions.push(solana_stake_program::stake_instruction::deactivate_stake(
-        &withdrawal_stake_account.pubkey(),
-        &sweep_stake_authority_keypair.pubkey(),
-    ));
 
-    let message = Message::new(&instructions, Some(&sweep_stake_authority_keypair.pubkey()));
+    let message = Message::new(&instructions, Some(&authority_address));
 
     let mut transaction = Transaction::new_unsigned(message);
     transaction.message.recent_blockhash = recent_blockhash;
@@ -1418,23 +1409,21 @@ async fn process_account_withdraw_from_sweep(
     }
 
     println!(
-        "Withdrawing and deactivating {} from {} into {}",
+        "Splitting {} from {} into {}",
         Sol(amount),
-        sweep_stake_account.address,
-        withdrawal_stake_account.pubkey(),
+        from_address,
+        into_account.pubkey(),
     );
 
-    transaction.try_sign(
-        &[&withdrawal_stake_account, &sweep_stake_authority_keypair],
-        recent_blockhash,
-    )?;
+    transaction.partial_sign(&signers, recent_blockhash);
+    transaction.try_sign(&[&into_account], recent_blockhash)?;
 
     let signature = transaction.signatures[0];
     println!("Transaction signature: {}", signature);
 
     let epoch = rpc_client.get_epoch_info()?.epoch;
     db.add_account(TrackedAccount {
-        address: withdrawal_stake_account.pubkey(),
+        address: into_account.pubkey(),
         description,
         last_update_epoch: epoch.saturating_sub(1),
         last_update_balance: 0,
@@ -1443,16 +1432,16 @@ async fn process_account_withdraw_from_sweep(
     })?;
     db.record_transfer(
         signature,
-        sweep_stake_account.address,
+        from_address,
         Some(amount),
-        withdrawal_stake_account.pubkey(),
+        into_account.pubkey(),
         lot_numbers,
     )?;
 
     loop {
         match rpc_client.send_and_confirm_transaction_with_spinner(&transaction) {
             Ok(_) => {
-                println!("Withdrawal confirmed: {}", signature);
+                println!("Split confirmed: {}", signature);
                 db.confirm_transfer(signature)?;
                 break;
             }
@@ -1466,8 +1455,8 @@ async fn process_account_withdraw_from_sweep(
             }
             Ok(None) => {
                 db.cancel_transfer(signature)?;
-                db.remove_account(withdrawal_stake_account.pubkey())?;
-                return Err("Withdrawal failed: {}".into());
+                db.remove_account(into_account.pubkey())?;
+                return Err("Split failed: {}".into());
             }
             Ok(_) => {
                 println!("Blockhash has not yet expired, retrying transaction...");
@@ -2101,16 +2090,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         ),
                 )
                 .subcommand(
-                    SubCommand::with_name("withdraw-from-sweep-account")
-                        .about("Withdraw SOL from the sweep stake account")
+                    SubCommand::with_name("split")
+                        .about("Split an account")
+                        .arg(
+                            Arg::with_name("from_address")
+                                .index(1)
+                                .value_name("ADDRESS")
+                                .takes_value(true)
+                                .required(true)
+                                .validator(is_valid_pubkey)
+                                .help("Address of the account to split")
+                        )
                         .arg(
                             Arg::with_name("amount")
-                                .index(1)
+                                .index(2)
                                 .value_name("AMOUNT")
                                 .takes_value(true)
                                 .validator(is_amount)
                                 .required(true)
-                                .help("The amount to withdraw, in SOL"),
+                                .help("The amount to split, in SOL"),
                         )
                         .arg(
                             Arg::with_name("description")
@@ -2118,7 +2116,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .long("description")
                                 .value_name("TEXT")
                                 .takes_value(true)
-                                .help("Account description"),
+                                .help("Description of the new account"),
+                        )
+                        .arg(
+                            Arg::with_name("by")
+                                .long("by")
+                                .value_name("KEYPAIR")
+                                .takes_value(true)
+                                .validator(is_valid_signer)
+                                .help("Optional authority for the merge"),
                         )
                         .arg(
                             Arg::with_name("lot_numbers")
@@ -2127,7 +2133,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .takes_value(true)
                                 .multiple(true)
                                 .validator(is_parsable::<usize>)
-                                .help("Lot to fund the withdrawal from [default: first in, first out]"),
+                                .help("Lot to fund the split from [default: first in, first out]"),
                         )
                 )
                 .subcommand(
@@ -2501,7 +2507,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 )
                 .await?;
             }
-            ("withdraw-from-sweep-account", Some(arg_matches)) => {
+            ("split", Some(arg_matches)) => {
+                let from_address = pubkey_of(arg_matches, "from_address").unwrap();
                 let amount = sol_to_lamports(value_t_or_exit!(arg_matches, "amount", f64));
                 let description = value_t!(arg_matches, "description", String)
                     .ok()
@@ -2510,12 +2517,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .ok()
                     .map(|x| x.into_iter().collect());
 
-                process_account_withdraw_from_sweep(
+                let (authority_signer, authority_address) = if arg_matches.is_present("by") {
+                    signer_of(arg_matches, "by", &mut wallet_manager)?
+                } else {
+                    signer_of(arg_matches, "from_address", &mut wallet_manager).map_err(|err| {
+                        format!(
+                            "Authority not found, consider using the `--by` argument): {}",
+                            err
+                        )
+                    })?
+                };
+
+                let authority_address = authority_address.expect("authority_address");
+                let authority_signer = authority_signer.expect("authority_signer");
+
+                process_account_split(
                     &mut db,
                     &rpc_client,
+                    from_address,
                     amount,
                     description,
                     lot_numbers,
+                    authority_address,
+                    vec![authority_signer],
                 )
                 .await?;
             }
