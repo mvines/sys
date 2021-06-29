@@ -2512,7 +2512,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let amount = sol_to_lamports(value_t_or_exit!(arg_matches, "amount", f64));
                 let description = value_t!(arg_matches, "description", String)
                     .ok()
-                    .unwrap_or_else(|| format!("Sweep account withdrawal at {}", Local::now()));
+                    .unwrap_or_else(|| format!("Split at {}", Local::now()));
                 let lot_numbers = values_t!(arg_matches, "lot_numbers", usize)
                     .ok()
                     .map(|x| x.into_iter().collect());
