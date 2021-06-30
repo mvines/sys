@@ -885,7 +885,6 @@ async fn process_account_xls(db: &Db, outfile: &str) -> Result<(), Box<dyn std::
     let mut workbook = Workbook::create(outfile);
 
     let mut sheet = workbook.create_sheet("Disposed SOL");
-    sheet.add_column(Column { width: 8. });
     sheet.add_column(Column { width: 15. });
     sheet.add_column(Column { width: 12. });
     sheet.add_column(Column { width: 12. });
@@ -901,7 +900,6 @@ async fn process_account_xls(db: &Db, outfile: &str) -> Result<(), Box<dyn std::
 
     workbook.write_sheet(&mut sheet, |sheet_writer| {
         sheet_writer.append_row(row![
-            "Lot No",
             "Amount (SOL)",
             "Income",
             "Acq. Date",
@@ -915,7 +913,6 @@ async fn process_account_xls(db: &Db, outfile: &str) -> Result<(), Box<dyn std::
 
         for disposed_lot in disposed_lots {
             sheet_writer.append_row(row![
-                disposed_lot.lot.lot_number.to_string(),
                 lamports_to_sol(disposed_lot.lot.amount),
                 format!(
                     "${}",
@@ -953,7 +950,6 @@ async fn process_account_xls(db: &Db, outfile: &str) -> Result<(), Box<dyn std::
     })?;
 
     let mut sheet = workbook.create_sheet("Current SOL Holdings");
-    sheet.add_column(Column { width: 8. });
     sheet.add_column(Column { width: 15. });
     sheet.add_column(Column { width: 12. });
     sheet.add_column(Column { width: 12. });
@@ -962,12 +958,8 @@ async fn process_account_xls(db: &Db, outfile: &str) -> Result<(), Box<dyn std::
     sheet.add_column(Column { width: 40. });
     sheet.add_column(Column { width: 50. });
 
-    let mut disposed_lots = db.disposed_lots();
-    disposed_lots.sort_by_key(|lot| lot.when);
-
     workbook.write_sheet(&mut sheet, |sheet_writer| {
         sheet_writer.append_row(row![
-            "Lot No",
             "Amount (SOL)",
             "Income",
             "Acq. Date",
@@ -977,46 +969,50 @@ async fn process_account_xls(db: &Db, outfile: &str) -> Result<(), Box<dyn std::
             "Account Address"
         ])?;
 
-        for account in db.get_accounts().values() {
-            let mut lots = account.lots.iter().collect::<Vec<_>>();
-            lots.sort_by_key(|lot| lot.acquisition.when);
+        let mut rows = vec![];
 
-            for lot in lots {
-                sheet_writer.append_row(row![
-                    lot.lot_number.to_string(),
-                    lamports_to_sol(lot.amount),
-                    format!("${}", lot.income().separated_string_with_fixed_place(2)),
-                    lot.acquisition.when.to_string(),
-                    format!(
-                        "${}",
-                        lot.acquisition.price.separated_string_with_fixed_place(2)
-                    ),
-                    lot.acquisition.kind.to_string(),
-                    account.description.as_str(),
-                    account.address.to_string()
-                ])?;
+        for account in db.get_accounts().values() {
+            for lot in account.lots.iter() {
+                rows.push((
+                    lot.acquisition.when,
+                    row![
+                        lamports_to_sol(lot.amount),
+                        format!("${}", lot.income().separated_string_with_fixed_place(2)),
+                        lot.acquisition.when.to_string(),
+                        format!(
+                            "${}",
+                            lot.acquisition.price.separated_string_with_fixed_place(2)
+                        ),
+                        lot.acquisition.kind.to_string(),
+                        account.description.as_str(),
+                        account.address.to_string()
+                    ],
+                ));
             }
         }
 
         for open_order in db.open_orders(None) {
-            let mut lots = open_order.lots.iter().collect::<Vec<_>>();
-            lots.sort_by_key(|lot| lot.acquisition.when);
-
-            for lot in lots {
-                sheet_writer.append_row(row![
-                    lot.lot_number.to_string(),
-                    lamports_to_sol(lot.amount),
-                    format!("${}", lot.income().separated_string_with_fixed_place(2)),
-                    lot.acquisition.when.to_string(),
-                    format!(
-                        "${}",
-                        lot.acquisition.price.separated_string_with_fixed_place(2)
-                    ),
-                    lot.acquisition.kind.to_string(),
-                    format!("Open Order: {:?} {}", open_order.exchange, open_order.pair),
-                    open_order.deposit_address.to_string()
-                ])?;
+            for lot in open_order.lots.iter() {
+                rows.push((
+                    lot.acquisition.when,
+                    row![
+                        lamports_to_sol(lot.amount),
+                        format!("${}", lot.income().separated_string_with_fixed_place(2)),
+                        lot.acquisition.when.to_string(),
+                        format!(
+                            "${}",
+                            lot.acquisition.price.separated_string_with_fixed_place(2)
+                        ),
+                        lot.acquisition.kind.to_string(),
+                        format!("Open Order: {:?} {}", open_order.exchange, open_order.pair),
+                        open_order.deposit_address.to_string()
+                    ],
+                ));
             }
+        }
+        rows.sort_by_key(|row| row.0);
+        for (_, row) in rows {
+            sheet_writer.append_row(row)?;
         }
 
         Ok(())
