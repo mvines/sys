@@ -71,12 +71,22 @@ pub struct SellOrderStatus {
     pub last_update: NaiveDate,
 }
 
+#[derive(PartialEq)]
+pub enum MarketInfoFormat {
+    All,
+    Weighted24hAveragePrice,
+}
+
 #[async_trait]
 pub trait ExchangeClient {
     async fn deposit_address(&self) -> Result<Pubkey, Box<dyn std::error::Error>>;
     async fn recent_deposits(&self) -> Result<Vec<DepositInfo>, Box<dyn std::error::Error>>;
     async fn balance(&self) -> Result<ExchangeBalance, Box<dyn std::error::Error>>;
-    async fn print_market_info(&self, pair: &str) -> Result<(), Box<dyn std::error::Error>>;
+    async fn print_market_info(
+        &self,
+        pair: &str,
+        format: MarketInfoFormat,
+    ) -> Result<(), Box<dyn std::error::Error>>;
     async fn bid_ask(&self, pair: &str) -> Result<BidAsk, Box<dyn std::error::Error>>;
     async fn place_sell_order(
         &self,

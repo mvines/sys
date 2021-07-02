@@ -2172,6 +2172,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .value_name("TRADING_PAIR")
                                 .takes_value(true)
                                 .default_value("SOLUSDT"),
+                        )
+                        .arg(
+                            Arg::with_name("weighted_24h_average_price")
+                                .long("weighted-24h-average-price")
+                                .takes_value(false)
+                                .help("Only display the weighted average price for the previous 24 hours"),
                         ),
                 )
                 .subcommand(
@@ -2356,7 +2362,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let when = naivedate_of(&value_t_or_exit!(arg_matches, "when", String)).unwrap();
             let price = coin_gecko::get_price(when).await?;
             if verbose {
-                println!("Price on {}: ${:.2}", when, price);
+                println!("Historical price on {}: ${:.2}", when, price);
             } else {
                 println!("{:.2}", price);
             }
@@ -2576,8 +2582,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 ("market", Some(arg_matches)) => {
                     let pair = value_t_or_exit!(arg_matches, "pair", String);
-                    println!("Pair: {}", pair);
-                    exchange_client()?.print_market_info(&pair).await?;
+                    let format = if arg_matches.is_present("weighted_24h_average_price") {
+                        MarketInfoFormat::Weighted24hAveragePrice
+                    } else {
+                        MarketInfoFormat::All
+                    };
+                    exchange_client()?.print_market_info(&pair, format).await?;
                 }
                 ("deposit", Some(arg_matches)) => {
                     let amount = match arg_matches.value_of("amount").unwrap() {

@@ -165,13 +165,12 @@ impl ExchangeClient for BinanceExchangeClient {
         })
     }
 
-    async fn print_market_info(&self, pair: &str) -> Result<(), Box<dyn std::error::Error>> {
+    async fn print_market_info(
+        &self,
+        pair: &str,
+        format: MarketInfoFormat,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let market_data_client = self.account_client.to_market_data_client();
-
-        let average_price = market_data_client
-            .get_average_price(pair)
-            .json::<AveragePrice>()
-            .await?;
 
         let ticker_price = market_data_client
             .get_24hr_ticker_price()
@@ -179,23 +178,39 @@ impl ExchangeClient for BinanceExchangeClient {
             .json::<TickerPrice>()
             .await?;
 
-        println!(
-            "Ask: ${}, Bid: ${}, High: ${}, Low: ${}, ",
-            ticker_price.ask_price,
-            ticker_price.bid_price,
-            ticker_price.high_price,
-            ticker_price.low_price
-        );
-        println!(
-            "Last {} minute average: ${}",
-            average_price.mins, average_price.price
-        );
-        println!(
-            "Last 24h change: ${} ({}%), Weighted average price: ${}",
-            ticker_price.price_change,
-            ticker_price.price_change_percent,
-            ticker_price.weighted_avg_price
-        );
+        match format {
+            MarketInfoFormat::All => {
+                println!("Pair: {}", pair);
+                println!(
+                    "Ask: ${}, Bid: ${}, High: ${}, Low: ${}, ",
+                    ticker_price.ask_price,
+                    ticker_price.bid_price,
+                    ticker_price.high_price,
+                    ticker_price.low_price
+                );
+
+                let average_price = market_data_client
+                    .get_average_price(pair)
+                    .json::<AveragePrice>()
+                    .await?;
+
+                println!(
+                    "Last {} minute average: ${}",
+                    average_price.mins, average_price.price
+                );
+                println!(
+                    "Last 24h change: ${} ({}%)",
+                    ticker_price.price_change, ticker_price.price_change_percent
+                );
+                println!(
+                    "Weighted 24h average price: ${}",
+                    ticker_price.weighted_avg_price
+                );
+            }
+            MarketInfoFormat::Weighted24hAveragePrice => {
+                println!("{}", ticker_price.weighted_avg_price);
+            }
+        }
         Ok(())
     }
 

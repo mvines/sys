@@ -78,28 +78,63 @@ impl ExchangeClient for FtxExchangeClient {
             .collect())
     }
 
-    async fn print_market_info(&self, pair: &str) -> Result<(), Box<dyn std::error::Error>> {
-        let pair = binance_to_ftx_pair(pair)?;
+    async fn print_market_info(
+        &self,
+        pair: &str,
+        format: MarketInfoFormat,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let ftx_pair = binance_to_ftx_pair(pair)?;
 
-        let market = self
-            .rest
-            .get_market(pair)
-            .await
-            .map_err(|err| format!("{:?}", err))?;
+        let weighted_24h_avg_price = {
+            let hourly_prices = self
+                .rest
+                .get_historical_prices(ftx_pair, 3600, Some(24), None, None)
+                .await
+                .unwrap();
+            assert_eq!(hourly_prices.len(), 24);
 
-        println!("Price: ${}", market.price);
-        println!(
-            "Ask: ${}, Bid: ${}, Last: ${}",
-            market.ask, market.bid, market.last,
-        );
-        println!(
-            "24h Volume: ${}",
-            market
-                .volume_usd24h
-                .to_f64()
-                .unwrap()
-                .separated_string_with_fixed_place(2)
-        );
+            let mut total_volume = 0.;
+            let mut avg_price_weighted_sum = 0.;
+            for hourly_price in hourly_prices {
+                let avg_price = (hourly_price.low + hourly_price.high).to_f64().unwrap() / 2.;
+                let volume = hourly_price.volume.to_f64().unwrap();
+
+                total_volume += volume;
+                avg_price_weighted_sum += avg_price * volume;
+            }
+
+            avg_price_weighted_sum / total_volume
+        };
+
+        match format {
+            MarketInfoFormat::All => {
+                println!("Pair: {}", pair);
+                let market = self
+                    .rest
+                    .get_market(ftx_pair)
+                    .await
+                    .map_err(|err| format!("{:?}", err))?;
+
+                println!("Price: ${}", market.price);
+                println!(
+                    "Ask: ${}, Bid: ${}, Last: ${}",
+                    market.ask, market.bid, market.last,
+                );
+                println!(
+                    "24h Volume: ${}",
+                    market
+                        .volume_usd24h
+                        .to_f64()
+                        .unwrap()
+                        .separated_string_with_fixed_place(2)
+                );
+                println!("Weighted 24h average price: ${:.4}", weighted_24h_avg_price);
+            }
+            MarketInfoFormat::Weighted24hAveragePrice => {
+                println!("{:.4}", weighted_24h_avg_price);
+            }
+        }
+
         Ok(())
     }
 
