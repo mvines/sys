@@ -1,6 +1,3 @@
-# UNSTABLE. USE AT YOUR OWN RISK. ALSO THERE ARE NO TESTS
------
-
 ## Sell Your ◎
 
 This program provides tracking from acquisition through disposal of SOL from staking, voting, and validator transaction fee/rent rewards.
