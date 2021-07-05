@@ -74,6 +74,7 @@ pub struct SellOrderStatus {
 #[derive(PartialEq)]
 pub enum MarketInfoFormat {
     All,
+    Ask,
     Weighted24hAveragePrice,
 }
 

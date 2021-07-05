@@ -207,6 +207,9 @@ impl ExchangeClient for BinanceExchangeClient {
                     ticker_price.weighted_avg_price
                 );
             }
+            MarketInfoFormat::Ask => {
+                println!("{}", ticker_price.ask_price);
+            }
             MarketInfoFormat::Weighted24hAveragePrice => {
                 println!("{}", ticker_price.weighted_avg_price);
             }

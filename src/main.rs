@@ -2174,9 +2174,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .default_value("SOLUSDT"),
                         )
                         .arg(
+                            Arg::with_name("ask")
+                                .long("ask")
+                                .takes_value(false)
+                                .help("Only display the current asking price")
+                        )
+                        .arg(
                             Arg::with_name("weighted_24h_average_price")
                                 .long("weighted-24h-average-price")
                                 .takes_value(false)
+                                .conflicts_with("ask")
                                 .help("Only display the weighted average price for the previous 24 hours"),
                         ),
                 )
@@ -2584,6 +2591,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let pair = value_t_or_exit!(arg_matches, "pair", String);
                     let format = if arg_matches.is_present("weighted_24h_average_price") {
                         MarketInfoFormat::Weighted24hAveragePrice
+                    } else if arg_matches.is_present("ask") {
+                        MarketInfoFormat::Ask
                     } else {
                         MarketInfoFormat::All
                     };

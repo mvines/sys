@@ -106,14 +106,15 @@ impl ExchangeClient for FtxExchangeClient {
             avg_price_weighted_sum / total_volume
         };
 
+        let market = self
+            .rest
+            .get_market(ftx_pair)
+            .await
+            .map_err(|err| format!("{:?}", err))?;
+
         match format {
             MarketInfoFormat::All => {
                 println!("Pair: {}", pair);
-                let market = self
-                    .rest
-                    .get_market(ftx_pair)
-                    .await
-                    .map_err(|err| format!("{:?}", err))?;
 
                 println!("Price: ${}", market.price);
                 println!(
@@ -129,6 +130,9 @@ impl ExchangeClient for FtxExchangeClient {
                         .separated_string_with_fixed_place(2)
                 );
                 println!("Weighted 24h average price: ${:.4}", weighted_24h_avg_price);
+            }
+            MarketInfoFormat::Ask => {
+                println!("{}", market.ask);
             }
             MarketInfoFormat::Weighted24hAveragePrice => {
                 println!("{:.4}", weighted_24h_avg_price);
