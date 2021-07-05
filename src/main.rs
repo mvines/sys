@@ -415,10 +415,12 @@ async fn process_exchange_sell(
 
     if let Some(if_price_over) = if_price_over {
         if price <= if_price_over {
-            println!(
+            let msg = format!(
                 "Order declined because order price, {}, is not greater than {}",
                 price, if_price_over,
             );
+            println!("{}", msg);
+            notifier.send(&format!("{:?}: {}", exchange, msg)).await;
             return Ok(());
         }
     }
@@ -460,6 +462,7 @@ async fn process_exchange_sell(
         pair, amount, price, order_id,
     );
     db.open_order(deposit_account, exchange, pair, price, order_id, order_lots)?;
+    println!("{}", msg);
     notifier.send(&format!("{:?}: {}", exchange, msg)).await;
     Ok(())
 }
