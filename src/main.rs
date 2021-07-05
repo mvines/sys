@@ -416,7 +416,7 @@ async fn process_exchange_sell(
     if let Some(if_price_over) = if_price_over {
         if price <= if_price_over {
             let msg = format!(
-                "Order declined because order price, {}, is not greater than {}",
+                "Order declined because order price, ${}, is not greater than ${}",
                 price, if_price_over,
             );
             println!("{}", msg);
