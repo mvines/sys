@@ -58,9 +58,13 @@ pub async fn get_block_date_and_price(
     slot: Slot,
 ) -> Result<(NaiveDate, f64), Box<dyn std::error::Error>> {
     let block_time = rpc_client.get_block_time(slot)?;
+    let local_timestamp = Local.timestamp(block_time, 0);
 
-    let block_date = NaiveDateTime::from_timestamp_opt(block_time, 0)
-        .ok_or_else(|| format!("Invalid block time for slot {}: {}", slot, block_time))?
-        .date();
+    let block_date = NaiveDate::from_ymd(
+        local_timestamp.year(),
+        local_timestamp.month(),
+        local_timestamp.day(),
+    );
+
     Ok((block_date, get_price(block_date).await?))
 }
