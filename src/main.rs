@@ -399,6 +399,7 @@ async fn process_exchange_sell(
     price: LimitOrderPrice,
     if_balance_exceeds: Option<u64>,
     if_price_over: Option<f64>,
+    price_floor: Option<f64>,
     lot_numbers: Option<HashSet<usize>>,
     notifier: &Notifier,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -406,7 +407,7 @@ async fn process_exchange_sell(
     println!("Symbol: {}", pair);
     println!("Ask: ${}, Bid: ${}", bid_ask.ask_price, bid_ask.bid_price,);
 
-    let price = match price {
+    let mut price = match price {
         LimitOrderPrice::At(price) => price,
         LimitOrderPrice::AmountOverAsk(extra) => bid_ask.ask_price + extra,
     };
@@ -422,6 +423,18 @@ async fn process_exchange_sell(
             println!("{}", msg);
             notifier.send(&format!("{:?}: {}", exchange, msg)).await;
             return Ok(());
+        }
+    }
+
+    if let Some(price_floor) = price_floor {
+        if price < price_floor {
+            let msg = format!(
+                "Proposed order price, ${}, is beneath price floor. Adjusting upwards",
+                price
+            );
+            price = price_floor;
+            println!("{}", msg);
+            notifier.send(&format!("{:?}: {}", exchange, msg)).await;
         }
     }
 
@@ -2346,6 +2359,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                        order would be placed at a price that is less than \
                                        or equal to this amount",
                                 ),
+                        )
+                        .arg(
+                            Arg::with_name("price_floor")
+                                .long("price-floor")
+                                .value_name("AMOUNT")
+                                .takes_value(true)
+                                .validator(is_parsable::<f64>)
+                                .conflicts_with("if_price_over")
+                                .help(
+                                    "If the computed price is less than this amount then \
+                                       use this amount instead",
+                                ),
                         ),
                 )
                 .subcommand(SubCommand::with_name("sync").about("Synchronize exchange")),
@@ -2697,6 +2722,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .ok()
                         .map(sol_to_lamports);
                     let if_price_over = value_t!(arg_matches, "if_price_over", f64).ok();
+                    let price_floor = value_t!(arg_matches, "price_floor", f64).ok();
                     let lot_numbers = values_t!(arg_matches, "lot_numbers", usize)
                         .ok()
                         .map(|x| x.into_iter().collect());
@@ -2718,6 +2744,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         price,
                         if_balance_exceeds,
                         if_price_over,
+                        price_floor,
                         lot_numbers,
                         &notifier,
                     )
