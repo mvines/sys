@@ -4,7 +4,7 @@ use {
     chrono::NaiveDate,
     serde::{Deserialize, Serialize},
     solana_sdk::pubkey::Pubkey,
-    std::str::FromStr,
+    std::{collections::HashMap, str::FromStr},
     thiserror::Error,
 };
 
@@ -15,6 +15,8 @@ pub enum Exchange {
     Ftx,
     FtxUs,
 }
+
+pub const USD_COINS: &[&str] = &["USD", "USDC", "USDT", "BUSD"];
 
 impl FromStr for Exchange {
     type Err = ParseExchangeError;
@@ -42,7 +44,7 @@ pub struct ExchangeCredentials {
     pub secret: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default, Clone)]
 pub struct ExchangeBalance {
     pub available: f64,
     pub total: f64,
@@ -82,7 +84,9 @@ pub enum MarketInfoFormat {
 pub trait ExchangeClient {
     async fn deposit_address(&self) -> Result<Pubkey, Box<dyn std::error::Error>>;
     async fn recent_deposits(&self) -> Result<Vec<DepositInfo>, Box<dyn std::error::Error>>;
-    async fn balance(&self) -> Result<ExchangeBalance, Box<dyn std::error::Error>>;
+    async fn balances(
+        &self,
+    ) -> Result<HashMap<String, ExchangeBalance>, Box<dyn std::error::Error>>;
     async fn print_market_info(
         &self,
         pair: &str,

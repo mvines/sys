@@ -4,6 +4,7 @@ use {
     chrono::{Local, TimeZone},
     serde::Deserialize,
     solana_sdk::pubkey::Pubkey,
+    std::collections::HashMap,
     tokio_binance::AccountClient,
 };
 
@@ -143,26 +144,25 @@ impl ExchangeClient for BinanceExchangeClient {
             .collect())
     }
 
-    async fn balance(&self) -> Result<ExchangeBalance, Box<dyn std::error::Error>> {
+    async fn balances(
+        &self,
+    ) -> Result<HashMap<String, ExchangeBalance>, Box<dyn std::error::Error>> {
         let account_info = self
             .account_client
             .get_account()
             .json::<AccountInfo>()
             .await?;
 
-        let sol_balance = account_info
-            .balances
-            .iter()
-            .find(|b| b.asset == "SOL")
-            .ok_or("No SOL balance")?;
+        let mut balances = HashMap::new();
+        for coin in ["SOL"].iter().chain(USD_COINS) {
+            if let Some(balance) = account_info.balances.iter().find(|b| b.asset == *coin) {
+                let available = balance.free.parse::<f64>()?;
+                let total = available + balance.locked.parse::<f64>()?;
 
-        let free = sol_balance.free.parse::<f64>()?;
-        let locked = sol_balance.locked.parse::<f64>()?;
-
-        Ok(ExchangeBalance {
-            available: free,
-            total: free + locked,
-        })
+                balances.insert(coin.to_string(), ExchangeBalance { available, total });
+            }
+        }
+        Ok(balances)
     }
 
     async fn print_market_info(

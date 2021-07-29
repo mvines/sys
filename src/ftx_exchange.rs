@@ -6,6 +6,7 @@ use {
     rust_decimal::prelude::*,
     separator::FixedPlaceSeparatable,
     solana_sdk::pubkey::Pubkey,
+    std::collections::HashMap,
 };
 
 pub struct FtxExchangeClient {
@@ -40,21 +41,28 @@ impl ExchangeClient for FtxExchangeClient {
             .parse::<Pubkey>()?)
     }
 
-    async fn balance(&self) -> Result<ExchangeBalance, Box<dyn std::error::Error>> {
-        let balances = self
+    async fn balances(
+        &self,
+    ) -> Result<HashMap<String, ExchangeBalance>, Box<dyn std::error::Error>> {
+        let wallet_balances = self
             .rest
             .get_wallet_balances()
             .await
             .map_err(|err| format!("{:?}", err))?;
-        let sol_balance = balances
-            .iter()
-            .find(|b| b.coin == "SOL")
-            .ok_or("No SOL balance")?;
 
-        Ok(ExchangeBalance {
-            available: sol_balance.free.to_f64().unwrap(),
-            total: sol_balance.total.to_f64().unwrap(),
-        })
+        let mut balances = HashMap::new();
+        for coin in ["SOL"].iter().chain(USD_COINS) {
+            if let Some(balance) = wallet_balances.iter().find(|b| b.coin == *coin) {
+                balances.insert(
+                    coin.to_string(),
+                    ExchangeBalance {
+                        available: balance.free.to_f64().unwrap(),
+                        total: balance.total.to_f64().unwrap(),
+                    },
+                );
+            }
+        }
+        Ok(balances)
     }
 
     async fn recent_deposits(&self) -> Result<Vec<DepositInfo>, Box<dyn std::error::Error>> {

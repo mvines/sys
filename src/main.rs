@@ -2605,14 +2605,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ("balance", Some(arg_matches)) => {
                     let available_only = arg_matches.is_present("available_only");
 
-                    let balance = exchange_client()?.balance().await?;
+                    let balances = exchange_client()?.balances().await?;
+
+                    if !available_only {
+                        println!("                    Total            Available")
+                    }
+
+                    let balance = balances.get("SOL").cloned().unwrap_or_default();
                     if available_only {
                         println!("◎{}", balance.available);
                     } else {
                         println!(
-                            "Available: ◎{}\nTotal: ◎{}",
-                            balance.available, balance.total,
+                            " SOL {:>20} {:>20}",
+                            format!("◎{:.8}", balance.total),
+                            format!("◎{:.8}", balance.available),
                         );
+                    }
+
+                    for coin in crate::exchange::USD_COINS {
+                        if let Some(balance) = balances.get(*coin) {
+                            if balance.total > 0. {
+                                if available_only {
+                                    println!("${} ({})", balance.available, coin);
+                                } else {
+                                    println!(
+                                        "{:>4} {:>20} {:>20}",
+                                        coin,
+                                        format!("${:.8}", balance.total),
+                                        format!("${:.8}", balance.available)
+                                    );
+                                }
+                            }
+                        }
                     }
                 }
                 ("market", Some(arg_matches)) => {
