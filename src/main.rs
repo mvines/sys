@@ -407,41 +407,6 @@ async fn process_exchange_sell(
     println!("Symbol: {}", pair);
     println!("Ask: ${}, Bid: ${}", bid_ask.ask_price, bid_ask.bid_price,);
 
-    let mut price = match price {
-        LimitOrderPrice::At(price) => price,
-        LimitOrderPrice::AmountOverAsk(extra) => bid_ask.ask_price + extra,
-    };
-
-    println!("Placing sell order for ◎{} at ${}", amount, price);
-
-    if let Some(if_price_over) = if_price_over {
-        if price <= if_price_over {
-            let msg = format!(
-                "Order declined because order price, ${}, is not greater than ${}",
-                price, if_price_over,
-            );
-            println!("{}", msg);
-            notifier.send(&format!("{:?}: {}", exchange, msg)).await;
-            return Ok(());
-        }
-    }
-
-    if let Some(price_floor) = price_floor {
-        if price < price_floor {
-            let msg = format!(
-                "Proposed order price, ${}, is beneath price floor. Adjusting upwards",
-                price
-            );
-            price = price_floor;
-            println!("{}", msg);
-            notifier.send(&format!("{:?}: {}", exchange, msg)).await;
-        }
-    }
-
-    if bid_ask.bid_price > price {
-        return Err("Order price is less than bid price".into());
-    }
-
     let deposit_address = exchange_client.deposit_address().await?;
     let mut deposit_account = db.get_account(deposit_address).ok_or_else(|| {
         format!(
@@ -460,6 +425,41 @@ async fn process_exchange_sell(
             return Ok(());
         }
     }
+
+    let mut price = match price {
+        LimitOrderPrice::At(price) => price,
+        LimitOrderPrice::AmountOverAsk(extra) => bid_ask.ask_price + extra,
+    };
+
+    if let Some(if_price_over) = if_price_over {
+        if price <= if_price_over {
+            let msg = format!(
+                "Order declined because price, ${}, is not greater than ${}",
+                price, if_price_over,
+            );
+            println!("{}", msg);
+            notifier.send(&format!("{:?}: {}", exchange, msg)).await;
+            return Ok(());
+        }
+    }
+
+    if let Some(price_floor) = price_floor {
+        if price < price_floor {
+            let msg = format!(
+                "Proposed price, ${}, is beneath price floor. Adjusting upwards",
+                price
+            );
+            price = price_floor;
+            println!("{}", msg);
+            notifier.send(&format!("{:?}: {}", exchange, msg)).await;
+        }
+    }
+
+    if bid_ask.bid_price > price {
+        return Err("Order price is less than bid price".into());
+    }
+
+    println!("Placing sell order for ◎{} at ${}", amount, price);
 
     let order_lots = deposit_account.extract_lots(db, sol_to_lamports(amount), lot_numbers)?;
     println!("Lots");
