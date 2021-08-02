@@ -521,14 +521,13 @@ async fn println_lot(
     println!("{}", msg);
 }
 
-async fn println_disposed_lot(
+fn format_disposed_lot(
     disposed_lot: &DisposedLot,
     total_income: &mut f64,
     total_cap_gain: &mut f64,
     long_term_cap_gain: &mut bool,
     total_current_value: &mut f64,
-    notifier: Option<&Notifier>,
-) {
+) -> String {
     let cap_gain = disposed_lot.lot.cap_gain(disposed_lot.price);
     let income = disposed_lot.lot.income();
 
@@ -538,13 +537,14 @@ async fn println_disposed_lot(
     *total_current_value += income + cap_gain;
     *total_cap_gain += cap_gain;
 
-    let msg = format!(
-        "{:>3}. {} | ◎{:<17.9} at ${:<6} | income: ${:<11} | sold at ${:6} {} cap gain: ${:<14} | {} | {}",
+    format!(
+        "{:>3}. {} | ◎{:<17.9} at ${:<6} | income: ${:<11} | sold {} at ${:6} {} cap gain: ${:<14} | {} | {}",
         disposed_lot.lot.lot_number,
         disposed_lot.lot.acquisition.when,
         lamports_to_sol(disposed_lot.lot.amount),
         disposed_lot.lot.acquisition.price.separated_string_with_fixed_place(2),
         income.separated_string_with_fixed_place(2),
+        disposed_lot.when,
         disposed_lot.price.separated_string_with_fixed_place(2),
         if *long_term_cap_gain {
             "long"
@@ -554,12 +554,7 @@ async fn println_disposed_lot(
         cap_gain.separated_string_with_fixed_place(2),
         disposed_lot.lot.acquisition.kind,
         disposed_lot.kind,
-    );
-
-    if let Some(notifier) = notifier {
-        notifier.send(&msg).await;
-    }
-    println!("{}", msg);
+    )
 }
 
 async fn process_account_add(
@@ -698,14 +693,20 @@ async fn process_account_dispose(
     if !disposed_lots.is_empty() {
         println!("Disposed Lots:");
         for disposed_lot in disposed_lots {
-            println_disposed_lot(&disposed_lot, &mut 0., &mut 0., &mut false, &mut 0., None).await;
+            println!(
+                "{}",
+                format_disposed_lot(&disposed_lot, &mut 0., &mut 0., &mut false, &mut 0.)
+            );
         }
         println!();
     }
     Ok(())
 }
 
-async fn process_account_list(db: &Db) -> Result<(), Box<dyn std::error::Error>> {
+async fn process_account_list(
+    db: &Db,
+    show_all_disposed_lots: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
     let accounts = db.get_accounts();
     if accounts.is_empty() {
         println!("No accounts");
@@ -818,7 +819,7 @@ async fn process_account_list(db: &Db) -> Result<(), Box<dyn std::error::Error>>
         let mut disposed_lots = db.disposed_lots();
         disposed_lots.sort_by_key(|lot| lot.when);
         if !disposed_lots.is_empty() {
-            println!("Disposed Lots:");
+            println!("Disposed ({} lots):", disposed_lots.len());
 
             let mut disposed_lamports = 0;
             let mut disposed_income = 0.;
@@ -826,19 +827,28 @@ async fn process_account_list(db: &Db) -> Result<(), Box<dyn std::error::Error>>
             let mut disposed_long_term_cap_gain = 0.;
             let mut disposed_current_value = 0.;
 
-            for disposed_lot in disposed_lots {
+            for (i, disposed_lot) in disposed_lots.iter().enumerate() {
                 disposed_lamports += disposed_lot.lot.amount;
                 let mut long_term_cap_gain = false;
                 let mut disposed_cap_gain = 0.;
-                println_disposed_lot(
+                let msg = format_disposed_lot(
                     &disposed_lot,
                     &mut disposed_income,
                     &mut disposed_cap_gain,
                     &mut long_term_cap_gain,
                     &mut disposed_current_value,
-                    None,
-                )
-                .await;
+                );
+
+                if show_all_disposed_lots {
+                    println!("{}", msg);
+                } else {
+                    if disposed_lots.len() > 5 && i == disposed_lots.len().saturating_sub(5) {
+                        println!("...");
+                    }
+                    if i > disposed_lots.len().saturating_sub(5) {
+                        println!("{}", msg);
+                    }
+                }
 
                 if long_term_cap_gain {
                     disposed_long_term_cap_gain += disposed_cap_gain;
@@ -1983,8 +1993,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .help("Disposal price per SOL [default: market price on disposal date]"),
                         ),
                 )
-                .subcommand(SubCommand::with_name("ls").about("List registered accounts"))
-                .subcommand(SubCommand::with_name("xls")
+                .subcommand(
+                    SubCommand::with_name("ls")
+                        .about("List registered accounts")
+                        .arg(
+                            Arg::with_name("all")
+                                .short("a")
+                                .long("all")
+                                .help("Display all lots")
+                        ),
+                )
+                .subcommand(
+                    SubCommand::with_name("xls")
                         .about("Export an Excel spreadsheet file")
                         .arg(
                             Arg::with_name("outfile")
@@ -2449,8 +2469,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 process_account_dispose(&mut db, address, amount, description, when, price).await?;
             }
-            ("ls", Some(_arg_matches)) => {
-                process_account_list(&db).await?;
+            ("ls", Some(arg_matches)) => {
+                let all = arg_matches.is_present("all");
+                process_account_list(&db, all).await?;
             }
             ("xls", Some(arg_matches)) => {
                 let outfile = value_t_or_exit!(arg_matches, "outfile", String);
