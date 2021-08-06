@@ -187,10 +187,12 @@ async fn process_exchange_deposit<T: Signers>(
     db: &mut Db,
     rpc_client: &RpcClient,
     exchange: Exchange,
+    exchange_client: &dyn ExchangeClient,
     deposit_address: Pubkey,
     amount: Option<u64>,
     from_address: Pubkey,
     if_source_balance_exceeds: Option<u64>,
+    if_exchange_balance_less_than: Option<u64>,
     authority_address: Pubkey,
     signers: T,
     lot_numbers: Option<HashSet<usize>>,
@@ -289,6 +291,29 @@ async fn process_exchange_deposit<T: Signers>(
                 "Deposit declined because {} balance is less than {}",
                 from_address,
                 Sol(if_source_balance_exceeds)
+            );
+            return Ok(());
+        }
+    }
+
+    if let Some(if_exchange_balance_less_than) = if_exchange_balance_less_than {
+        let exchange_balance = exchange_client
+            .balances()
+            .await?
+            .get("SOL")
+            .map(|b| sol_to_lamports(b.total))
+            .unwrap_or(0)
+            + db.pending_deposits(Some(exchange))
+                .into_iter()
+                .map(|pd| pd.amount)
+                .sum::<u64>();
+
+        if exchange_balance < if_exchange_balance_less_than {
+            println!(
+                "Deposit declined because {:?} balance ({}) is less than {}",
+                exchange,
+                Sol(exchange_balance),
+                Sol(if_exchange_balance_less_than)
             );
             return Ok(());
         }
@@ -2287,6 +2312,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     "Exit successfully without depositing if the \
                                        source account balance is less than this amount",
                                 ),
+                        )
+                        .arg(
+                            Arg::with_name("if_exchange_balance_less_than")
+                                .long("if-exchange-balance-less-than")
+                                .value_name("AMOUNT")
+                                .takes_value(true)
+                                .validator(is_amount)
+                                .help(
+                                    "Exit successfully without depositing if the \
+                                        exchange SOL balance is less than this amount",
+                                ),
                         ),
                 )
                 .subcommand(
@@ -2696,6 +2732,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         value_t!(arg_matches, "if_source_balance_exceeds", f64)
                             .ok()
                             .map(sol_to_lamports);
+                    let if_exchange_balance_less_than =
+                        value_t!(arg_matches, "if_exchange_balance_less_than", f64)
+                            .ok()
+                            .map(sol_to_lamports);
                     let from_address =
                         pubkey_of_signer(arg_matches, "from", &mut wallet_manager)?.expect("from");
                     let lot_numbers = values_t!(arg_matches, "lot_numbers", usize)
@@ -2729,10 +2769,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         &mut db,
                         &rpc_client,
                         exchange,
+                        exchange_client.as_ref(),
                         deposit_address,
                         amount,
                         from_address,
                         if_source_balance_exceeds,
+                        if_exchange_balance_less_than,
                         authority_address,
                         vec![authority_signer],
                         lot_numbers,
