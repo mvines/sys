@@ -190,7 +190,7 @@ async fn process_exchange_deposit<T: Signers>(
     deposit_address: Pubkey,
     amount: Option<u64>,
     from_address: Pubkey,
-    if_balance_exceeds: Option<u64>,
+    if_source_balance_exceeds: Option<u64>,
     authority_address: Pubkey,
     signers: T,
     lot_numbers: Option<HashSet<usize>>,
@@ -283,12 +283,12 @@ async fn process_exchange_deposit<T: Signers>(
         return Err("Nothing to deposit".into());
     }
 
-    if let Some(if_balance_exceeds) = if_balance_exceeds {
-        if from_account.lamports < if_balance_exceeds {
+    if let Some(if_source_balance_exceeds) = if_source_balance_exceeds {
+        if from_account.lamports < if_source_balance_exceeds {
             println!(
                 "Deposit declined because {} balance is less than {}",
                 from_address,
-                Sol(if_balance_exceeds)
+                Sol(if_source_balance_exceeds)
             );
             return Ok(());
         }
@@ -2278,8 +2278,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .help("Optional authority of the FROM_ADDRESS"),
                         )
                         .arg(
-                            Arg::with_name("if_balance_exceeds")
-                                .long("if-balance-exceeds")
+                            Arg::with_name("if_source_balance_exceeds")
+                                .long("if-source-balance-exceeds")
                                 .value_name("AMOUNT")
                                 .takes_value(true)
                                 .validator(is_amount)
@@ -2692,9 +2692,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         "ALL" => None,
                         amount => Some(sol_to_lamports(amount.parse().unwrap())),
                     };
-                    let if_balance_exceeds = value_t!(arg_matches, "if_balance_exceeds", f64)
-                        .ok()
-                        .map(sol_to_lamports);
+                    let if_source_balance_exceeds =
+                        value_t!(arg_matches, "if_source_balance_exceeds", f64)
+                            .ok()
+                            .map(sol_to_lamports);
                     let from_address =
                         pubkey_of_signer(arg_matches, "from", &mut wallet_manager)?.expect("from");
                     let lot_numbers = values_t!(arg_matches, "lot_numbers", usize)
@@ -2731,7 +2732,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         deposit_address,
                         amount,
                         from_address,
-                        if_balance_exceeds,
+                        if_source_balance_exceeds,
                         authority_address,
                         vec![authority_signer],
                         lot_numbers,
