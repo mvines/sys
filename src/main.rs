@@ -2441,6 +2441,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 ),
                         ),
                 )
+                .subcommand(
+                    SubCommand::with_name("pending-deposits")
+                        .about("Display pending deposits")
+                        .arg(
+                            Arg::with_name("quiet")
+                                .long("quiet")
+                                .takes_value(false)
+                                .help(
+                                    "Disable output and exit with a non-zero status code \
+                                        if any deposits are pending"
+                                ),
+                        ),
+                )
                 .subcommand(SubCommand::with_name("sync").about("Synchronize exchange")),
         );
     }
@@ -2679,6 +2692,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ("address", Some(_arg_matches)) => {
                     let deposit_address = exchange_client()?.deposit_address().await?;
                     println!("{}", deposit_address);
+                }
+                ("pending-deposits", Some(arg_matches)) => {
+                    let quiet = arg_matches.is_present("quiet");
+
+                    let pending_deposits = db.pending_deposits(Some(exchange));
+                    if quiet {
+                        if !pending_deposits.is_empty() {
+                            return Err(
+                                format!("{} deposits pending", pending_deposits.len()).into()
+                            );
+                        }
+                    } else {
+                        for pending_deposit in pending_deposits {
+                            println!(
+                                "{} deposit pending ({})",
+                                Sol(pending_deposit.amount),
+                                pending_deposit.transfer.signature
+                            );
+                        }
+                    }
                 }
                 ("balance", Some(arg_matches)) => {
                     let available_only = arg_matches.is_present("available_only");
