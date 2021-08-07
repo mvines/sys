@@ -1432,10 +1432,14 @@ async fn process_account_split<T: Signers>(
     lot_numbers: Option<HashSet<usize>>,
     authority_address: Pubkey,
     signers: T,
+    into_keypair: Option<Keypair>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (recent_blockhash, _fee_calculator) = rpc_client.get_recent_blockhash()?;
 
-    let into_account = Keypair::new();
+    let into_keypair = into_keypair.unwrap_or_else(Keypair::new);
+    if db.get_account(into_keypair.pubkey()).is_some() {
+        return Err(format!("Account {} already exists", into_keypair.pubkey()).into());
+    }
 
     // TODO: Support splitting two system accounts? Otherwise at least error cleanly when it's attempted
 
@@ -1443,7 +1447,7 @@ async fn process_account_split<T: Signers>(
         &from_address,
         &authority_address,
         amount,
-        &into_account.pubkey(),
+        &into_keypair.pubkey(),
     );
 
     let message = Message::new(&instructions, Some(&authority_address));
@@ -1459,18 +1463,18 @@ async fn process_account_split<T: Signers>(
         "Splitting {} from {} into {}",
         Sol(amount),
         from_address,
-        into_account.pubkey(),
+        into_keypair.pubkey(),
     );
 
     transaction.partial_sign(&signers, recent_blockhash);
-    transaction.try_sign(&[&into_account], recent_blockhash)?;
+    transaction.try_sign(&[&into_keypair], recent_blockhash)?;
 
     let signature = transaction.signatures[0];
     println!("Transaction signature: {}", signature);
 
     let epoch = rpc_client.get_epoch_info()?.epoch;
     db.add_account(TrackedAccount {
-        address: into_account.pubkey(),
+        address: into_keypair.pubkey(),
         description,
         last_update_epoch: epoch.saturating_sub(1),
         last_update_balance: 0,
@@ -1481,7 +1485,7 @@ async fn process_account_split<T: Signers>(
         signature,
         from_address,
         Some(amount),
-        into_account.pubkey(),
+        into_keypair.pubkey(),
         lot_numbers,
     )?;
 
@@ -1502,7 +1506,7 @@ async fn process_account_split<T: Signers>(
             }
             Ok(None) => {
                 db.cancel_transfer(signature)?;
-                db.remove_account(into_account.pubkey())?;
+                db.remove_account(into_keypair.pubkey())?;
                 return Err("Split failed: {}".into());
             }
             Ok(_) => {
@@ -2181,7 +2185,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .value_name("KEYPAIR")
                                 .takes_value(true)
                                 .validator(is_valid_signer)
-                                .help("Optional authority for the merge"),
+                                .help("Optional authority for the split"),
+                        )
+                        .arg(
+                            Arg::with_name("into_keypair")
+                                .long("into")
+                                .value_name("KEYPAIR")
+                                .takes_value(true)
+                                .validator(is_keypair)
+                                .help("Optional keypair of the split destination [default: randomly generated]"),
                         )
                         .arg(
                             Arg::with_name("lot_numbers")
@@ -2617,6 +2629,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let lot_numbers = values_t!(arg_matches, "lot_numbers", usize)
                     .ok()
                     .map(|x| x.into_iter().collect());
+                let into_keypair = keypair_of(arg_matches, "into_keypair");
 
                 let (authority_signer, authority_address) = if arg_matches.is_present("by") {
                     signer_of(arg_matches, "by", &mut wallet_manager)?
@@ -2641,6 +2654,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     lot_numbers,
                     authority_address,
                     vec![authority_signer],
+                    into_keypair,
                 )
                 .await?;
             }
