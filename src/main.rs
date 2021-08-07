@@ -2517,6 +2517,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let address = pubkey_of(arg_matches, "address").unwrap();
                 let confirm = arg_matches.is_present("confirm");
 
+                let account = db
+                    .get_account(address)
+                    .ok_or_else(|| format!("Account {} does not exist", address))?;
+                if !account.lots.is_empty() {
+                    return Err(format!("Account {} is not empty", address).into());
+                }
+
                 if !confirm {
                     println!("Add --confirm to remove {}", address);
                     return Ok(());
