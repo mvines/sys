@@ -982,7 +982,11 @@ async fn process_account_list(
     Ok(())
 }
 
-async fn process_account_xls(db: &Db, outfile: &str) -> Result<(), Box<dyn std::error::Error>> {
+async fn process_account_xls(
+    db: &Db,
+    outfile: &str,
+    filter_by_year: Option<i32>,
+) -> Result<(), Box<dyn std::error::Error>> {
     use simple_excel_writer::*;
 
     let mut workbook = Workbook::create(outfile);
@@ -1000,6 +1004,15 @@ async fn process_account_xls(db: &Db, outfile: &str) -> Result<(), Box<dyn std::
 
     let mut disposed_lots = db.disposed_lots();
     disposed_lots.sort_by_key(|lot| lot.when);
+
+    if let Some(filter_by_year) = filter_by_year {
+        // Exclude disposed lots that were neither acquired nor disposed of in the filter year
+        disposed_lots.retain(|disposed_lot| {
+            (disposed_lot.lot.acquisition.when.year() == filter_by_year
+                && disposed_lot.lot.income() > 0.)
+                || disposed_lot.when.year() == filter_by_year
+        })
+    }
 
     workbook.write_sheet(&mut sheet, |sheet_writer| {
         sheet_writer.append_row(row![
@@ -1076,6 +1089,13 @@ async fn process_account_xls(db: &Db, outfile: &str) -> Result<(), Box<dyn std::
 
         for account in db.get_accounts().values() {
             for lot in account.lots.iter() {
+                if let Some(filter_by_year) = filter_by_year {
+                    // Exclude lot if it was not acquired in the filter year
+                    if lot.acquisition.when.year() != filter_by_year || lot.income() == 0. {
+                        continue;
+                    }
+                }
+
                 rows.push((
                     lot.acquisition.when,
                     row![
@@ -1096,6 +1116,12 @@ async fn process_account_xls(db: &Db, outfile: &str) -> Result<(), Box<dyn std::
 
         for open_order in db.open_orders(None) {
             for lot in open_order.lots.iter() {
+                if let Some(filter_by_year) = filter_by_year {
+                    // Exclude lot if it was not acquired in the filter year
+                    if lot.acquisition.when.year() != filter_by_year || lot.income() == 0. {
+                        continue;
+                    }
+                }
                 rows.push((
                     lot.acquisition.when,
                     row![
@@ -2093,6 +2119,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .value_name("FILEPATH")
                                 .takes_value(true)
                                 .help(".xls file to write"),
+                        )
+                        .arg(
+                            Arg::with_name("year")
+                                .long("year")
+                                .value_name("YYYY")
+                                .takes_value(true)
+                                .validator(is_parsable::<usize>)
+                                .help("Limit export to realized gains affecting the given year"),
                         ),
                 )
                 .subcommand(
@@ -2588,7 +2622,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             ("xls", Some(arg_matches)) => {
                 let outfile = value_t_or_exit!(arg_matches, "outfile", String);
-                process_account_xls(&db, &outfile).await?;
+                let filter_by_year = value_t!(arg_matches, "year", i32).ok();
+                process_account_xls(&db, &outfile, filter_by_year).await?;
             }
             ("remove", Some(arg_matches)) => {
                 let address = pubkey_of(arg_matches, "address").unwrap();
