@@ -31,7 +31,12 @@ use {
         transaction::Transaction,
     },
     solana_transaction_status::UiTransactionEncoding,
-    std::{collections::HashSet, path::PathBuf, process::exit, str::FromStr},
+    std::{
+        collections::{BTreeMap, HashSet},
+        path::PathBuf,
+        process::exit,
+        str::FromStr,
+    },
 };
 
 fn is_long_term_cap_gain(acquisition: NaiveDate, disposal: Option<NaiveDate>) -> bool {
@@ -728,10 +733,19 @@ async fn process_account_dispose(
     Ok(())
 }
 
+#[derive(Default, Debug)]
+struct RealizedGain {
+    income: f64,
+    short_term_cap_gain: f64,
+    long_term_cap_gain: f64,
+}
+
 async fn process_account_list(
     db: &Db,
     show_all_disposed_lots: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let mut annual_realized_gains = BTreeMap::<usize, RealizedGain>::default();
+
     let accounts = db.get_accounts();
     if accounts.is_empty() {
         println!("No accounts");
@@ -740,8 +754,8 @@ async fn process_account_list(
 
         let mut total_income = 0.;
         let mut total_held_lamports = 0;
-        let mut total_short_term_gain = 0.;
-        let mut total_long_term_gain = 0.;
+        let mut total_unrealized_short_term_gain = 0.;
+        let mut total_unrealized_long_term_gain = 0.;
         let mut total_current_value = 0.;
 
         let open_orders = db.open_orders(None);
@@ -767,8 +781,8 @@ async fn process_account_list(
 
                 let mut account_income = 0.;
                 let mut account_current_value = 0.;
-                let mut account_short_term_gain = 0.;
-                let mut account_long_term_gain = 0.;
+                let mut account_unrealized_short_term_gain = 0.;
+                let mut account_unrealized_long_term_gain = 0.;
 
                 for lot in lots {
                     let mut account_unrealized_gain = 0.;
@@ -784,10 +798,15 @@ async fn process_account_list(
                     )
                     .await;
 
+                    annual_realized_gains
+                        .entry(lot.acquisition.when.year() as usize)
+                        .or_default()
+                        .income += lot.income();
+
                     if long_term_cap_gain {
-                        account_long_term_gain += account_unrealized_gain;
+                        account_unrealized_long_term_gain += account_unrealized_gain;
                     } else {
-                        account_short_term_gain += account_unrealized_gain;
+                        account_unrealized_short_term_gain += account_unrealized_gain;
                     }
                 }
 
@@ -816,10 +835,15 @@ async fn process_account_list(
                         )
                         .await;
 
+                        annual_realized_gains
+                            .entry(lot.acquisition.when.year() as usize)
+                            .or_default()
+                            .income += lot.income();
+
                         if long_term_cap_gain {
-                            account_long_term_gain += account_unrealized_gain;
+                            account_unrealized_long_term_gain += account_unrealized_gain;
                         } else {
-                            account_short_term_gain += account_unrealized_gain;
+                            account_unrealized_short_term_gain += account_unrealized_gain;
                         }
                     }
                 }
@@ -828,11 +852,11 @@ async fn process_account_list(
                     "    Value: ${}, income: ${}, unrealized short-term cap gain: ${}, unrealized long-term cap gain: ${}",
                     account_current_value.separated_string_with_fixed_place(2),
                     account_income.separated_string_with_fixed_place(2),
-                    account_short_term_gain.separated_string_with_fixed_place(2),
-                    account_long_term_gain.separated_string_with_fixed_place(2),
+                    account_unrealized_short_term_gain.separated_string_with_fixed_place(2),
+                    account_unrealized_long_term_gain.separated_string_with_fixed_place(2),
                 );
-                total_short_term_gain += account_short_term_gain;
-                total_long_term_gain += account_long_term_gain;
+                total_unrealized_short_term_gain += account_unrealized_short_term_gain;
+                total_unrealized_long_term_gain += account_unrealized_long_term_gain;
                 total_income += account_income;
                 total_current_value += account_current_value;
             } else {
@@ -875,10 +899,21 @@ async fn process_account_list(
                     }
                 }
 
+                annual_realized_gains
+                    .entry(disposed_lot.lot.acquisition.when.year() as usize)
+                    .or_default()
+                    .income += disposed_lot.lot.income();
+
+                let realized_gain = annual_realized_gains
+                    .entry(disposed_lot.when.year() as usize)
+                    .or_default();
+
                 if long_term_cap_gain {
                     disposed_long_term_cap_gain += disposed_cap_gain;
+                    realized_gain.long_term_cap_gain += disposed_cap_gain;
                 } else {
                     disposed_short_term_cap_gain += disposed_cap_gain;
+                    realized_gain.short_term_cap_gain += disposed_cap_gain;
                 }
             }
             println!(
@@ -901,6 +936,23 @@ async fn process_account_list(
             println!();
         }
 
+        println!("Realized Gains");
+        println!("  Year | Income           | Short-term cap gain | Long-term cap gain");
+        for (year, realized_gain) in annual_realized_gains {
+            println!(
+                "  {} | ${:15} | ${:18} | ${:18}",
+                year,
+                realized_gain.income.separated_string_with_fixed_place(2),
+                realized_gain
+                    .short_term_cap_gain
+                    .separated_string_with_fixed_place(2),
+                realized_gain
+                    .long_term_cap_gain
+                    .separated_string_with_fixed_place(2),
+            );
+        }
+        println!();
+
         println!("Current Holdings Summary");
         println!(
             "  Price per SOL:       ${}",
@@ -915,16 +967,16 @@ async fn process_account_list(
             total_current_value.separated_string_with_fixed_place(2)
         );
         println!(
-            "  Income:              ${}",
+            "  Income:              ${} (realized)",
             total_income.separated_string_with_fixed_place(2)
         );
         println!(
-            "  Short-term cap gain: ${}",
-            total_short_term_gain.separated_string_with_fixed_place(2)
+            "  Short-term cap gain: ${} (unrealized)",
+            total_unrealized_short_term_gain.separated_string_with_fixed_place(2)
         );
         println!(
-            "  Long-term cap gain:  ${}",
-            total_long_term_gain.separated_string_with_fixed_place(2)
+            "  Long-term cap gain:  ${} (unrealized)",
+            total_unrealized_long_term_gain.separated_string_with_fixed_place(2)
         );
     }
     Ok(())
