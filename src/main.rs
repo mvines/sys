@@ -937,10 +937,10 @@ async fn process_account_list(
         }
 
         println!("Realized Gains");
-        println!("  Year | Income           | Short-term cap gain | Long-term cap gain");
+        println!("  Year | Income           | Short-term cap gain | Long-term cap gain  | Total");
         for (year, realized_gain) in annual_realized_gains {
             println!(
-                "  {} | ${:15} | ${:18} | ${:18}",
+                "  {} | ${:15} | ${:18} | ${:18} | ${:18}",
                 year,
                 realized_gain.income.separated_string_with_fixed_place(2),
                 realized_gain
@@ -948,6 +948,10 @@ async fn process_account_list(
                     .separated_string_with_fixed_place(2),
                 realized_gain
                     .long_term_cap_gain
+                    .separated_string_with_fixed_place(2),
+                (realized_gain.income
+                    + realized_gain.short_term_cap_gain
+                    + realized_gain.long_term_cap_gain)
                     .separated_string_with_fixed_place(2),
             );
         }
