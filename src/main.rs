@@ -33,6 +33,7 @@ use {
     solana_transaction_status::UiTransactionEncoding,
     std::{
         collections::{BTreeMap, HashSet},
+        fs,
         path::PathBuf,
         process::exit,
         str::FromStr,
@@ -2557,6 +2558,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     let mut wallet_manager = None;
     let notifier = Notifier::default();
+
+    if !db_path.exists() {
+        fs::create_dir_all(&db_path)?;
+    }
+
+    let mut db_fd_lock = fd_lock::RwLock::new(fs::File::open(&db_path).unwrap());
+    let _db_write_lock = db_fd_lock.try_write().unwrap_or_else(|err| {
+        eprintln!(
+            "Unable to lock database directory: {}: {}",
+            db_path.display(),
+            err
+        );
+        exit(1);
+    });
 
     let mut db = db::new(&db_path).unwrap_or_else(|err| {
         eprintln!("Failed to open {}: {}", db_path.display(), err);
