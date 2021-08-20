@@ -86,6 +86,33 @@ fn add_exchange_deposit_address_to_db(
     Ok(())
 }
 
+async fn verify_exchange_sol_balance(
+    db: &mut Db,
+    exchange: Exchange,
+    exchange_client: &dyn ExchangeClient,
+    deposit_address: &Pubkey,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let exchange_sol_balance = {
+        let balances = exchange_client.balances().await?;
+        balances.get("SOL").cloned().unwrap_or_default().total
+    };
+
+    let exchange_account = db
+        .get_account(*deposit_address)
+        .expect("exchange deposit address does not exist in database");
+    let total_lot_balance =
+        lamports_to_sol(exchange_account.lots.iter().map(|lot| lot.amount).sum());
+
+    if exchange_sol_balance < total_lot_balance {
+        eprintln!(
+            "{:?} actual balance is less than local database amount. Actual ◎{}, expected ◎{}",
+            exchange, exchange_sol_balance, total_lot_balance
+        );
+        exit(1);
+    }
+    Ok(())
+}
+
 async fn process_sync_exchange(
     db: &mut Db,
     exchange: Exchange,
@@ -95,6 +122,8 @@ async fn process_sync_exchange(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let deposit_address = exchange_client.deposit_address().await?;
     add_exchange_deposit_address_to_db(db, exchange, deposit_address, rpc_client)?;
+
+    verify_exchange_sol_balance(db, exchange, exchange_client, &deposit_address).await?;
 
     let recent_deposits = exchange_client.recent_deposits().await?;
 
@@ -185,6 +214,7 @@ async fn process_sync_exchange(
             notifier.send(&format!("{:?}: {}", exchange, msg)).await;
         }
     }
+
     Ok(())
 }
 
