@@ -764,7 +764,7 @@ async fn process_account_dispose(
     Ok(())
 }
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, PartialEq)]
 struct RealizedGain {
     income: f64,
     short_term_cap_gain: f64,
@@ -775,7 +775,7 @@ async fn process_account_list(
     db: &Db,
     show_all_disposed_lots: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let mut annual_realized_gains = BTreeMap::<usize, RealizedGain>::default();
+    let mut annual_realized_gains = BTreeMap::<usize, [RealizedGain; 4]>::default();
 
     let accounts = db.get_accounts();
     if accounts.is_empty() {
@@ -831,7 +831,7 @@ async fn process_account_list(
 
                     annual_realized_gains
                         .entry(lot.acquisition.when.year() as usize)
-                        .or_default()
+                        .or_default()[lot.acquisition.when.month0() as usize / 3]
                         .income += lot.income();
 
                     if long_term_cap_gain {
@@ -868,7 +868,7 @@ async fn process_account_list(
 
                         annual_realized_gains
                             .entry(lot.acquisition.when.year() as usize)
-                            .or_default()
+                            .or_default()[lot.acquisition.when.month0() as usize / 3]
                             .income += lot.income();
 
                         if long_term_cap_gain {
@@ -912,7 +912,7 @@ async fn process_account_list(
                 let mut long_term_cap_gain = false;
                 let mut disposed_cap_gain = 0.;
                 let msg = format_disposed_lot(
-                    &disposed_lot,
+                    disposed_lot,
                     &mut disposed_income,
                     &mut disposed_cap_gain,
                     &mut long_term_cap_gain,
@@ -932,12 +932,12 @@ async fn process_account_list(
 
                 annual_realized_gains
                     .entry(disposed_lot.lot.acquisition.when.year() as usize)
-                    .or_default()
+                    .or_default()[disposed_lot.lot.acquisition.when.month0() as usize / 3]
                     .income += disposed_lot.lot.income();
 
-                let realized_gain = annual_realized_gains
+                let mut realized_gain = &mut annual_realized_gains
                     .entry(disposed_lot.when.year() as usize)
-                    .or_default();
+                    .or_default()[disposed_lot.when.month0() as usize / 3];
 
                 if long_term_cap_gain {
                     disposed_long_term_cap_gain += disposed_cap_gain;
@@ -968,23 +968,30 @@ async fn process_account_list(
         }
 
         println!("Realized Gains");
-        println!("  Year | Income           | Short-term cap gain | Long-term cap gain  | Total");
-        for (year, realized_gain) in annual_realized_gains {
-            println!(
-                "  {} | ${:15} | ${:18} | ${:18} | ${:18}",
-                year,
-                realized_gain.income.separated_string_with_fixed_place(2),
-                realized_gain
-                    .short_term_cap_gain
-                    .separated_string_with_fixed_place(2),
-                realized_gain
-                    .long_term_cap_gain
-                    .separated_string_with_fixed_place(2),
-                (realized_gain.income
-                    + realized_gain.short_term_cap_gain
-                    + realized_gain.long_term_cap_gain)
-                    .separated_string_with_fixed_place(2),
-            );
+        println!(
+            "  Year    | Income           | Short-term cap gain | Long-term cap gain  | Total"
+        );
+        for (year, quarters) in annual_realized_gains {
+            for (q, realized_gain) in quarters.iter().enumerate() {
+                if *realized_gain != RealizedGain::default() {
+                    println!(
+                        "  {} Q{} | ${:15} | ${:18} | ${:18} | ${:18}",
+                        year,
+                        q + 1,
+                        realized_gain.income.separated_string_with_fixed_place(2),
+                        realized_gain
+                            .short_term_cap_gain
+                            .separated_string_with_fixed_place(2),
+                        realized_gain
+                            .long_term_cap_gain
+                            .separated_string_with_fixed_place(2),
+                        (realized_gain.income
+                            + realized_gain.short_term_cap_gain
+                            + realized_gain.long_term_cap_gain)
+                            .separated_string_with_fixed_place(2),
+                    );
+                }
+            }
         }
         println!();
 
@@ -1339,7 +1346,7 @@ async fn process_account_sweep<T: Signers>(
         })?;
 
     let (sweep_stake_authorized, sweep_stake_vote_account_address) =
-        rpc_client_utils::get_stake_authorized(&rpc_client, sweep_stake_account.address)?;
+        rpc_client_utils::get_stake_authorized(rpc_client, sweep_stake_account.address)?;
 
     if sweep_stake_authorized.staker != sweep_stake_authority_keypair.pubkey() {
         return Err("Stake authority mismatch".into());
@@ -1699,7 +1706,7 @@ async fn process_account_sync(
                 account.last_update_balance += inflation_reward.amount;
 
                 let slot = inflation_reward.effective_slot;
-                let (when, price) = coin_gecko::get_block_date_and_price(&rpc_client, slot).await?;
+                let (when, price) = coin_gecko::get_block_date_and_price(rpc_client, slot).await?;
 
                 let lot = Lot {
                     lot_number: db.next_lot_number(),
@@ -1722,7 +1729,7 @@ async fn process_account_sync(
                     &mut 0.,
                     &mut false,
                     &mut 0.,
-                    Some(&notifier),
+                    Some(notifier),
                 )
                 .await;
                 account.lots.push(lot);
@@ -1745,7 +1752,7 @@ async fn process_account_sync(
             );
         } else if current_balance > account.last_update_balance + sol_to_lamports(1.) {
             let slot = epoch_info.absolute_slot;
-            let (when, price) = coin_gecko::get_block_date_and_price(&rpc_client, slot).await?;
+            let (when, price) = coin_gecko::get_block_date_and_price(rpc_client, slot).await?;
             let amount = current_balance - account.last_update_balance;
 
             let lot = Lot {
@@ -1769,7 +1776,7 @@ async fn process_account_sync(
                 &mut 0.,
                 &mut false,
                 &mut 0.,
-                Some(&notifier),
+                Some(notifier),
             )
             .await;
             account.lots.push(lot);
