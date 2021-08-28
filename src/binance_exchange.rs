@@ -222,7 +222,7 @@ impl ExchangeClient for BinanceExchangeClient {
 
         let ticker_price = market_data_client
             .get_24hr_ticker_price()
-            .with_symbol(&pair)
+            .with_symbol(pair)
             .json::<TickerPrice>()
             .await?;
 

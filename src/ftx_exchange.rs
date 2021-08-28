@@ -174,7 +174,7 @@ impl ExchangeClient for FtxExchangeClient {
         let order_info = self
             .rest
             .place_order(
-                &pair,
+                pair,
                 OrderSide::Sell,
                 Some(FromPrimitive::from_f64(price).unwrap()),
                 OrderType::Limit,
