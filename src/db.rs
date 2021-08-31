@@ -430,7 +430,10 @@ impl Db {
             .clone();
 
         pending_deposits.retain(|pd| pd.transfer.signature != signature);
-        self.db.set("deposits", &pending_deposits).unwrap();
+
+        self.db.lrem_list("deposits")?;
+        self.db.lcreate("deposits")?;
+        self.db.lextend("deposits", &pending_deposits).unwrap();
 
         self.complete_transfer_or_deposit(transfer, success) // `complete_transfer_or_deposit` calls `save`...
     }
@@ -445,7 +448,10 @@ impl Db {
 
     pub fn pending_deposits(&self, exchange: Option<Exchange>) -> Vec<PendingDeposit> {
         if !self.db.lexists("deposits") {
-            return Vec::default();
+            // Handle buggy older databases with "deposits" saved as a value instead of list.
+            if self.db.exists("deposits") {
+                return self.db.get::<Vec<PendingDeposit>>("deposits").unwrap();
+            }
         }
         self.db
             .liter("deposits")
