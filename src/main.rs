@@ -487,10 +487,11 @@ async fn process_exchange_sell(
         }
     }
 
-    let mut price = match price {
+    let price = match price {
         LimitOrderPrice::At(price) => price,
         LimitOrderPrice::AmountOverAsk(extra) => bid_ask.ask_price + extra,
     };
+    let mut price = (price * 100.).round() / 100.; // Round to two decimal places
 
     if let Some(if_price_over) = if_price_over {
         if price <= if_price_over {
