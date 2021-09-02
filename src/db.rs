@@ -91,6 +91,7 @@ pub struct PendingDeposit {
 pub struct PendingTransfer {
     #[serde(with = "field_as_string")]
     pub signature: Signature, // transaction signature of the transfer
+    pub last_valid_block_height: u64,
 
     #[serde(with = "field_as_string")]
     pub from_address: Pubkey,
@@ -388,9 +389,11 @@ impl Db {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn record_deposit(
         &mut self,
         signature: Signature,
+        last_valid_block_height: u64,
         from_address: Pubkey,
         amount: u64,
         exchange: Exchange,
@@ -410,6 +413,7 @@ impl Db {
             amount,
             transfer: PendingTransfer {
                 signature,
+                last_valid_block_height,
                 from_address,
                 to_address: deposit_address,
                 lots: from_account.extract_lots(self, amount, lot_numbers)?,
@@ -777,9 +781,11 @@ impl Db {
         self.save()
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn record_transfer(
         &mut self,
         signature: Signature,
+        last_valid_block_height: u64,
         from_address: Pubkey,
         amount: Option<u64>, // None = all
         to_address: Pubkey,
@@ -796,6 +802,7 @@ impl Db {
 
         pending_transfers.push(PendingTransfer {
             signature,
+            last_valid_block_height,
             from_address,
             to_address,
             lots: from_account.extract_lots(

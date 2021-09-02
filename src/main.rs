@@ -233,7 +233,9 @@ async fn process_exchange_deposit<T: Signers>(
     signers: T,
     lot_numbers: Option<HashSet<usize>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let (recent_blockhash, fee_calculator) = rpc_client.get_recent_blockhash()?;
+    let (recent_blockhash, fee_calculator, last_valid_block_height) = rpc_client
+        .get_recent_blockhash_with_commitment(rpc_client.commitment())?
+        .value;
 
     let from_account = rpc_client
         .get_account_with_commitment(&from_address, rpc_client.commitment())?
@@ -384,6 +386,7 @@ async fn process_exchange_deposit<T: Signers>(
 
     db.record_deposit(
         signature,
+        last_valid_block_height,
         from_address,
         lamports,
         exchange,
@@ -1204,7 +1207,9 @@ async fn process_account_merge<T: Signers>(
     authority_address: Pubkey,
     signers: T,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let (recent_blockhash, fee_calculator) = rpc_client.get_recent_blockhash()?;
+    let (recent_blockhash, fee_calculator, last_valid_block_height) = rpc_client
+        .get_recent_blockhash_with_commitment(rpc_client.commitment())?
+        .value;
 
     let from_account = rpc_client
         .get_account_with_commitment(&from_address, rpc_client.commitment())?
@@ -1260,7 +1265,14 @@ async fn process_account_merge<T: Signers>(
     let signature = transaction.signatures[0];
     println!("Transaction signature: {}", signature);
 
-    db.record_transfer(signature, from_address, None, into_address, None)?;
+    db.record_transfer(
+        signature,
+        last_valid_block_height,
+        from_address,
+        None,
+        into_address,
+        None,
+    )?;
 
     loop {
         match rpc_client.send_and_confirm_transaction_with_spinner(&transaction) {
@@ -1299,7 +1311,9 @@ async fn process_account_sweep<T: Signers>(
     signers: T,
     notifier: &Notifier,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let (recent_blockhash, fee_calculator) = rpc_client.get_recent_blockhash()?;
+    let (recent_blockhash, fee_calculator, last_valid_block_height) = rpc_client
+        .get_recent_blockhash_with_commitment(rpc_client.commitment())?
+        .value;
 
     let from_account = rpc_client
         .get_account_with_commitment(&from_address, rpc_client.commitment())?
@@ -1506,6 +1520,7 @@ async fn process_account_sweep<T: Signers>(
     db.add_transitory_sweep_stake_address(transitory_stake_account.pubkey(), epoch)?;
     db.record_transfer(
         signature,
+        last_valid_block_height,
         from_address,
         Some(sweep_amount),
         transitory_stake_account.pubkey(),
@@ -1555,7 +1570,9 @@ async fn process_account_split<T: Signers>(
     signers: T,
     into_keypair: Option<Keypair>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let (recent_blockhash, _fee_calculator) = rpc_client.get_recent_blockhash()?;
+    let (recent_blockhash, _fee_calculator, last_valid_block_height) = rpc_client
+        .get_recent_blockhash_with_commitment(rpc_client.commitment())?
+        .value;
 
     let into_keypair = into_keypair.unwrap_or_else(Keypair::new);
     if db.get_account(into_keypair.pubkey()).is_some() {
@@ -1604,6 +1621,7 @@ async fn process_account_split<T: Signers>(
     })?;
     db.record_transfer(
         signature,
+        last_valid_block_height,
         from_address,
         Some(amount),
         into_keypair.pubkey(),
@@ -1794,13 +1812,25 @@ async fn process_account_sync_pending_transfers(
     db: &mut Db,
     rpc_client: &RpcClient,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    for PendingTransfer { signature, .. } in db.pending_transfers() {
+    let block_height = rpc_client.get_epoch_info()?.block_height;
+    for PendingTransfer {
+        signature,
+        last_valid_block_height,
+        ..
+    } in db.pending_transfers()
+    {
         if rpc_client.confirm_transaction(&signature)? {
             println!("Pending transfer confirmed: {}", signature);
             db.confirm_transfer(signature)?;
-        } else {
+        } else if block_height > last_valid_block_height {
             println!("Pending transfer cancelled: {}", signature);
             db.cancel_transfer(signature)?;
+        } else {
+            println!(
+                "Transfer pending for at most {} slots: {}",
+                last_valid_block_height.saturating_sub(block_height),
+                signature
+            );
         }
     }
     Ok(())
@@ -1931,7 +1961,9 @@ async fn process_account_sync_sweep(
         );
         let mut transaction = Transaction::new_unsigned(message);
 
-        let (recent_blockhash, _fee_calculator) = rpc_client.get_recent_blockhash()?;
+        let (recent_blockhash, _fee_calculator, last_valid_block_height) = rpc_client
+            .get_recent_blockhash_with_commitment(rpc_client.commitment())?
+            .value;
         transaction.message.recent_blockhash = recent_blockhash;
         let simulation_result = rpc_client.simulate_transaction(&transaction)?.value;
         if simulation_result.err.is_some() {
@@ -1944,6 +1976,7 @@ async fn process_account_sync_sweep(
         println!("Transaction signature: {}", signature);
         db.record_transfer(
             signature,
+            last_valid_block_height,
             transitory_sweep_stake_address,
             None,
             sweep_stake_account_info.address,
