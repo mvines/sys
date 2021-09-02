@@ -19,7 +19,10 @@ use {
     notifier::*,
     separator::FixedPlaceSeparatable,
     solana_clap_utils::{self, input_parsers::*, input_validators::*},
-    solana_client::{rpc_client::RpcClient, rpc_response::StakeActivationState},
+    solana_client::{
+        rpc_client::RpcClient,
+        rpc_response::{Fees, StakeActivationState},
+    },
     solana_sdk::{
         commitment_config::CommitmentConfig,
         message::Message,
@@ -126,6 +129,7 @@ async fn process_sync_exchange(
     verify_exchange_sol_balance(db, exchange, exchange_client, &deposit_address).await?;
 
     let recent_deposits = exchange_client.recent_deposits().await?;
+    let block_height = rpc_client.get_epoch_info()?.block_height;
 
     for pending_deposit in db.pending_deposits(Some(exchange)) {
         if let Some(deposit_info) = recent_deposits.iter().find(|deposit_info| {
@@ -164,10 +168,21 @@ async fn process_sync_exchange(
                 println!("{}", msg);
                 notifier.send(&format!("{:?}: {}", exchange, msg)).await;
             }
+        } else if block_height > pending_deposit.transfer.last_valid_block_height {
+            println!(
+                "Pending deposit cancelled: {}",
+                pending_deposit.transfer.signature
+            );
+            db.cancel_deposit(pending_deposit.transfer.signature)
+                .expect("cancel_deposit");
         } else {
             println!(
-                "{} deposit pending ({})",
+                "{} deposit pending for at most {} blocks ({})",
                 Sol(pending_deposit.amount),
+                pending_deposit
+                    .transfer
+                    .last_valid_block_height
+                    .saturating_sub(block_height),
                 pending_deposit.transfer.signature
             );
         }
@@ -233,9 +248,11 @@ async fn process_exchange_deposit<T: Signers>(
     signers: T,
     lot_numbers: Option<HashSet<usize>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let (recent_blockhash, fee_calculator, last_valid_block_height) = rpc_client
-        .get_recent_blockhash_with_commitment(rpc_client.commitment())?
-        .value;
+    let Fees {
+        blockhash: recent_blockhash,
+        fee_calculator,
+        last_valid_block_height,
+    } = rpc_client.get_fees()?;
 
     let from_account = rpc_client
         .get_account_with_commitment(&from_address, rpc_client.commitment())?
@@ -1207,9 +1224,11 @@ async fn process_account_merge<T: Signers>(
     authority_address: Pubkey,
     signers: T,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let (recent_blockhash, fee_calculator, last_valid_block_height) = rpc_client
-        .get_recent_blockhash_with_commitment(rpc_client.commitment())?
-        .value;
+    let Fees {
+        blockhash: recent_blockhash,
+        fee_calculator,
+        last_valid_block_height,
+    } = rpc_client.get_fees()?;
 
     let from_account = rpc_client
         .get_account_with_commitment(&from_address, rpc_client.commitment())?
@@ -1311,9 +1330,11 @@ async fn process_account_sweep<T: Signers>(
     signers: T,
     notifier: &Notifier,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let (recent_blockhash, fee_calculator, last_valid_block_height) = rpc_client
-        .get_recent_blockhash_with_commitment(rpc_client.commitment())?
-        .value;
+    let Fees {
+        blockhash: recent_blockhash,
+        fee_calculator,
+        last_valid_block_height,
+    } = rpc_client.get_fees()?;
 
     let from_account = rpc_client
         .get_account_with_commitment(&from_address, rpc_client.commitment())?
@@ -1570,9 +1591,11 @@ async fn process_account_split<T: Signers>(
     signers: T,
     into_keypair: Option<Keypair>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let (recent_blockhash, _fee_calculator, last_valid_block_height) = rpc_client
-        .get_recent_blockhash_with_commitment(rpc_client.commitment())?
-        .value;
+    let Fees {
+        blockhash: recent_blockhash,
+        fee_calculator: _,
+        last_valid_block_height,
+    } = rpc_client.get_fees()?;
 
     let into_keypair = into_keypair.unwrap_or_else(Keypair::new);
     if db.get_account(into_keypair.pubkey()).is_some() {
@@ -1827,7 +1850,7 @@ async fn process_account_sync_pending_transfers(
             db.cancel_transfer(signature)?;
         } else {
             println!(
-                "Transfer pending for at most {} slots: {}",
+                "Transfer pending for at most {} blocks: {}",
                 last_valid_block_height.saturating_sub(block_height),
                 signature
             );
