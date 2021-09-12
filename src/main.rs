@@ -2429,7 +2429,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             Arg::with_name("pair")
                                 .value_name("TRADING_PAIR")
                                 .takes_value(true)
-                                .default_value("SOLUSDT"),
+                                .default_value("SOLUSD"),
                         )
                         .arg(
                             Arg::with_name("ask")
@@ -2586,7 +2586,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .long("pair")
                                 .value_name("TRADING_PAIR")
                                 .takes_value(true)
-                                .default_value("SOLUSDT")
+                                .default_value("SOLUSD")
                                 .help("Market to place the order at"),
                         )
                         .arg(
