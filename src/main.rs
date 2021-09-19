@@ -188,13 +188,14 @@ async fn process_sync_exchange(
         }
     }
 
-    for order_info in db.open_orders(Some(exchange)) {
+    for order_info in db.open_orders(Some(exchange), Some(OrderSide::Sell)) {
         let order_status = exchange_client
             .sell_order_status(&order_info.pair, &order_info.order_id)
             .await?;
         let order_summary = format!(
-            "{}: ◎{} at ${} (◎{} filled), created {}, id {}",
+            "{}: {:?} ◎{} at ${} (◎{} filled), created {}, id {}",
             order_info.pair,
+            order_info.side,
             order_status.amount,
             order_status.price,
             order_status.filled_amount,
@@ -444,13 +445,15 @@ async fn process_exchange_cancel(
     exchange_client: &dyn ExchangeClient,
     order_ids: HashSet<String>,
     max_create_time: Option<DateTime<Utc>>,
+    side: Option<OrderSide>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut cancelled_count = 0;
-    for order_info in db.open_orders(Some(exchange)) {
+    for order_info in db.open_orders(Some(exchange), side) {
         let mut cancel = false;
         if order_ids.contains(&order_info.order_id) {
             cancel = true;
         }
+
         if let Some(ref max_create_time) = max_create_time {
             if order_info.creation_time < *max_create_time {
                 cancel = true;
@@ -810,7 +813,7 @@ async fn process_account_list(
         let mut total_unrealized_long_term_gain = 0.;
         let mut total_current_value = 0.;
 
-        let open_orders = db.open_orders(None);
+        let open_sell_orders = db.open_orders(None, Some(OrderSide::Sell));
 
         for account in accounts.values() {
             println!(
@@ -822,12 +825,12 @@ async fn process_account_list(
             account.assert_lot_balance();
             total_held_lamports += account.last_update_balance;
 
-            let open_orders = open_orders
+            let sell_open_orders = open_sell_orders
                 .iter()
                 .filter(|oo| oo.deposit_address == account.address)
                 .collect::<Vec<_>>();
 
-            if !account.lots.is_empty() || !open_orders.is_empty() {
+            if !account.lots.is_empty() || !sell_open_orders.is_empty() {
                 let mut lots = account.lots.iter().collect::<Vec<_>>();
                 lots.sort_by_key(|lot| lot.acquisition.when);
 
@@ -862,16 +865,16 @@ async fn process_account_list(
                     }
                 }
 
-                for open_order in open_orders {
-                    let mut lots = open_order.lots.iter().collect::<Vec<_>>();
+                for open_sell_order in sell_open_orders {
+                    let mut lots = open_sell_order.lots.iter().collect::<Vec<_>>();
                     lots.sort_by_key(|lot| lot.acquisition.when);
                     println!(
                         "(Open order: {} at ${}, {} lots, created {}, id {})",
-                        open_order.pair,
-                        open_order.price,
+                        open_sell_order.pair,
+                        open_sell_order.price,
                         lots.len(),
-                        HumanTime::from(open_order.creation_time),
-                        open_order.order_id,
+                        HumanTime::from(open_sell_order.creation_time),
+                        open_sell_order.order_id,
                     );
                     for lot in lots {
                         let mut account_unrealized_gain = 0.;
@@ -1177,7 +1180,7 @@ async fn process_account_xls(
             }
         }
 
-        for open_order in db.open_orders(None) {
+        for open_order in db.open_orders(None, Some(OrderSide::Sell)) {
             for lot in open_order.lots.iter() {
                 if let Some(filter_by_year) = filter_by_year {
                     // Exclude lot if it was not acquired in the filter year
@@ -2541,7 +2544,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .validator(is_parsable::<u32>)
                                 .conflicts_with("order_id")
                                 .help("Cancel orders older than this number of hours"),
-                        ),
+                        )
+                        .arg(
+                            Arg::with_name("side")
+                                .long("side")
+                                .required(true)
+                                .default_value("both")
+                                .possible_values(&["both", "buy", "sell"])
+                                .help("Restrict to only buy or sell orders")
+                        )
                 )
                 .subcommand(
                     SubCommand::with_name("sell")
@@ -3054,6 +3065,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .map(|age| Utc::now().checked_sub_signed(chrono::Duration::hours(age)))
                         .flatten();
 
+                    let side = value_t_or_exit!(arg_matches, "side", String);
+                    let side = match side.as_str() {
+                        "buy" => Some(OrderSide::Buy),
+                        "sell" => Some(OrderSide::Sell),
+                        "both" => None,
+                        _ => unreachable!(),
+                    };
+
                     let exchange_client = exchange_client()?;
                     process_exchange_cancel(
                         &mut db,
@@ -3061,6 +3080,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         exchange_client.as_ref(),
                         order_ids,
                         max_create_time,
+                        side,
                     )
                     .await?;
 

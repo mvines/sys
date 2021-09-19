@@ -101,8 +101,15 @@ pub struct PendingTransfer {
     pub lots: Vec<Lot>,
 }
 
+#[derive(Debug, PartialEq, Clone, Copy, Serialize, Deserialize)]
+pub enum OrderSide {
+    Buy,
+    Sell,
+}
+
 #[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
 pub struct OpenOrder {
+    pub side: OrderSide,
     pub creation_time: DateTime<Utc>,
     pub exchange: Exchange,
     pub pair: String,
@@ -479,8 +486,9 @@ impl Db {
         order_id: String,
         lots: Vec<Lot>,
     ) -> DbResult<()> {
-        let mut open_orders = self.open_orders(None);
+        let mut open_orders = self.open_orders(None, None);
         open_orders.push(OpenOrder {
+            side: OrderSide::Sell,
             creation_time: Utc::now(),
             exchange,
             pair,
@@ -501,10 +509,11 @@ impl Db {
         price: f64,
         when: NaiveDate,
     ) -> DbResult<()> {
-        let mut open_orders = self.open_orders(None);
+        let mut open_orders = self.open_orders(None, None);
 
         let OpenOrder {
             exchange,
+            side,
             pair,
             order_id,
             lots,
@@ -518,6 +527,8 @@ impl Db {
 
         open_orders.retain(|o| o.order_id != order_id);
         self.db.set("orders", &open_orders).unwrap();
+
+        assert_eq!(side, OrderSide::Sell);
 
         let lot_balance: u64 = lots.iter().map(|lot| lot.amount).sum();
         assert_eq!(lot_balance, amount, "Order lot balance mismatch");
@@ -584,7 +595,11 @@ impl Db {
         Ok(disposed_lots)
     }
 
-    pub fn open_orders(&self, exchange: Option<Exchange>) -> Vec<OpenOrder> {
+    pub fn open_orders(
+        &self,
+        exchange: Option<Exchange>,
+        side: Option<OrderSide>,
+    ) -> Vec<OpenOrder> {
         let orders: Vec<OpenOrder> = self.db.get("orders").unwrap_or_default();
         orders
             .into_iter()
@@ -595,6 +610,7 @@ impl Db {
                     true
                 }
             })
+            .filter(|order| side.is_none() || Some(order.side) == side)
             .collect()
     }
 
