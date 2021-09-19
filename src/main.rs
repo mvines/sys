@@ -190,7 +190,7 @@ async fn process_sync_exchange(
 
     for order_info in db.open_orders(Some(exchange), Some(OrderSide::Sell)) {
         let order_status = exchange_client
-            .sell_order_status(&order_info.pair, &order_info.order_id)
+            .order_status(&order_info.pair, &order_info.order_id)
             .await?;
         let order_summary = format!(
             "{}: {:?} ◎{} at ${} (◎{} filled), created {}, id {}",

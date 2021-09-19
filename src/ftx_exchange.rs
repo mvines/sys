@@ -2,7 +2,7 @@ use {
     crate::exchange::*,
     async_trait::async_trait,
     chrono::prelude::*,
-    ftx::rest::{OrderSide, OrderStatus, OrderType, Rest},
+    ftx::rest::{OrderSide as FtxOrderSide, OrderStatus as FtxOrderStatus, OrderType, Rest},
     rust_decimal::prelude::*,
     separator::FixedPlaceSeparatable,
     solana_sdk::pubkey::Pubkey,
@@ -175,7 +175,7 @@ impl ExchangeClient for FtxExchangeClient {
             .rest
             .place_order(
                 pair,
-                OrderSide::Sell,
+                FtxOrderSide::Sell,
                 Some(FromPrimitive::from_f64(price).unwrap()),
                 OrderType::Limit,
                 FromPrimitive::from_f64(amount).unwrap(),
@@ -207,11 +207,11 @@ impl ExchangeClient for FtxExchangeClient {
         Ok(())
     }
 
-    async fn sell_order_status(
+    async fn order_status(
         &self,
         pair: &str,
         order_id: &OrderId,
-    ) -> Result<SellOrderStatus, Box<dyn std::error::Error>> {
+    ) -> Result<OrderStatus, Box<dyn std::error::Error>> {
         let order_id = order_id.parse()?;
 
         let order_info = self
@@ -220,7 +220,10 @@ impl ExchangeClient for FtxExchangeClient {
             .await
             .map_err(|err| format!("{:?}", err))?;
 
-        assert_eq!(order_info.side, OrderSide::Sell);
+        let side = match order_info.side {
+            FtxOrderSide::Sell => OrderSide::Sell,
+            FtxOrderSide::Buy => OrderSide::Buy,
+        };
         assert_eq!(order_info.r#type, OrderType::Limit);
         assert_eq!(pair, ftx_to_binance_pair(&order_info.market)?);
 
@@ -230,8 +233,9 @@ impl ExchangeClient for FtxExchangeClient {
             NaiveDate::from_ymd(today.year(), today.month(), today.day())
         };
 
-        Ok(SellOrderStatus {
-            open: order_info.status != OrderStatus::Closed,
+        Ok(OrderStatus {
+            open: order_info.status != FtxOrderStatus::Closed,
+            side,
             price: order_info.price.unwrap_or_default().to_f64().unwrap(),
             amount: order_info.size.to_f64().unwrap(),
             filled_amount: order_info.filled_size.to_f64().unwrap(),

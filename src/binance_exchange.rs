@@ -267,18 +267,25 @@ impl ExchangeClient for BinanceExchangeClient {
         Ok(())
     }
 
-    async fn sell_order_status(
+    async fn order_status(
         &self,
         pair: &str,
         order_id: &OrderId,
-    ) -> Result<SellOrderStatus, Box<dyn std::error::Error>> {
+    ) -> Result<OrderStatus, Box<dyn std::error::Error>> {
         let order = self
             .account_client
             .get_order(pair, tokio_binance::ID::ClientOId(order_id))
             .json::<Order>()
             .await?;
 
-        assert_eq!(order.side, "SELL");
+        let side = match order.side.as_str() {
+            "SELL" => OrderSide::Sell,
+            "BUY" => OrderSide::Buy,
+            wtf_is_this => {
+                panic!("Unknown order side: {}", wtf_is_this);
+            }
+        };
+
         assert_eq!(order.r#type, "LIMIT");
         assert_eq!(order.time_in_force, "GTC");
         assert_eq!(order.symbol, pair);
@@ -297,8 +304,9 @@ impl ExchangeClient for BinanceExchangeClient {
             .date()
             .naive_local();
 
-        Ok(SellOrderStatus {
+        Ok(OrderStatus {
             open,
+            side,
             price: order.price.parse()?,
             amount: order.orig_qty.parse()?,
             filled_amount: order.executed_qty.parse()?,

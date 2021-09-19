@@ -101,12 +101,6 @@ pub struct PendingTransfer {
     pub lots: Vec<Lot>,
 }
 
-#[derive(Debug, PartialEq, Clone, Copy, Serialize, Deserialize)]
-pub enum OrderSide {
-    Buy,
-    Sell,
-}
-
 #[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
 pub struct OpenOrder {
     pub side: OrderSide,

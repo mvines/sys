@@ -64,9 +64,16 @@ pub struct BidAsk {
 
 pub type OrderId = String;
 
+#[derive(Debug, PartialEq, Clone, Copy, Serialize, Deserialize)]
+pub enum OrderSide {
+    Buy,
+    Sell,
+}
+
 #[derive(Debug)]
-pub struct SellOrderStatus {
+pub struct OrderStatus {
     pub open: bool,
+    pub side: OrderSide,
     pub price: f64,
     pub amount: f64,
     pub filled_amount: f64,
@@ -106,11 +113,11 @@ pub trait ExchangeClient {
         order_id: &OrderId,
     ) -> Result<(), Box<dyn std::error::Error>>;
     #[allow(clippy::ptr_arg)]
-    async fn sell_order_status(
+    async fn order_status(
         &self,
         pair: &str,
         order_id: &OrderId,
-    ) -> Result<SellOrderStatus, Box<dyn std::error::Error>>;
+    ) -> Result<OrderStatus, Box<dyn std::error::Error>>;
 }
 
 pub fn exchange_client_new(
