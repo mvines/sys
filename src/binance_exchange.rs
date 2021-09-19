@@ -235,9 +235,10 @@ impl ExchangeClient for BinanceExchangeClient {
         })
     }
 
-    async fn place_sell_order(
+    async fn place_order(
         &self,
         pair: &str,
+        side: OrderSide,
         price: f64,
         amount: f64,
     ) -> Result<OrderId, Box<dyn std::error::Error>> {
@@ -245,9 +246,13 @@ impl ExchangeClient for BinanceExchangeClient {
             return Err("Total order amount must be 10 or greater".into());
         }
 
+        let side = match side {
+            OrderSide::Buy => tokio_binance::Side::Buy,
+            OrderSide::Sell => tokio_binance::Side::Sell,
+        };
         let response = self
             .account_client
-            .place_limit_order(pair, tokio_binance::Side::Sell, price, amount, true)
+            .place_limit_order(pair, side, price, amount, true)
             .with_new_order_resp_type(tokio_binance::OrderRespType::Full)
             .json::<Order>()
             .await?;

@@ -164,18 +164,23 @@ impl ExchangeClient for FtxExchangeClient {
         })
     }
 
-    async fn place_sell_order(
+    async fn place_order(
         &self,
         pair: &str,
+        side: OrderSide,
         price: f64,
         amount: f64,
     ) -> Result<OrderId, Box<dyn std::error::Error>> {
         let pair = binance_to_ftx_pair(pair)?;
+        let side = match side {
+            OrderSide::Buy => FtxOrderSide::Buy,
+            OrderSide::Sell => FtxOrderSide::Sell,
+        };
         let order_info = self
             .rest
             .place_order(
                 pair,
-                FtxOrderSide::Sell,
+                side,
                 Some(FromPrimitive::from_f64(price).unwrap()),
                 OrderType::Limit,
                 FromPrimitive::from_f64(amount).unwrap(),

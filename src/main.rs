@@ -553,10 +553,10 @@ async fn process_exchange_sell(
     }
 
     let order_id = exchange_client
-        .place_sell_order(&pair, price, amount)
+        .place_order(&pair, OrderSide::Sell, price, amount)
         .await?;
     let msg = format!(
-        "Order created: {}: ◎{} at ${}, id {}",
+        "Order created: {}: sell ◎{} at ${}, id {}",
         pair, amount, price, order_id,
     );
     db.open_order(deposit_account, exchange, pair, price, order_id, order_lots)?;

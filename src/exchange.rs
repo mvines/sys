@@ -100,9 +100,10 @@ pub trait ExchangeClient {
         format: MarketInfoFormat,
     ) -> Result<(), Box<dyn std::error::Error>>;
     async fn bid_ask(&self, pair: &str) -> Result<BidAsk, Box<dyn std::error::Error>>;
-    async fn place_sell_order(
+    async fn place_order(
         &self,
         pair: &str,
+        side: OrderSide,
         price: f64,
         amount: f64,
     ) -> Result<OrderId, Box<dyn std::error::Error>>;
