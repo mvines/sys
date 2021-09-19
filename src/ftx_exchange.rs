@@ -181,7 +181,7 @@ impl ExchangeClient for FtxExchangeClient {
                 FromPrimitive::from_f64(amount).unwrap(),
                 None,
                 None,
-                None,
+                /*post_only = */ Some(true),
                 None,
             )
             .await
