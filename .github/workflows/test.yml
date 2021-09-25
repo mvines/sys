@@ -13,6 +13,8 @@ jobs:
 
     steps:
     - uses: actions/checkout@v2
+    - uses: kenchan0130/actions-system-info@master
+      id: system-info
 
     - if: runner.os == 'Linux'
       run: |
@@ -31,7 +33,7 @@ jobs:
           ~/.cargo/registry
           ~/.cargo/git
           target
-        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        key: v1-${{ runner.os }}-${{ steps.system-info.outputs.cpu-model }}-${{ hashFiles('**/Cargo.lock') }}
 
     - name: cargo fmt
       uses: actions-rs/cargo@v1
