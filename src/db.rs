@@ -42,6 +42,9 @@ pub enum DbError {
 
     #[error("Open order not exist: {0}")]
     OpenOrderDoesNotExist(String),
+
+    #[error("Lot swap failed: {0}")]
+    LotSwapFailed(String),
 }
 
 pub type DbResult<T> = std::result::Result<T, DbError>;
@@ -274,6 +277,15 @@ impl TrackedAccount {
         );
     }
 
+    fn remove_lot(&mut self, lot_number: usize) {
+        self.assert_lot_balance();
+        let lots = std::mem::take(&mut self.lots);
+        self.lots = lots
+            .into_iter()
+            .filter(|lot| lot.lot_number != lot_number)
+            .collect();
+    }
+
     pub fn extract_lots(
         &mut self,
         db: &mut Db,
@@ -320,6 +332,16 @@ impl TrackedAccount {
         }
         self.last_update_balance += amount;
         self.assert_lot_balance();
+    }
+
+    fn merge_or_add_lot(&mut self, new_lot: Lot) {
+        for lot in self.lots.iter_mut() {
+            if lot.acquisition == new_lot.acquisition {
+                lot.amount += new_lot.amount;
+                return;
+            }
+        }
+        self.lots.push(new_lot);
     }
 }
 
@@ -885,6 +907,123 @@ impl Db {
     }
 
     pub fn disposed_lots(&self) -> Vec<DisposedLot> {
-        self.db.get("disposed-lots").unwrap_or_default()
+        let mut disposed_lots: Vec<DisposedLot> = self.db.get("disposed-lots").unwrap_or_default();
+        disposed_lots.sort_by_key(|lot| lot.when);
+        disposed_lots
+    }
+
+    pub fn swap_lots(&mut self, lot_number1: usize, lot_number2: usize) -> DbResult<()> {
+        self.auto_save(false)?;
+
+        let mut disposed_lot = self
+            .disposed_lots()
+            .into_iter()
+            .filter(|dl| [lot_number1, lot_number2].contains(&dl.lot.lot_number))
+            .collect::<Vec<_>>();
+
+        if disposed_lot.len() == 2 {
+            return Err(DbError::LotSwapFailed("Both lots are disposed".into()));
+        }
+        let disposed_lot = disposed_lot.drain(..).next();
+
+        let mut tracked_accounts = vec![];
+        for account in self.get_accounts().values().into_iter() {
+            let lots = account
+                .lots
+                .iter()
+                .filter(|lot| [lot_number1, lot_number2].contains(&lot.lot_number))
+                .cloned()
+                .collect::<Vec<_>>();
+            if lots.len() == 2 {
+                return Err(DbError::LotSwapFailed(format!(
+                    "Both lots are in the same account: {}",
+                    account.address
+                )));
+            }
+            if let Some(lot) = lots.get(0) {
+                let mut account = account.clone();
+                account.remove_lot(lot.lot_number);
+                tracked_accounts.push((lot.clone(), account));
+            }
+        }
+
+        if let Some(mut disposed_lot) = disposed_lot {
+            if tracked_accounts.len() != 1 {
+                return Err(DbError::LotSwapFailed("Unknown lot".into()));
+            }
+
+            let (mut lot2, mut account2) = tracked_accounts.pop().unwrap();
+
+            if lot2.acquisition.when >= disposed_lot.when {
+                return Err(DbError::LotSwapFailed(format!(
+                    "Lot {} was acquired after disposal of lot {}",
+                    lot2.lot_number, disposed_lot.lot.lot_number,
+                )));
+            }
+
+            let mut disposed_lots = self
+                .disposed_lots()
+                .into_iter()
+                .filter(|dl| disposed_lot.lot.lot_number != dl.lot.lot_number)
+                .collect::<Vec<_>>();
+
+            std::mem::swap(&mut disposed_lot.lot.lot_number, &mut lot2.lot_number);
+
+            #[allow(clippy::comparison_chain)]
+            if disposed_lot.lot.amount < lot2.amount {
+                let mut lot2_split = lot2.clone();
+                lot2_split.amount -= disposed_lot.lot.amount;
+                account2.lots.push(lot2_split); // TOOD: merge_or_addd
+
+                lot2.lot_number = self.next_lot_number();
+                lot2.amount = disposed_lot.lot.amount;
+            } else if lot2.amount < disposed_lot.lot.amount {
+                let mut disposed_lot_split = disposed_lot.clone();
+                disposed_lot_split.lot.lot_number = self.next_lot_number();
+                disposed_lot_split.lot.amount -= lot2.amount;
+
+                disposed_lot.lot.amount = lot2.amount;
+            }
+
+            account2.merge_or_add_lot(disposed_lot.lot);
+            disposed_lot.lot = lot2;
+            disposed_lots.push(disposed_lot);
+
+            self.db.set("disposed-lots", &disposed_lots)?;
+            self.update_account(account2)?;
+        } else {
+            if tracked_accounts.len() != 2 {
+                return Err(DbError::LotSwapFailed("Unknown lot".into()));
+            }
+
+            let (mut lot1, mut account1) = tracked_accounts.pop().unwrap();
+            let (mut lot2, mut account2) = tracked_accounts.pop().unwrap();
+
+            std::mem::swap(&mut lot1.lot_number, &mut lot2.lot_number);
+
+            #[allow(clippy::comparison_chain)]
+            if lot1.amount < lot2.amount {
+                let mut lot2_split = lot2.clone();
+                lot2_split.amount -= lot1.amount;
+                account2.merge_or_add_lot(lot2_split);
+
+                lot2.lot_number = self.next_lot_number();
+                lot2.amount = lot1.amount;
+            } else if lot2.amount < lot1.amount {
+                let mut lot1_split = lot1.clone();
+                lot1_split.amount -= lot2.amount;
+                account1.merge_or_add_lot(lot1_split);
+
+                lot1.lot_number = self.next_lot_number();
+                lot1.amount = lot2.amount;
+            }
+
+            account1.merge_or_add_lot(lot2);
+            account2.merge_or_add_lot(lot1);
+            self.update_account(account1)?;
+            self.update_account(account2)?;
+        }
+
+        self.auto_save(true)
     }
 }

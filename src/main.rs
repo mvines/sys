@@ -2405,6 +2405,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .validator(is_valid_pubkey)
                                 .help("Account to synchronize"),
                         ),
+                )
+                .subcommand(
+                    SubCommand::with_name("lot")
+                        .about("Account lot management")
+                        .setting(AppSettings::SubcommandRequiredElseHelp)
+                        .setting(AppSettings::InferSubcommands)
+                        .subcommand(
+                            SubCommand::with_name("swap")
+                                .about("Swap lots")
+                                .arg(
+                                    Arg::with_name("lot_number1")
+                                        .index(1)
+                                        .value_name("LOT NUMBER")
+                                        .takes_value(true)
+                                        .required(true)
+                                        .validator(is_parsable::<usize>)
+                                        .help("First lot number"),
+                                )
+                                .arg(
+                                    Arg::with_name("lot_number2")
+                                        .index(2)
+                                        .value_name("LOT NUMBER")
+                                        .takes_value(true)
+                                        .required(true)
+                                        .validator(is_parsable::<usize>)
+                                        .help("Second lot number"),
+                                )
+                        ),
                 ),
         );
 
@@ -2708,6 +2736,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         ("account", Some(account_matches)) => match account_matches.subcommand() {
+            ("lot", Some(lot_matches)) => match lot_matches.subcommand() {
+                ("swap", Some(arg_matches)) => {
+                    let lot_number1 = value_t_or_exit!(arg_matches, "lot_number1", usize);
+                    let lot_number2 = value_t_or_exit!(arg_matches, "lot_number2", usize);
+                    println!("Swapping lots {} and {}", lot_number1, lot_number2);
+                    db.swap_lots(lot_number1, lot_number2)?;
+                }
+                _ => unreachable!(),
+            },
             ("add", Some(arg_matches)) => {
                 let price = value_t!(arg_matches, "price", f64).ok();
                 let when = naivedate_of(&value_t_or_exit!(arg_matches, "when", String)).unwrap();
