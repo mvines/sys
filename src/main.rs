@@ -517,8 +517,12 @@ async fn process_exchange_buy(
         .place_order(&pair, OrderSide::Buy, price, amount)
         .await?;
     let msg = format!(
-        "Order created: {}: buy ◎{} at ${}, id {}",
-        pair, amount, price, order_id,
+        "Order created: {}: {:?} ◎{} at ${}, id {}",
+        pair,
+        OrderSide::Buy,
+        amount,
+        price,
+        order_id,
     );
     db.open_order(
         OrderSide::Buy,
@@ -617,8 +621,12 @@ async fn process_exchange_sell(
         .place_order(&pair, OrderSide::Sell, price, amount)
         .await?;
     let msg = format!(
-        "Order created: {}: sell ◎{} at ${}, id {}",
-        pair, amount, price, order_id,
+        "Order created: {}: {:?} ◎{} at ${}, id {}",
+        pair,
+        OrderSide::Sell,
+        amount,
+        price,
+        order_id,
     );
     db.open_order(
         OrderSide::Sell,
