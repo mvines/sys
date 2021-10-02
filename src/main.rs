@@ -653,7 +653,7 @@ async fn println_lot(
     *long_term_cap_gain = is_long_term_cap_gain(lot.acquisition.when, None);
 
     let msg = format!(
-        "{:>3}. {} | ◎{:<17.9} at ${:<6} | current value: ${:<14} | income: ${:<11} | {} cap gain: ${:<14} | {}",
+        "{:>3}. {} | ◎{:<17.9} at ${:<6} | current value: ${:<14} | income: ${:<11} | {} gain: ${:<14} | {}",
         lot.lot_number,
         lot.acquisition.when,
         lamports_to_sol(lot.amount),
@@ -661,7 +661,7 @@ async fn println_lot(
         current_value.separated_string_with_fixed_place(2),
         income.separated_string_with_fixed_place(2),
         if *long_term_cap_gain {
-            "long"
+            " long"
         } else {
             "short"
         },
@@ -692,7 +692,7 @@ fn format_disposed_lot(
     *total_cap_gain += cap_gain;
 
     format!(
-        "{:>3}. {} | ◎{:<17.9} at ${:<6} | income: ${:<11} | sold {} at ${:6} {} cap gain: ${:<14} | {} | {}",
+        "{:>3}. {} | ◎{:<17.9} at ${:<6} | income: ${:<11} | sold {} at ${:6} | {} gain: ${:<14} | {} | {}",
         disposed_lot.lot.lot_number,
         disposed_lot.lot.acquisition.when,
         lamports_to_sol(disposed_lot.lot.amount),
@@ -701,7 +701,7 @@ fn format_disposed_lot(
         disposed_lot.when,
         disposed_lot.price.separated_string_with_fixed_place(2),
         if *long_term_cap_gain {
-            "long"
+            " long"
         } else {
             "short"
         },
