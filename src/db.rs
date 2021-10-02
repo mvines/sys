@@ -112,7 +112,7 @@ pub struct OpenOrder {
     pub pair: String,
     pub price: f64,
     pub order_id: String,
-    pub lots: Vec<Lot>,
+    pub lots: Vec<Lot>, // if OrderSide::Sell the lots in the order, empty if OrderSide::Buy
 
     #[serde(with = "field_as_string")]
     pub deposit_address: Pubkey,
@@ -129,6 +129,11 @@ pub enum LotAcquistionKind {
         #[serde(with = "field_as_string")]
         signature: Signature,
     },
+    Exchange {
+        exchange: Exchange,
+        pair: String,
+        order_id: String,
+    },
     NotAvailable,
 }
 
@@ -139,6 +144,11 @@ impl fmt::Display for LotAcquistionKind {
                 write!(f, "epoch {} reward (slot {})", epoch, slot)
             }
             LotAcquistionKind::Transaction { signature, .. } => write!(f, "{}", signature),
+            LotAcquistionKind::Exchange {
+                exchange,
+                pair,
+                order_id,
+            } => write!(f, "{:?} {}, order {}", exchange, pair, order_id),
             LotAcquistionKind::NotAvailable => {
                 write!(f, "other")
             }
@@ -167,6 +177,7 @@ impl Lot {
             LotAcquistionKind::EpochReward { .. } | LotAcquistionKind::NotAvailable => {
                 self.acquisition.price * lamports_to_sol(self.amount)
             }
+            LotAcquistionKind::Exchange { .. } => 0.,
             LotAcquistionKind::Transaction { .. } => 0.,
         }
     }
@@ -493,8 +504,10 @@ impl Db {
             .collect()
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn open_order(
         &mut self,
+        side: OrderSide,
         deposit_account: TrackedAccount,
         exchange: Exchange,
         pair: String,
@@ -504,7 +517,7 @@ impl Db {
     ) -> DbResult<()> {
         let mut open_orders = self.open_orders(None, None);
         open_orders.push(OpenOrder {
-            side: OrderSide::Sell,
+            side,
             creation_time: Utc::now(),
             exchange,
             pair,
@@ -544,41 +557,63 @@ impl Db {
         open_orders.retain(|o| o.order_id != order_id);
         self.db.set("orders", &open_orders).unwrap();
 
-        assert_eq!(side, OrderSide::Sell);
+        match side {
+            OrderSide::Buy => {
+                let mut deposit_account = self
+                    .get_account(deposit_address)
+                    .ok_or(DbError::AccountDoesNotExist(deposit_address))?;
 
-        let lot_balance: u64 = lots.iter().map(|lot| lot.amount).sum();
-        assert_eq!(lot_balance, amount, "Order lot balance mismatch");
-        assert!(filled_amount <= amount);
-
-        let (sold_lots, cancelled_lots) = split_lots(self, lots, filled_amount, None);
-
-        self.auto_save(false)?;
-        if !sold_lots.is_empty() {
-            let mut disposed_lots = self.disposed_lots();
-            for lot in sold_lots {
-                disposed_lots.push(DisposedLot {
-                    lot,
-                    when,
-                    price,
-                    kind: LotDisposalKind::Usd {
-                        exchange,
-                        pair: pair.clone(),
-                        order_id: order_id.clone(),
+                deposit_account.merge_lots(vec![Lot {
+                    lot_number: self.next_lot_number(),
+                    acquisition: LotAcquistion {
+                        when,
+                        price,
+                        kind: LotAcquistionKind::Exchange {
+                            exchange,
+                            pair,
+                            order_id,
+                        },
                     },
-                });
+                    amount: filled_amount,
+                }]);
+                self.update_account(deposit_account)
             }
-            self.db.set("disposed-lots", &disposed_lots).unwrap();
-        }
+            OrderSide::Sell => {
+                let lot_balance: u64 = lots.iter().map(|lot| lot.amount).sum();
+                assert_eq!(lot_balance, amount, "Order lot balance mismatch");
+                assert!(filled_amount <= amount);
 
-        if !cancelled_lots.is_empty() {
-            let mut deposit_account = self
-                .get_account(deposit_address)
-                .ok_or(DbError::AccountDoesNotExist(deposit_address))?;
+                let (filled_lots, cancelled_lots) = split_lots(self, lots, filled_amount, None);
 
-            deposit_account.merge_lots(cancelled_lots);
-            self.update_account(deposit_account)?;
+                self.auto_save(false)?;
+                if !filled_lots.is_empty() {
+                    let mut disposed_lots = self.disposed_lots();
+                    for lot in filled_lots {
+                        disposed_lots.push(DisposedLot {
+                            lot,
+                            when,
+                            price,
+                            kind: LotDisposalKind::Usd {
+                                exchange,
+                                pair: pair.clone(),
+                                order_id: order_id.clone(),
+                            },
+                        });
+                    }
+                    self.db.set("disposed-lots", &disposed_lots).unwrap();
+                }
+
+                if !cancelled_lots.is_empty() {
+                    let mut deposit_account = self
+                        .get_account(deposit_address)
+                        .ok_or(DbError::AccountDoesNotExist(deposit_address))?;
+
+                    deposit_account.merge_lots(cancelled_lots);
+                    self.update_account(deposit_account)?;
+                }
+                self.auto_save(true)
+            }
         }
-        self.auto_save(true)
     }
 
     pub fn record_disposal(

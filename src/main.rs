@@ -188,7 +188,7 @@ async fn process_sync_exchange(
         }
     }
 
-    for order_info in db.open_orders(Some(exchange), Some(OrderSide::Sell)) {
+    for order_info in db.open_orders(Some(exchange), None) {
         let order_status = exchange_client
             .order_status(&order_info.pair, &order_info.order_id)
             .await?;
@@ -474,6 +474,67 @@ async fn process_exchange_cancel(
 }
 
 #[allow(clippy::too_many_arguments)]
+async fn process_exchange_buy(
+    db: &mut Db,
+    exchange: Exchange,
+    exchange_client: &dyn ExchangeClient,
+    pair: String,
+    amount: f64,
+    price: f64,
+    if_balance_exceeds: Option<u64>,
+    notifier: &Notifier,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let bid_ask = exchange_client.bid_ask(&pair).await?;
+    println!("Symbol: {}", pair);
+    println!("Ask: ${}, Bid: ${}", bid_ask.ask_price, bid_ask.bid_price);
+
+    let deposit_address = exchange_client.deposit_address().await?;
+    let deposit_account = db.get_account(deposit_address).ok_or_else(|| {
+        format!(
+            "Exchange deposit account does not exist: {}",
+            deposit_address
+        )
+    })?;
+
+    if let Some(if_balance_exceeds) = if_balance_exceeds {
+        if deposit_account.last_update_balance < if_balance_exceeds {
+            println!(
+                "Order declined because {:?} available balance is less than {}",
+                exchange,
+                Sol(if_balance_exceeds)
+            );
+            return Ok(());
+        }
+    }
+
+    if price > bid_ask.ask_price {
+        return Err("Order price is greater than ask price".into());
+    }
+
+    println!("Placing buy order for ◎{} at ${}", amount, price);
+
+    let order_id = exchange_client
+        .place_order(&pair, OrderSide::Buy, price, amount)
+        .await?;
+    let msg = format!(
+        "Order created: {}: buy ◎{} at ${}, id {}",
+        pair, amount, price, order_id,
+    );
+    db.open_order(
+        OrderSide::Buy,
+        deposit_account,
+        exchange,
+        pair,
+        price,
+        order_id,
+        vec![],
+    )?;
+    println!("{}", msg);
+    notifier.send(&format!("{:?}: {}", exchange, msg)).await;
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn process_exchange_sell(
     db: &mut Db,
     exchange: Exchange,
@@ -489,7 +550,7 @@ async fn process_exchange_sell(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let bid_ask = exchange_client.bid_ask(&pair).await?;
     println!("Symbol: {}", pair);
-    println!("Ask: ${}, Bid: ${}", bid_ask.ask_price, bid_ask.bid_price,);
+    println!("Ask: ${}, Bid: ${}", bid_ask.ask_price, bid_ask.bid_price);
 
     let deposit_address = exchange_client.deposit_address().await?;
     let mut deposit_account = db.get_account(deposit_address).ok_or_else(|| {
@@ -559,7 +620,15 @@ async fn process_exchange_sell(
         "Order created: {}: sell ◎{} at ${}, id {}",
         pair, amount, price, order_id,
     );
-    db.open_order(deposit_account, exchange, pair, price, order_id, order_lots)?;
+    db.open_order(
+        OrderSide::Sell,
+        deposit_account,
+        exchange,
+        pair,
+        price,
+        order_id,
+        order_lots,
+    )?;
     println!("{}", msg);
     notifier.send(&format!("{:?}: {}", exchange, msg)).await;
     Ok(())
@@ -2583,6 +2652,47 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         )
                 )
                 .subcommand(
+                    SubCommand::with_name("buy")
+                        .about("Place an order to buy SOL")
+                        .arg(
+                            Arg::with_name("amount")
+                                .index(1)
+                                .value_name("AMOUNT")
+                                .takes_value(true)
+                                .validator(is_amount)
+                                .required(true)
+                                .help("The amount to sell, in SOL"),
+                        )
+                        .arg(
+                            Arg::with_name("at")
+                                .long("at")
+                                .value_name("PRICE")
+                                .takes_value(true)
+                                .required(true)
+                                .validator(is_parsable::<f64>)
+                                .help("Place a limit order at this price"),
+                        )
+                        .arg(
+                            Arg::with_name("pair")
+                                .long("pair")
+                                .value_name("TRADING_PAIR")
+                                .takes_value(true)
+                                .default_value("SOLUSD")
+                                .help("Market to place the order in"),
+                        )
+                        .arg(
+                            Arg::with_name("if_balance_exceeds")
+                                .long("if-balance-exceeds")
+                                .value_name("AMOUNT")
+                                .takes_value(true)
+                                .validator(is_amount)
+                                .help(
+                                    "Exit successfully without placing a buy order if the \
+                                       exchange available balance is less than this amount",
+                                ),
+                        ),
+                )
+                .subcommand(
                     SubCommand::with_name("sell")
                         .about("Place an order to sell SOL")
                         .arg(
@@ -2626,7 +2736,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .value_name("TRADING_PAIR")
                                 .takes_value(true)
                                 .default_value("SOLUSD")
-                                .help("Market to place the order at"),
+                                .help("Market to place the order in"),
                         )
                         .arg(
                             Arg::with_name("if_balance_exceeds")
@@ -3121,6 +3231,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     )
                     .await?;
 
+                    process_sync_exchange(
+                        &mut db,
+                        exchange,
+                        exchange_client.as_ref(),
+                        &rpc_client,
+                        &notifier,
+                    )
+                    .await?;
+                }
+                ("buy", Some(arg_matches)) => {
+                    let pair = value_t_or_exit!(arg_matches, "pair", String);
+                    let amount = value_t_or_exit!(arg_matches, "amount", f64);
+                    let if_balance_exceeds = value_t!(arg_matches, "if_balance_exceeds", f64)
+                        .ok()
+                        .map(sol_to_lamports);
+
+                    let price = value_t_or_exit!(arg_matches, "at", f64);
+                    let exchange_client = exchange_client()?;
+                    process_exchange_buy(
+                        &mut db,
+                        exchange,
+                        exchange_client.as_ref(),
+                        pair,
+                        amount,
+                        price,
+                        if_balance_exceeds,
+                        &notifier,
+                    )
+                    .await?;
                     process_sync_exchange(
                         &mut db,
                         exchange,
