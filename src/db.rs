@@ -538,6 +538,7 @@ impl Db {
         price: f64,
         when: NaiveDate,
     ) -> DbResult<()> {
+        self.auto_save(false)?;
         let mut open_orders = self.open_orders(None, None);
 
         let OpenOrder {
@@ -559,6 +560,8 @@ impl Db {
 
         match side {
             OrderSide::Buy => {
+                assert!(lots.is_empty());
+
                 let mut deposit_account = self
                     .get_account(deposit_address)
                     .ok_or(DbError::AccountDoesNotExist(deposit_address))?;
@@ -576,7 +579,7 @@ impl Db {
                     },
                     amount: filled_amount,
                 }]);
-                self.update_account(deposit_account)
+                self.update_account(deposit_account)?;
             }
             OrderSide::Sell => {
                 let lot_balance: u64 = lots.iter().map(|lot| lot.amount).sum();
@@ -585,7 +588,6 @@ impl Db {
 
                 let (filled_lots, cancelled_lots) = split_lots(self, lots, filled_amount, None);
 
-                self.auto_save(false)?;
                 if !filled_lots.is_empty() {
                     let mut disposed_lots = self.disposed_lots();
                     for lot in filled_lots {
@@ -611,9 +613,9 @@ impl Db {
                     deposit_account.merge_lots(cancelled_lots);
                     self.update_account(deposit_account)?;
                 }
-                self.auto_save(true)
             }
         }
+        self.auto_save(true)
     }
 
     pub fn record_disposal(
