@@ -436,6 +436,7 @@ async fn process_exchange_deposit<T: Signers>(
 enum LimitOrderPrice {
     At(f64),
     AmountOverAsk(f64),
+    AmountUnderBid(f64),
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -480,8 +481,8 @@ async fn process_exchange_buy(
     exchange_client: &dyn ExchangeClient,
     pair: String,
     amount: f64,
-    price: f64,
-    if_balance_exceeds: Option<u64>,
+    price: LimitOrderPrice,
+    if_balance_exceeds: Option<f64>,
     notifier: &Notifier,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let bid_ask = exchange_client.bid_ask(&pair).await?;
@@ -496,19 +497,28 @@ async fn process_exchange_buy(
         )
     })?;
 
+    let balances = exchange_client.balances().await?;
+
     if let Some(if_balance_exceeds) = if_balance_exceeds {
-        if deposit_account.last_update_balance < if_balance_exceeds {
+        let usd_balance = balances.get("USD").cloned().unwrap_or_default().available;
+        if usd_balance < if_balance_exceeds {
             println!(
-                "Order declined because {:?} available balance is less than {}",
-                exchange,
-                Sol(if_balance_exceeds)
+                "Order declined because {:?} available balance is less than ${}",
+                exchange, if_balance_exceeds
             );
             return Ok(());
         }
     }
 
-    if price > bid_ask.ask_price {
-        return Err("Order price is greater than ask price".into());
+    let price = match price {
+        LimitOrderPrice::At(price) => price,
+        LimitOrderPrice::AmountOverAsk(_) => panic!("Bug: AmountOverAsk invalid for a buy order"),
+        LimitOrderPrice::AmountUnderBid(extra) => bid_ask.ask_price - extra,
+    };
+    let price = (price * 100.).round() / 100.; // Round to two decimal places
+
+    if price > bid_ask.bid_price {
+        return Err("Order price is greater than bid price".into());
     }
 
     println!("Placing buy order for ◎{} at ${}", amount, price);
@@ -578,6 +588,9 @@ async fn process_exchange_sell(
     let price = match price {
         LimitOrderPrice::At(price) => price,
         LimitOrderPrice::AmountOverAsk(extra) => bid_ask.ask_price + extra,
+        LimitOrderPrice::AmountUnderBid(_) => {
+            panic!("Bug: AmountUnderBid invalid for a sell order")
+        }
     };
     let mut price = (price * 100.).round() / 100.; // Round to two decimal places
 
@@ -605,8 +618,8 @@ async fn process_exchange_sell(
         }
     }
 
-    if bid_ask.bid_price > price {
-        return Err("Order price is less than bid price".into());
+    if price < bid_ask.ask_price {
+        return Err("Order price is less than ask price".into());
     }
 
     println!("Placing sell order for ◎{} at ${}", amount, price);
@@ -2676,9 +2689,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .long("at")
                                 .value_name("PRICE")
                                 .takes_value(true)
-                                .required(true)
                                 .validator(is_parsable::<f64>)
                                 .help("Place a limit order at this price"),
+                        )
+                        .arg(
+                            Arg::with_name("bid_minus")
+                                .long("bid-minus")
+                                .value_name("AMOUNT")
+                                .takes_value(true)
+                                .conflicts_with("at")
+                                .validator(is_parsable::<f64>)
+                                .help("Place a limit order at this amount under the current bid"),
                         )
                         .arg(
                             Arg::with_name("pair")
@@ -3251,11 +3272,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ("buy", Some(arg_matches)) => {
                     let pair = value_t_or_exit!(arg_matches, "pair", String);
                     let amount = value_t_or_exit!(arg_matches, "amount", f64);
-                    let if_balance_exceeds = value_t!(arg_matches, "if_balance_exceeds", f64)
-                        .ok()
-                        .map(sol_to_lamports);
+                    let if_balance_exceeds = value_t!(arg_matches, "if_balance_exceeds", f64).ok();
 
-                    let price = value_t_or_exit!(arg_matches, "at", f64);
+                    let price = if let Ok(price) = value_t!(arg_matches, "at", f64) {
+                        LimitOrderPrice::At(price)
+                    } else if let Ok(bid_minus) = value_t!(arg_matches, "bid_minus", f64) {
+                        LimitOrderPrice::AmountUnderBid(bid_minus)
+                    } else {
+                        return Err("--at or --bid-minus argument required".into());
+                    };
+
                     let exchange_client = exchange_client()?;
                     process_exchange_buy(
                         &mut db,
