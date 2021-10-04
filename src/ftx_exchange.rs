@@ -250,17 +250,25 @@ impl ExchangeClient for FtxExchangeClient {
 }
 
 pub fn new(
-    ExchangeCredentials { api_key, secret }: ExchangeCredentials,
+    ExchangeCredentials {
+        api_key,
+        secret,
+        subaccount,
+    }: ExchangeCredentials,
 ) -> Result<FtxExchangeClient, Box<dyn std::error::Error>> {
     Ok(FtxExchangeClient {
-        rest: Rest::new(api_key, secret, None),
+        rest: Rest::new(api_key, secret, subaccount),
     })
 }
 
 pub fn new_us(
-    ExchangeCredentials { api_key, secret }: ExchangeCredentials,
+    ExchangeCredentials {
+        api_key,
+        secret,
+        subaccount,
+    }: ExchangeCredentials,
 ) -> Result<FtxExchangeClient, Box<dyn std::error::Error>> {
     Ok(FtxExchangeClient {
-        rest: Rest::new_us(api_key, secret, None),
+        rest: Rest::new_us(api_key, secret, subaccount),
     })
 }

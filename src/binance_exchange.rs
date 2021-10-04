@@ -322,8 +322,15 @@ impl ExchangeClient for BinanceExchangeClient {
 
 fn new_with_url(
     url: &str,
-    ExchangeCredentials { api_key, secret }: ExchangeCredentials,
+    ExchangeCredentials {
+        api_key,
+        secret,
+        subaccount,
+    }: ExchangeCredentials,
 ) -> Result<BinanceExchangeClient, Box<dyn std::error::Error>> {
+    if subaccount.is_some() {
+        return Err("subaccounts not supported".into());
+    }
     Ok(BinanceExchangeClient {
         account_client: AccountClient::connect(api_key, secret, url)?,
     })

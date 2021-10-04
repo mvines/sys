@@ -42,6 +42,7 @@ pub enum ParseExchangeError {
 pub struct ExchangeCredentials {
     pub api_key: String,
     pub secret: String,
+    pub subaccount: Option<String>,
 }
 
 #[derive(Debug, Default, Clone)]

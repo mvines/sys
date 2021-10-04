@@ -2575,7 +2575,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             SubCommand::with_name("set")
                                 .about("Set API key")
                                 .arg(Arg::with_name("api_key").required(true).takes_value(true))
-                                .arg(Arg::with_name("secret").required(true).takes_value(true)),
+                                .arg(Arg::with_name("secret").required(true).takes_value(true))
+                                .arg(Arg::with_name("subaccount").takes_value(true)),
                         )
                         .subcommand(SubCommand::with_name("show").about("Show API key"))
                         .subcommand(SubCommand::with_name("clear").about("Clear API key")),
@@ -3359,9 +3360,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 ("api", Some(api_matches)) => match api_matches.subcommand() {
                     ("show", Some(_arg_matches)) => match db.get_exchange_credentials(exchange) {
-                        Some(ExchangeCredentials { api_key, secret: _ }) => {
+                        Some(ExchangeCredentials {
+                            api_key,
+                            subaccount,
+                            ..
+                        }) => {
                             println!("API Key: {}", api_key);
                             println!("Secret: ********");
+                            if let Some(subaccount) = subaccount {
+                                println!("Subaccount: {}", subaccount);
+                            }
                         }
                         None => {
                             println!("No API key set for {:?}", exchange);
@@ -3370,9 +3378,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     ("set", Some(arg_matches)) => {
                         let api_key = value_t_or_exit!(arg_matches, "api_key", String);
                         let secret = value_t_or_exit!(arg_matches, "secret", String);
+                        let subaccount = value_t!(arg_matches, "subaccount", String).ok();
                         db.set_exchange_credentials(
                             exchange,
-                            ExchangeCredentials { api_key, secret },
+                            ExchangeCredentials {
+                                api_key,
+                                secret,
+                                subaccount,
+                            },
                         )?;
                         println!("API key set for {:?}", exchange);
                     }
