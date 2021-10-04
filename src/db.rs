@@ -490,6 +490,7 @@ impl Db {
             if self.db.exists("deposits") {
                 return self.db.get::<Vec<PendingDeposit>>("deposits").unwrap();
             }
+            return vec![];
         }
         self.db
             .liter("deposits")
