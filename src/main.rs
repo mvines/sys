@@ -464,7 +464,7 @@ async fn process_exchange_cancel(
             println!("Cancelling order {}", order_info.order_id);
             cancelled_count += 1;
             exchange_client
-                .cancel_sell_order(&order_info.pair, &order_info.order_id)
+                .cancel_order(&order_info.pair, &order_info.order_id)
                 .await?
         }
     }

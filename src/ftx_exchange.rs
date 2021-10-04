@@ -195,7 +195,7 @@ impl ExchangeClient for FtxExchangeClient {
         Ok(order_info.id.to_string())
     }
 
-    async fn cancel_sell_order(
+    async fn cancel_order(
         &self,
         _pair: &str,
         order_id: &OrderId,

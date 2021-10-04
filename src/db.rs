@@ -562,24 +562,26 @@ impl Db {
             OrderSide::Buy => {
                 assert!(lots.is_empty());
 
-                let mut deposit_account = self
-                    .get_account(deposit_address)
-                    .ok_or(DbError::AccountDoesNotExist(deposit_address))?;
+                if filled_amount > 0 {
+                    let mut deposit_account = self
+                        .get_account(deposit_address)
+                        .ok_or(DbError::AccountDoesNotExist(deposit_address))?;
 
-                deposit_account.merge_lots(vec![Lot {
-                    lot_number: self.next_lot_number(),
-                    acquisition: LotAcquistion {
-                        when,
-                        price,
-                        kind: LotAcquistionKind::Exchange {
-                            exchange,
-                            pair,
-                            order_id,
+                    deposit_account.merge_lots(vec![Lot {
+                        lot_number: self.next_lot_number(),
+                        acquisition: LotAcquistion {
+                            when,
+                            price,
+                            kind: LotAcquistionKind::Exchange {
+                                exchange,
+                                pair,
+                                order_id,
+                            },
                         },
-                    },
-                    amount: filled_amount,
-                }]);
-                self.update_account(deposit_account)?;
+                        amount: filled_amount,
+                    }]);
+                    self.update_account(deposit_account)?;
+                }
             }
             OrderSide::Sell => {
                 let lot_balance: u64 = lots.iter().map(|lot| lot.amount).sum();

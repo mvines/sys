@@ -260,7 +260,7 @@ impl ExchangeClient for BinanceExchangeClient {
         Ok(response.client_order_id)
     }
 
-    async fn cancel_sell_order(
+    async fn cancel_order(
         &self,
         pair: &str,
         order_id: &OrderId,
