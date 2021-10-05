@@ -123,8 +123,7 @@ impl ExchangeClient for FtxExchangeClient {
             MarketInfoFormat::All => {
                 println!(
                     "{} | Ask: ${:.2}, Bid: ${:.2}, Last: ${:.2}, 24hr Average: ${:.2}",
-                    pair,
-                    market.ask, market.bid, market.last, weighted_24h_avg_price
+                    pair, market.ask, market.bid, market.last, weighted_24h_avg_price
                 );
             }
             MarketInfoFormat::Ask => {

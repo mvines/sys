@@ -906,6 +906,7 @@ struct RealizedGain {
 
 async fn process_account_list(
     db: &Db,
+    account_filter: Option<Pubkey>,
     show_all_disposed_lots: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut annual_realized_gains = BTreeMap::<usize, [RealizedGain; 4]>::default();
@@ -925,6 +926,12 @@ async fn process_account_list(
         let open_sell_orders = db.open_orders(None, Some(OrderSide::Sell));
 
         for account in accounts.values() {
+            if let Some(ref account_filter) = account_filter {
+                if account.address != *account_filter {
+                    continue;
+                }
+            }
+
             println!(
                 "{}: ◎{} - {}",
                 account.address.to_string(),
@@ -1026,6 +1033,10 @@ async fn process_account_list(
                 println!("  No lots");
             }
             println!();
+        }
+
+        if account_filter.is_some() {
+            return Ok(());
         }
 
         let mut disposed_lots = db.disposed_lots();
@@ -2299,7 +2310,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .default_value(&default_when)
                                 .validator(|value| naivedate_of(&value).map(|_| ()))
                                 .help("Disposal date"),
-                        )
+)
                         .arg(
                             Arg::with_name("price")
                                 .short("p")
@@ -2318,6 +2329,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .short("a")
                                 .long("all")
                                 .help("Display all lots")
+                        )
+                        .arg(
+                            Arg::with_name("account")
+                                .index(1)
+                                .value_name("ADDRESS")
+                                .takes_value(true)
+                                .validator(is_valid_pubkey)
+                                .help("Limit output to this account"),
                         ),
                 )
                 .subcommand(
@@ -2937,7 +2956,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             ("ls", Some(arg_matches)) => {
                 let all = arg_matches.is_present("all");
-                process_account_list(&db, all).await?;
+                let account_filter = pubkey_of(arg_matches, "account");
+                process_account_list(&db, account_filter, all).await?;
             }
             ("xls", Some(arg_matches)) => {
                 let outfile = value_t_or_exit!(arg_matches, "outfile", String);
