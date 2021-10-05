@@ -3310,6 +3310,7 @@ dependencies = [
  "chrono",
  "chrono-humanize",
  "clap",
+ "console 0.14.1",
  "fd-lock",
  "ftx",
  "itertools 0.10.0",

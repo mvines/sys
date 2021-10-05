@@ -14,6 +14,7 @@ use {
         crate_description, crate_name, value_t, value_t_or_exit, values_t, App, AppSettings, Arg,
         SubCommand,
     },
+    console::{style, Style},
     db::*,
     exchange::*,
     notifier::*,
@@ -51,6 +52,24 @@ fn is_long_term_cap_gain(acquisition: NaiveDate, disposal: Option<NaiveDate>) ->
 
     let hold_time = disposal - acquisition;
     hold_time >= chrono::Duration::days(356)
+}
+
+fn format_order_side(order_side: OrderSide) -> String {
+    match order_side {
+        OrderSide::Buy => style(" Buy").green(),
+        OrderSide::Sell => style("Sell").red(),
+    }
+    .to_string()
+}
+
+fn format_filled_amount(filled_amount: f64) -> String {
+    if filled_amount == 0. {
+        Style::new()
+    } else {
+        Style::new().bold()
+    }
+    .apply_to(format!("◎{} filled", filled_amount))
+    .to_string()
 }
 
 fn naivedate_of(string: &str) -> Result<NaiveDate, String> {
@@ -193,14 +212,14 @@ async fn process_sync_exchange(
             .order_status(&order_info.pair, &order_info.order_id)
             .await?;
         let order_summary = format!(
-            "{}: {:?} ◎{} at ${} (◎{} filled), created {}, id {}",
+            "{}: {} ◎{} at ${} ({}), id {}, created {}",
             order_info.pair,
-            order_info.side,
+            format_order_side(order_info.side),
             order_status.amount,
             order_status.price,
-            order_status.filled_amount,
-            HumanTime::from(order_info.creation_time),
+            format_filled_amount(order_status.filled_amount),
             order_info.order_id,
+            HumanTime::from(order_info.creation_time),
         );
 
         if order_status.open {
