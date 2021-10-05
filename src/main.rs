@@ -547,7 +547,7 @@ async fn process_exchange_buy(
     }
 
     let amount = match amount {
-        None => (usd_balance / price * 100.).floor() / 100.,
+        None => (usd_balance / price).floor(),
         Some(amount) => amount,
     };
 
