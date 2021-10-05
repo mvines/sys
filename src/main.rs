@@ -978,12 +978,11 @@ async fn process_account_list(
                     let mut lots = open_sell_order.lots.iter().collect::<Vec<_>>();
                     lots.sort_by_key(|lot| lot.acquisition.when);
                     println!(
-                        "(Open order: {} at ${}, {} lots, created {}, id {})",
+                        " [Open sell order: {} at ${}, id {}, created {}]",
                         open_sell_order.pair,
                         open_sell_order.price,
-                        lots.len(),
-                        HumanTime::from(open_sell_order.creation_time),
                         open_sell_order.order_id,
+                        HumanTime::from(open_sell_order.creation_time),
                     );
                     for lot in lots {
                         let mut account_unrealized_gain = 0.;

@@ -4,7 +4,6 @@ use {
     chrono::prelude::*,
     ftx::rest::{OrderSide as FtxOrderSide, OrderStatus as FtxOrderStatus, OrderType, Rest},
     rust_decimal::prelude::*,
-    separator::FixedPlaceSeparatable,
     solana_sdk::pubkey::Pubkey,
     std::collections::HashMap,
 };
@@ -122,22 +121,11 @@ impl ExchangeClient for FtxExchangeClient {
 
         match format {
             MarketInfoFormat::All => {
-                println!("Pair: {}", pair);
-
-                println!("Price: ${}", market.price);
                 println!(
-                    "Ask: ${}, Bid: ${}, Last: ${}",
-                    market.ask, market.bid, market.last,
+                    "{} | Ask: ${:.2}, Bid: ${:.2}, Last: ${:.2}, 24hr Average: ${:.2}",
+                    pair,
+                    market.ask, market.bid, market.last, weighted_24h_avg_price
                 );
-                println!(
-                    "24h Volume: ${}",
-                    market
-                        .volume_usd24h
-                        .to_f64()
-                        .unwrap()
-                        .separated_string_with_fixed_place(2)
-                );
-                println!("Weighted 24h average price: ${:.4}", weighted_24h_avg_price);
             }
             MarketInfoFormat::Ask => {
                 println!("{}", market.ask);
