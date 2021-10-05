@@ -531,6 +531,24 @@ impl Db {
         self.update_account(deposit_account) // `update_account` calls `save`...
     }
 
+    #[allow(dead_code)]
+    pub fn update_order_price(&mut self, order_id: &str, price: f64) -> DbResult<()> {
+        let orders: Vec<_> = self
+            .db
+            .get::<Vec<OpenOrder>>("orders")
+            .unwrap_or_default()
+            .into_iter()
+            .map(|mut order| {
+                if order.order_id == order_id {
+                    order.price = price
+                }
+                order
+            })
+            .collect::<Vec<_>>();
+        self.db.set("orders", &orders).unwrap();
+        self.save()
+    }
+
     pub fn close_order(
         &mut self,
         order_id: &str,
