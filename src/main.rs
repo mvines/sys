@@ -68,7 +68,7 @@ fn format_filled_amount(filled_amount: f64) -> String {
     } else {
         Style::new().bold()
     }
-    .apply_to(format!("◎{} filled", filled_amount))
+    .apply_to(format!("  ◎{} filled", filled_amount))
     .to_string()
 }
 
@@ -212,12 +212,16 @@ async fn process_sync_exchange(
             .order_status(&order_info.pair, &order_info.order_id)
             .await?;
         let order_summary = format!(
-            "{}: {} ◎{} at ${} ({}), id {}, created {}",
+            "{}: {} ◎{} at ${}{} | id {} created {}",
             order_info.pair,
             format_order_side(order_info.side),
             order_status.amount,
             order_status.price,
-            format_filled_amount(order_status.filled_amount),
+            if order_status.filled_amount == 0. {
+                String::default()
+            } else {
+                format_filled_amount(order_status.filled_amount)
+            },
             order_info.order_id,
             HumanTime::from(order_info.creation_time),
         );
@@ -228,7 +232,7 @@ async fn process_sync_exchange(
                 println!("{}", msg);
                 notifier.send(&format!("{:?}: {}", exchange, msg)).await;
             } else {
-                println!("Open order: {}", order_summary);
+                println!("   Open {}", order_summary);
             }
         } else {
             db.close_order(
@@ -239,11 +243,11 @@ async fn process_sync_exchange(
                 order_status.last_update,
             )?;
             let msg = if (order_status.amount - order_status.filled_amount).abs() < f64::EPSILON {
-                format!("Order filled: {}", order_summary)
+                format!(" Filled {}", order_summary)
             } else if order_status.filled_amount < f64::EPSILON {
-                format!("Order cancelled: {}", order_summary)
+                format!(" Cancel {}", order_summary)
             } else {
-                format!("Order partially filled: {}", order_summary)
+                format!("Partial {}", order_summary)
             };
             println!("{}", msg);
             notifier.send(&format!("{:?}: {}", exchange, msg)).await;
@@ -499,14 +503,16 @@ async fn process_exchange_buy(
     exchange: Exchange,
     exchange_client: &dyn ExchangeClient,
     pair: String,
-    amount: f64,
+    amount: Option<f64>,
     price: LimitOrderPrice,
     if_balance_exceeds: Option<f64>,
     notifier: &Notifier,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let bid_ask = exchange_client.bid_ask(&pair).await?;
-    println!("Symbol: {}", pair);
-    println!("Ask: ${}, Bid: ${}", bid_ask.ask_price, bid_ask.bid_price);
+    println!(
+        "{} | Ask: ${}, Bid: ${}",
+        pair, bid_ask.ask_price, bid_ask.bid_price
+    );
 
     let deposit_address = exchange_client.deposit_address().await?;
     let deposit_account = db.get_account(deposit_address).ok_or_else(|| {
@@ -517,9 +523,9 @@ async fn process_exchange_buy(
     })?;
 
     let balances = exchange_client.balances().await?;
+    let usd_balance = balances.get("USD").cloned().unwrap_or_default().available;
 
     if let Some(if_balance_exceeds) = if_balance_exceeds {
-        let usd_balance = balances.get("USD").cloned().unwrap_or_default().available;
         if usd_balance < if_balance_exceeds {
             println!(
                 "Order declined because {:?} available balance is less than ${}",
@@ -539,6 +545,11 @@ async fn process_exchange_buy(
     if price > bid_ask.bid_price {
         return Err("Order price is greater than bid price".into());
     }
+
+    let amount = match amount {
+        None => (usd_balance / price * 100.).floor() / 100.,
+        Some(amount) => amount,
+    };
 
     println!("Placing buy order for ◎{} at ${}", amount, price);
 
@@ -582,8 +593,10 @@ async fn process_exchange_sell(
     notifier: &Notifier,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let bid_ask = exchange_client.bid_ask(&pair).await?;
-    println!("Symbol: {}", pair);
-    println!("Ask: ${}, Bid: ${}", bid_ask.ask_price, bid_ask.bid_price);
+    println!(
+        "{} | Ask: ${}, Bid: ${}",
+        pair, bid_ask.ask_price, bid_ask.bid_price
+    );
 
     let deposit_address = exchange_client.deposit_address().await?;
     let mut deposit_account = db.get_account(deposit_address).ok_or_else(|| {
@@ -984,9 +997,12 @@ async fn process_account_list(
                 for open_sell_order in sell_open_orders {
                     let mut lots = open_sell_order.lots.iter().collect::<Vec<_>>();
                     lots.sort_by_key(|lot| lot.acquisition.when);
+                    let amount = lots.iter().map(|lot| lot.amount).sum::<u64>();
                     println!(
-                        " [Open sell order: {} at ${}, id {}, created {}]",
+                        " [Open {}: {} ◎{} at ${} | id {} created {}]",
                         open_sell_order.pair,
+                        format_order_side(OrderSide::Sell),
+                        lamports_to_sol(amount),
                         open_sell_order.price,
                         open_sell_order.order_id,
                         HumanTime::from(open_sell_order.creation_time),
@@ -2718,9 +2734,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .index(1)
                                 .value_name("AMOUNT")
                                 .takes_value(true)
-                                .validator(is_amount)
+                                .validator(is_amount_or_all)
                                 .required(true)
-                                .help("The amount to sell, in SOL"),
+                                .help("The amount to buy, in SOL; accepts keyword ALL"),
                         )
                         .arg(
                             Arg::with_name("at")
@@ -3310,7 +3326,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 ("buy", Some(arg_matches)) => {
                     let pair = value_t_or_exit!(arg_matches, "pair", String);
-                    let amount = value_t_or_exit!(arg_matches, "amount", f64);
+                    let amount = match arg_matches.value_of("amount").unwrap() {
+                        "ALL" => None,
+                        amount => Some(str::parse::<f64>(amount).unwrap()),
+                    };
+
                     let if_balance_exceeds = value_t!(arg_matches, "if_balance_exceeds", f64).ok();
 
                     let price = if let Ok(price) = value_t!(arg_matches, "at", f64) {
