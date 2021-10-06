@@ -68,7 +68,7 @@ fn format_filled_amount(filled_amount: f64) -> String {
     } else {
         Style::new().bold()
     }
-    .apply_to(format!("  ◎{} filled", filled_amount))
+    .apply_to(format!(" [◎{} filled]", filled_amount))
     .to_string()
 }
 
@@ -212,10 +212,10 @@ async fn process_sync_exchange(
             .order_status(&order_info.pair, &order_info.order_id)
             .await?;
         let order_summary = format!(
-            "{}: {} ◎{} at ${}{} | id {} created {}",
+            "{}: {} {:<5} at ${:<.2}{} | id {} created {}",
             order_info.pair,
             format_order_side(order_info.side),
-            order_status.amount,
+            format!("◎{}", order_status.amount),
             order_status.price,
             if order_status.filled_amount == 0. {
                 String::default()
@@ -228,7 +228,7 @@ async fn process_sync_exchange(
 
         if order_status.open {
             if order_status.filled_amount > 0. {
-                let msg = format!("Partially filled: {}", order_summary);
+                let msg = format!("Partial {}", order_summary);
                 println!("{}", msg);
                 notifier.send(&format!("{:?}: {}", exchange, msg)).await;
             } else {
