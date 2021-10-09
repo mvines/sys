@@ -26,7 +26,7 @@ struct HistoryResponse {
     pub market_data: Option<MarketData>,
 }
 
-async fn get_opening_price(when: NaiveDate) -> Result<f64, Box<dyn std::error::Error>> {
+pub async fn get_price(when: NaiveDate) -> Result<f64, Box<dyn std::error::Error>> {
     let url = format!(
         "https://api.coingecko.com/api/v3/coins/solana/history?date={}-{}-{}&localization=false",
         when.day(),
@@ -41,12 +41,6 @@ async fn get_opening_price(when: NaiveDate) -> Result<f64, Box<dyn std::error::E
         .market_data
         .ok_or_else(|| format!("Market data not available for {}", when).into())
         .map(|market_data| market_data.current_price.usd)
-}
-
-pub async fn get_price(when: NaiveDate) -> Result<f64, Box<dyn std::error::Error>> {
-    let opening_price = get_opening_price(when).await?;
-    let closing_price = get_opening_price(when + chrono::Duration::days(1)).await?;
-    Ok((opening_price + closing_price) / 2.)
 }
 
 pub async fn get_current_price() -> Result<f64, Box<dyn std::error::Error>> {
