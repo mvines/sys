@@ -86,6 +86,7 @@ pub enum MarketInfoFormat {
     All,
     Ask,
     Weighted24hAveragePrice,
+    Hourly,
 }
 
 #[async_trait]

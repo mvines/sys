@@ -2618,6 +2618,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .takes_value(false)
                                 .conflicts_with("ask")
                                 .help("Only display the weighted average price for the previous 24 hours"),
+                        )
+                        .arg(
+                            Arg::with_name("hourly")
+                                .long("hourly")
+                                .takes_value(false)
+                                .conflicts_with_all(&["ask", "weighted_24h_average_price"])
+                                .help("Display hourly price information for the previous 24 hours"),
                         ),
                 )
                 .subcommand(
@@ -3213,6 +3220,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let pair = value_t_or_exit!(arg_matches, "pair", String);
                     let format = if arg_matches.is_present("weighted_24h_average_price") {
                         MarketInfoFormat::Weighted24hAveragePrice
+                    } else if arg_matches.is_present("hourly") {
+                        MarketInfoFormat::Hourly
                     } else if arg_matches.is_present("ask") {
                         MarketInfoFormat::Ask
                     } else {

@@ -213,6 +213,10 @@ impl ExchangeClient for BinanceExchangeClient {
             MarketInfoFormat::Weighted24hAveragePrice => {
                 println!("{}", ticker_price.weighted_avg_price);
             }
+            MarketInfoFormat::Hourly => {
+                // Not currently supported for Binance
+                todo!();
+            }
         }
         Ok(())
     }

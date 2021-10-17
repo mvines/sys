@@ -92,17 +92,17 @@ impl ExchangeClient for FtxExchangeClient {
     ) -> Result<(), Box<dyn std::error::Error>> {
         let ftx_pair = binance_to_ftx_pair(pair)?;
 
-        let weighted_24h_avg_price = {
-            let hourly_prices = self
-                .rest
-                .get_historical_prices(ftx_pair, 3600, Some(24), None, None)
-                .await
-                .unwrap();
-            assert_eq!(hourly_prices.len(), 24);
+        let hourly_prices = self
+            .rest
+            .get_historical_prices(ftx_pair, 3600, Some(24), None, None)
+            .await
+            .unwrap();
+        assert_eq!(hourly_prices.len(), 24);
 
+        let weighted_24h_avg_price = {
             let mut total_volume = 0.;
             let mut avg_price_weighted_sum = 0.;
-            for hourly_price in hourly_prices {
+            for hourly_price in &hourly_prices {
                 let avg_price = (hourly_price.low + hourly_price.high).to_f64().unwrap() / 2.;
                 let volume = hourly_price.volume.to_f64().unwrap();
 
@@ -128,6 +128,19 @@ impl ExchangeClient for FtxExchangeClient {
             }
             MarketInfoFormat::Ask => {
                 println!("{}", market.ask);
+            }
+            MarketInfoFormat::Hourly => {
+                println!("hour,low,high,average,volume");
+                for p in &hourly_prices {
+                    println!(
+                        "{},{},{},{},{}",
+                        DateTime::<Local>::from(p.start_time),
+                        p.low,
+                        p.high,
+                        (p.low + p.high).to_f64().unwrap() / 2.,
+                        p.volume
+                    );
+                }
             }
             MarketInfoFormat::Weighted24hAveragePrice => {
                 println!("{:.4}", weighted_24h_avg_price);
