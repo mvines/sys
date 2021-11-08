@@ -148,9 +148,18 @@ async fn process_sync_exchange(
     verify_exchange_sol_balance(db, exchange, exchange_client, &deposit_address).await?;
 
     let recent_deposits = exchange_client.recent_deposits().await?;
-    let block_height = rpc_client.get_epoch_info()?.block_height;
+    let block_height = rpc_client
+        .get_epoch_info_with_commitment(CommitmentConfig::finalized())?
+        .block_height;
 
     for pending_deposit in db.pending_deposits(Some(exchange)) {
+        let confirmed = rpc_client
+            .confirm_transaction_with_commitment(
+                &pending_deposit.transfer.signature,
+                CommitmentConfig::finalized(),
+            )?
+            .value;
+
         if let Some(deposit_info) = recent_deposits.iter().find(|deposit_info| {
             deposit_info.tx_id == pending_deposit.transfer.signature.to_string()
         }) {
@@ -187,7 +196,7 @@ async fn process_sync_exchange(
                 println!("{}", msg);
                 notifier.send(&format!("{:?}: {}", exchange, msg)).await;
             }
-        } else if block_height > pending_deposit.transfer.last_valid_block_height {
+        } else if !confirmed && block_height > pending_deposit.transfer.last_valid_block_height {
             println!(
                 "Pending deposit cancelled: {}",
                 pending_deposit.transfer.signature
@@ -196,13 +205,14 @@ async fn process_sync_exchange(
                 .expect("cancel_deposit");
         } else {
             println!(
-                "{} deposit pending for at most {} blocks ({})",
+                "{} deposit pending for at most {} blocks ({}, confirmed={})",
                 Sol(pending_deposit.amount),
                 pending_deposit
                     .transfer
                     .last_valid_block_height
                     .saturating_sub(block_height),
-                pending_deposit.transfer.signature
+                pending_deposit.transfer.signature,
+                confirmed,
             );
         }
     }
