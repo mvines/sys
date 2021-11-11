@@ -2963,7 +2963,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let address = pubkey_of(arg_matches, "address").unwrap();
                 let description = value_t!(arg_matches, "description", String)
                     .ok()
-                    .unwrap_or_else(String::default);
+                    .unwrap_or_default();
 
                 process_account_add(
                     &mut db,
@@ -2982,7 +2982,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let amount = value_t_or_exit!(arg_matches, "amount", f64);
                 let description = value_t!(arg_matches, "description", String)
                     .ok()
-                    .unwrap_or_else(String::default);
+                    .unwrap_or_default();
                 let when = naivedate_of(&value_t_or_exit!(arg_matches, "when", String)).unwrap();
                 let price = value_t!(arg_matches, "price", f64).ok();
 
