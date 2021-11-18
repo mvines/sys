@@ -2274,10 +2274,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .value_name("YY/MM/DD")
                                 .takes_value(true)
                                 .required(true)
-                                .conflicts_with("transaction")
                                 .default_value(&default_when)
                                 .validator(|value| naivedate_of(&value).map(|_| ()))
-                                .help("Date acquired"),
+                                .help("Date acquired (ignored if the --transaction argument is provided)"),
                         )
                         .arg(
                             Arg::with_name("transaction")
