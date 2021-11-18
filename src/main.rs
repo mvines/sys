@@ -2597,13 +2597,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .setting(AppSettings::InferSubcommands)
                 .subcommand(
                     SubCommand::with_name("balance")
-                        .about("Get SOL balance")
+                        .about("Get exchange balance")
                         .arg(
                             Arg::with_name("available_only")
                                 .long("available")
                                 .takes_value(false)
-                                .help("Only display available balance"),
-                        ),
+                                .help("Only display available balance")
+                        )
+                        .arg(
+                            Arg::with_name("total_only")
+                                .long("total")
+                                .takes_value(false)
+                                .conflicts_with("available_only")
+                                .help("Only display total balance")
+                        )
+                        .arg(
+                            Arg::with_name("integer")
+                                .long("integer")
+                                .takes_value(false)
+                                .help("Output integer values with no currency symbols")
+                        )
                 )
                 .subcommand(SubCommand::with_name("address").about("Show SOL deposit address"))
                 .subcommand(
@@ -2613,7 +2626,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             Arg::with_name("pair")
                                 .value_name("TRADING_PAIR")
                                 .takes_value(true)
-                                .default_value("SOLUSD"),
+                                .default_value("SOLUSD")
                         )
                         .arg(
                             Arg::with_name("ask")
@@ -3174,53 +3187,53 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 ("balance", Some(arg_matches)) => {
                     let available_only = arg_matches.is_present("available_only");
+                    let total_only = arg_matches.is_present("total_only");
+                    let integer = arg_matches.is_present("integer");
 
                     let balances = exchange_client()?.balances().await?;
 
-                    if !available_only {
-                        println!("                    Total            Available")
+                    if !(available_only || total_only) {
+                        println!("                   Total            Available")
                     }
 
                     let balance = balances.get("SOL").cloned().unwrap_or_default();
-                    if available_only {
-                        println!(
-                            " SOL ◎{}",
-                            balance.available.separated_string_with_fixed_place(8)
-                        );
-                    } else {
-                        println!(
-                            " SOL {:>20} {:>20}",
-                            format!("◎{}", balance.total.separated_string_with_fixed_place(8)),
-                            format!(
-                                "◎{}",
-                                balance.available.separated_string_with_fixed_place(8)
-                            ),
-                        );
-                    }
 
+                    let print_balance = |coin: &str, symbol: &str, balance: &ExchangeBalance| {
+                        let symbol = if integer { "" } else { symbol };
+                        let available_balance = format!(
+                            "{}{}",
+                            symbol,
+                            if integer {
+                                balance.available.floor().to_string()
+                            } else {
+                                balance.available.separated_string_with_fixed_place(8)
+                            }
+                        );
+
+                        let total_balance = format!(
+                            "{}{}",
+                            symbol,
+                            if integer {
+                                balance.total.floor().to_string()
+                            } else {
+                                balance.total.separated_string_with_fixed_place(8)
+                            }
+                        );
+
+                        if available_only {
+                            println!("{} {}", coin, available_balance);
+                        } else if total_only {
+                            println!("{} {}", coin, total_balance);
+                        } else {
+                            println!("{} {:>20} {:>20}", coin, total_balance, available_balance);
+                        }
+                    };
+
+                    print_balance("SOL", "◎", &balance);
                     for coin in crate::exchange::USD_COINS {
                         if let Some(balance) = balances.get(*coin) {
                             if balance.total > 0. {
-                                if available_only {
-                                    println!(
-                                        "{1:>4} ${0}",
-                                        balance.available.separated_string_with_fixed_place(8),
-                                        coin
-                                    );
-                                } else {
-                                    println!(
-                                        "{:>4} {:>20} {:>20}",
-                                        coin,
-                                        format!(
-                                            "${}",
-                                            balance.total.separated_string_with_fixed_place(8)
-                                        ),
-                                        format!(
-                                            "${}",
-                                            balance.available.separated_string_with_fixed_place(8)
-                                        )
-                                    );
-                                }
+                                print_balance(coin, "$", balance);
                             }
                         }
                     }
