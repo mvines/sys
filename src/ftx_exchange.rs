@@ -62,7 +62,7 @@ impl ExchangeClient for FtxExchangeClient {
                 balances.insert(
                     coin.to_string(),
                     ExchangeBalance {
-                        available: balance.free.to_f64().unwrap(),
+                        available: balance.available_without_borrow.to_f64().unwrap(),
                         total: balance.total.to_f64().unwrap(),
                     },
                 );
