@@ -943,22 +943,24 @@ dependencies = [
 
 [[package]]
 name = "ftx"
-version = "0.3.0"
-source = "git+https://github.com/fabianboesiger/ftx?rev=4588f6ab98e165101cd274ac8fca6d0cb3e30321#4588f6ab98e165101cd274ac8fca6d0cb3e30321"
+version = "0.4.3"
 dependencies = [
  "chrono",
  "crc32fast",
  "dotenv",
- "futures-util",
+ "futures",
  "hex",
  "hmac-sha256",
+ "http",
  "log",
  "reqwest",
  "rust_decimal",
  "rust_decimal_macros",
  "serde",
  "serde_json",
+ "serde_qs",
  "serde_with",
+ "thiserror",
  "tokio",
  "tokio-tungstenite",
 ]
@@ -2505,6 +2507,17 @@ dependencies = [
  "itoa",
  "ryu",
  "serde",
+]
+
+[[package]]
+name = "serde_qs"
+version = "0.8.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c7715380eec75f029a4ef7de39a9200e0a63823176b759d055b613f5a87df6a6"
+dependencies = [
+ "percent-encoding",
+ "serde",
+ "thiserror",
 ]
 
 [[package]]

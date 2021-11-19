@@ -2,7 +2,11 @@ use {
     crate::exchange::*,
     async_trait::async_trait,
     chrono::prelude::*,
-    ftx::rest::{OrderSide as FtxOrderSide, OrderStatus as FtxOrderStatus, OrderType, Rest},
+    ftx::rest::{
+        CancelOrder, GetHistoricalPrices, GetMarket, GetOrder, GetWalletBalances,
+        GetWalletDepositAddress, GetWalletDeposits, OrderStatus as FtxOrderStatus, OrderType,
+        PlaceOrder, Rest, Side as FtxOrderSide,
+    },
     rust_decimal::prelude::*,
     solana_sdk::pubkey::Pubkey,
     std::collections::HashMap,
@@ -33,7 +37,10 @@ impl ExchangeClient for FtxExchangeClient {
     async fn deposit_address(&self) -> Result<Pubkey, Box<dyn std::error::Error>> {
         Ok(self
             .rest
-            .get_wallet_deposit_address("SOL", None)
+            .request(GetWalletDepositAddress {
+                coin: "SOL".into(),
+                method: None,
+            })
             .await
             .map_err(|err| format!("{:?}", err))?
             .address
@@ -45,7 +52,7 @@ impl ExchangeClient for FtxExchangeClient {
     ) -> Result<HashMap<String, ExchangeBalance>, Box<dyn std::error::Error>> {
         let wallet_balances = self
             .rest
-            .get_wallet_balances()
+            .request(GetWalletBalances {})
             .await
             .map_err(|err| format!("{:?}", err))?;
 
@@ -67,7 +74,11 @@ impl ExchangeClient for FtxExchangeClient {
     async fn recent_deposits(&self) -> Result<Vec<DepositInfo>, Box<dyn std::error::Error>> {
         Ok(self
             .rest
-            .get_wallet_deposits(None, None, None)
+            .request(GetWalletDeposits {
+                limit: None,
+                start_time: None,
+                end_time: None,
+            })
             .await
             .map_err(|err| format!("{:?}", err))?
             .into_iter()
@@ -94,7 +105,13 @@ impl ExchangeClient for FtxExchangeClient {
 
         let hourly_prices = self
             .rest
-            .get_historical_prices(ftx_pair, 3600, Some(24), None, None)
+            .request(GetHistoricalPrices {
+                market_name: ftx_pair.into(),
+                resolution: 3600,
+                limit: Some(24),
+                start_time: None,
+                end_time: None,
+            })
             .await
             .unwrap();
         assert_eq!(hourly_prices.len(), 24);
@@ -115,7 +132,7 @@ impl ExchangeClient for FtxExchangeClient {
 
         let market = self
             .rest
-            .get_market(ftx_pair)
+            .request(GetMarket::new(ftx_pair))
             .await
             .map_err(|err| format!("{:?}", err))?;
 
@@ -123,7 +140,11 @@ impl ExchangeClient for FtxExchangeClient {
             MarketInfoFormat::All => {
                 println!(
                     "{} | Ask: ${:.2}, Bid: ${:.2}, Last: ${:.2}, 24hr Average: ${:.2}",
-                    pair, market.ask, market.bid, market.last, weighted_24h_avg_price
+                    pair,
+                    market.ask,
+                    market.bid,
+                    market.last.unwrap_or_default(),
+                    weighted_24h_avg_price
                 );
             }
             MarketInfoFormat::Ask => {
@@ -154,7 +175,7 @@ impl ExchangeClient for FtxExchangeClient {
         let pair = binance_to_ftx_pair(pair)?;
         let market = self
             .rest
-            .get_market(pair)
+            .request(GetMarket::new(pair))
             .await
             .map_err(|err| format!("{:?}", err))?;
 
@@ -178,17 +199,18 @@ impl ExchangeClient for FtxExchangeClient {
         };
         let order_info = self
             .rest
-            .place_order(
-                pair,
+            .request(PlaceOrder {
+                market: pair.into(),
                 side,
-                Some(FromPrimitive::from_f64(price).unwrap()),
-                OrderType::Limit,
-                FromPrimitive::from_f64(amount).unwrap(),
-                None,
-                None,
-                /*post_only = */ Some(true),
-                None,
-            )
+                price: Some(FromPrimitive::from_f64(price).unwrap()),
+                r#type: OrderType::Limit,
+                size: FromPrimitive::from_f64(amount).unwrap(),
+                reduce_only: false,
+                ioc: false,
+                post_only: true,
+                client_id: None,
+                reject_on_price_band: false,
+            })
             .await
             .map_err(|err| format!("{:?}", err))?;
 
@@ -204,7 +226,7 @@ impl ExchangeClient for FtxExchangeClient {
 
         let result = self
             .rest
-            .cancel_order(order_id)
+            .request(CancelOrder::new(order_id))
             .await
             .map_err(|err| format!("{:?}", err))?;
 
@@ -221,7 +243,7 @@ impl ExchangeClient for FtxExchangeClient {
 
         let order_info = self
             .rest
-            .get_order(order_id)
+            .request(GetOrder::new(order_id))
             .await
             .map_err(|err| format!("{:?}", err))?;
 
@@ -243,7 +265,7 @@ impl ExchangeClient for FtxExchangeClient {
             side,
             price: order_info.price.unwrap_or_default().to_f64().unwrap(),
             amount: order_info.size.to_f64().unwrap(),
-            filled_amount: order_info.filled_size.to_f64().unwrap(),
+            filled_amount: order_info.filled_size.unwrap_or_default().to_f64().unwrap(),
             last_update,
         })
     }
@@ -257,7 +279,12 @@ pub fn new(
     }: ExchangeCredentials,
 ) -> Result<FtxExchangeClient, Box<dyn std::error::Error>> {
     Ok(FtxExchangeClient {
-        rest: Rest::new(api_key, secret, subaccount),
+        rest: Rest::new(ftx::options::Options {
+            endpoint: ftx::options::Endpoint::Com,
+            key: Some(api_key),
+            secret: Some(secret),
+            subaccount,
+        }),
     })
 }
 
@@ -269,6 +296,11 @@ pub fn new_us(
     }: ExchangeCredentials,
 ) -> Result<FtxExchangeClient, Box<dyn std::error::Error>> {
     Ok(FtxExchangeClient {
-        rest: Rest::new_us(api_key, secret, subaccount),
+        rest: Rest::new(ftx::options::Options {
+            endpoint: ftx::options::Endpoint::Us,
+            key: Some(api_key),
+            secret: Some(secret),
+            subaccount,
+        }),
     })
 }
