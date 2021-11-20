@@ -3477,7 +3477,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .floor();
 
                         let additional_amount = amount - lending_info.offered;
-                        if additional_amount > 0. {
+                        if additional_amount.abs() > f64::EPSILON {
                             let msg = format!(
                                 "Lending offer: {} {} (change: {})",
                                 amount.separated_string_with_fixed_place(2),
@@ -3488,7 +3488,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             println!("{}", msg);
                             notifier.send(&format!("{:?}: {}", exchange, msg)).await;
                         } else {
-                            println!("Lending offer unchanged");
+                            println!(
+                                "Lending offer unchanged: {}",
+                                lending_info.offered.separated_string_with_fixed_place(2)
+                            );
                         }
                     } else {
                         println!(
