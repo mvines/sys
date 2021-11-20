@@ -322,6 +322,21 @@ impl ExchangeClient for BinanceExchangeClient {
             last_update,
         })
     }
+
+    async fn get_lending_info(
+        &self,
+        _coin: &str,
+    ) -> Result<Option<LendingInfo>, Box<dyn std::error::Error>> {
+        todo!();
+    }
+
+    async fn submit_lending_offer(
+        &self,
+        _coin: &str,
+        _size: f64,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        todo!();
+    }
 }
 
 fn new_with_url(

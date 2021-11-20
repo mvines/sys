@@ -2901,6 +2901,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 ),
                         ),
                 )
+                .subcommand(
+                    SubCommand::with_name("lend")
+                        .about("Make a lending offer")
+                        .arg(
+                            Arg::with_name("coin")
+                                .index(1)
+                                .value_name("COIN")
+                                .takes_value(true)
+                                .required(true)
+                                .help("The coin to lend"),
+                        )
+                        .arg(
+                            Arg::with_name("amount")
+                                .index(2)
+                                .value_name("AMOUNT")
+                                .takes_value(true)
+                                .validator(is_amount_or_all)
+                                .help("The amount to lend; accepts keyword ALL"),
+                        ),
+                )
                 .subcommand(SubCommand::with_name("sync").about("Synchronize exchange")),
         );
     }
@@ -3436,6 +3456,54 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         &notifier,
                     )
                     .await?;
+                }
+                ("lend", Some(arg_matches)) => {
+                    let coin = value_t_or_exit!(arg_matches, "coin", String);
+                    let amount = arg_matches.value_of("amount");
+
+                    let exchange_client = exchange_client()?;
+
+                    let lending_info = exchange_client
+                        .get_lending_info(&coin)
+                        .await?
+                        .ok_or_else(|| format!("Lending not available for {}", coin))?;
+
+                    if let Some(amount) = amount {
+                        let amount = if amount == "ALL" {
+                            lending_info.lendable
+                        } else {
+                            amount.parse::<f64>().unwrap()
+                        }
+                        .floor();
+
+                        let additional_amount = amount - lending_info.offered;
+                        if additional_amount > 0. {
+                            let msg = format!(
+                                "Lending offer: {} {} (change: {})",
+                                amount.separated_string_with_fixed_place(2),
+                                coin,
+                                additional_amount.separated_string_with_fixed_place(2)
+                            );
+                            exchange_client.submit_lending_offer(&coin, amount).await?;
+                            println!("{}", msg);
+                            notifier.send(&format!("{:?}: {}", exchange, msg)).await;
+                        } else {
+                            println!("Lending offer unchanged");
+                        }
+                    } else {
+                        println!(
+                            "Available:     {}",
+                            lending_info.lendable.separated_string_with_fixed_place(2),
+                        );
+                        println!(
+                            "Current offer: {}",
+                            lending_info.offered.separated_string_with_fixed_place(2),
+                        );
+                        println!(
+                            "Locked:        {}",
+                            lending_info.locked.separated_string_with_fixed_place(2),
+                        );
+                    }
                 }
                 ("sync", Some(_arg_matches)) => {
                     let exchange_client = exchange_client()?;

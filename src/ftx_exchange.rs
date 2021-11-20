@@ -3,13 +3,13 @@ use {
     async_trait::async_trait,
     chrono::prelude::*,
     ftx::rest::{
-        CancelOrder, GetHistoricalPrices, GetMarket, GetOrder, GetWalletBalances,
+        CancelOrder, GetHistoricalPrices, GetLendingInfo, GetMarket, GetOrder, GetWalletBalances,
         GetWalletDepositAddress, GetWalletDeposits, OrderStatus as FtxOrderStatus, OrderType,
-        PlaceOrder, Rest, Side as FtxOrderSide,
+        PlaceOrder, Rest, Side as FtxOrderSide, SubmitLendingOffer,
     },
     rust_decimal::prelude::*,
     solana_sdk::pubkey::Pubkey,
-    std::collections::HashMap,
+    std::{collections::HashMap, convert::TryInto},
 };
 
 pub struct FtxExchangeClient {
@@ -268,6 +268,37 @@ impl ExchangeClient for FtxExchangeClient {
             filled_amount: order_info.filled_size.unwrap_or_default().to_f64().unwrap(),
             last_update,
         })
+    }
+
+    async fn get_lending_info(
+        &self,
+        coin: &str,
+    ) -> Result<Option<LendingInfo>, Box<dyn std::error::Error>> {
+        let lending_info = self.rest.request(GetLendingInfo {}).await.unwrap();
+
+        Ok(lending_info
+            .iter()
+            .find(|lending_info| lending_info.coin == *coin)
+            .map(|lending_info| LendingInfo {
+                lendable: lending_info.lendable.to_f64().unwrap(),
+                locked: lending_info.locked.to_f64().unwrap(),
+                offered: lending_info.offered.to_f64().unwrap(),
+            }))
+    }
+
+    async fn submit_lending_offer(
+        &self,
+        coin: &str,
+        size: f64,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        self.rest
+            .request(SubmitLendingOffer {
+                coin: coin.to_string(),
+                size: size.try_into().unwrap(),
+                rate: 0.00001_f64.try_into().unwrap(),
+            })
+            .await?;
+        Ok(())
     }
 }
 

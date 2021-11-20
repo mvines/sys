@@ -89,6 +89,12 @@ pub enum MarketInfoFormat {
     Hourly,
 }
 
+pub struct LendingInfo {
+    pub lendable: f64,
+    pub offered: f64,
+    pub locked: f64,
+}
+
 #[async_trait]
 pub trait ExchangeClient {
     async fn deposit_address(&self) -> Result<Pubkey, Box<dyn std::error::Error>>;
@@ -121,6 +127,15 @@ pub trait ExchangeClient {
         pair: &str,
         order_id: &OrderId,
     ) -> Result<OrderStatus, Box<dyn std::error::Error>>;
+    async fn get_lending_info(
+        &self,
+        coin: &str,
+    ) -> Result<Option<LendingInfo>, Box<dyn std::error::Error>>;
+    async fn submit_lending_offer(
+        &self,
+        coin: &str,
+        size: f64,
+    ) -> Result<(), Box<dyn std::error::Error>>;
 }
 
 pub fn exchange_client_new(
