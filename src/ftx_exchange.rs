@@ -295,7 +295,7 @@ impl ExchangeClient for FtxExchangeClient {
             .request(SubmitLendingOffer {
                 coin: coin.to_string(),
                 size: size.try_into().unwrap(),
-                rate: 0.00001_f64.try_into().unwrap(),
+                rate: 0.00000000001_f64.try_into().unwrap(),
             })
             .await?;
         Ok(())
