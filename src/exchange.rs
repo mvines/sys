@@ -93,6 +93,8 @@ pub struct LendingInfo {
     pub lendable: f64,
     pub offered: f64,
     pub locked: f64,
+    pub estimate_rate: f64, // estimated lending rate for the next spot margin cycle
+    pub previous_rate: f64, // lending rate in the previous spot margin cycle
 }
 
 #[async_trait]

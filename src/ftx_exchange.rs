@@ -3,9 +3,10 @@ use {
     async_trait::async_trait,
     chrono::prelude::*,
     ftx::rest::{
-        CancelOrder, GetHistoricalPrices, GetLendingInfo, GetMarket, GetOrder, GetWalletBalances,
-        GetWalletDepositAddress, GetWalletDeposits, OrderStatus as FtxOrderStatus, OrderType,
-        PlaceOrder, Rest, Side as FtxOrderSide, SubmitLendingOffer,
+        CancelOrder, GetHistoricalPrices, GetLendingInfo, GetLendingRates, GetMarket, GetOrder,
+        GetWalletBalances, GetWalletDepositAddress, GetWalletDeposits,
+        OrderStatus as FtxOrderStatus, OrderType, PlaceOrder, Rest, Side as FtxOrderSide,
+        SubmitLendingOffer,
     },
     rust_decimal::prelude::*,
     solana_sdk::pubkey::Pubkey,
@@ -275,7 +276,16 @@ impl ExchangeClient for FtxExchangeClient {
         coin: &str,
     ) -> Result<Option<LendingInfo>, Box<dyn std::error::Error>> {
         let lending_info = self.rest.request(GetLendingInfo {}).await.unwrap();
+        let lending_rate = self
+            .rest
+            .request(GetLendingRates {})
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|rate| rate.coin == coin)
+            .ok_or_else(|| format!("No lending rate available for {}", coin))?;
 
+        const HOURS_PER_YEAR: f64 = 24. * 356.;
         Ok(lending_info
             .iter()
             .find(|lending_info| lending_info.coin == *coin)
@@ -283,6 +293,8 @@ impl ExchangeClient for FtxExchangeClient {
                 lendable: lending_info.lendable.to_f64().unwrap(),
                 locked: lending_info.locked.to_f64().unwrap(),
                 offered: lending_info.offered.to_f64().unwrap(),
+                estimate_rate: lending_rate.estimate.to_f64().unwrap() * HOURS_PER_YEAR * 100.,
+                previous_rate: lending_rate.previous.to_f64().unwrap() * HOURS_PER_YEAR * 100.,
             }))
     }
 

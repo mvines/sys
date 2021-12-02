@@ -3479,10 +3479,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let additional_amount = amount - lending_info.offered;
                         if additional_amount.abs() > f64::EPSILON {
                             let msg = format!(
-                                "Lending offer: {} {} (change: {})",
+                                "Lending offer: {} {} (change: {}) at {:.1}%",
                                 amount.separated_string_with_fixed_place(2),
                                 coin,
-                                additional_amount.separated_string_with_fixed_place(2)
+                                additional_amount.separated_string_with_fixed_place(2),
+                                lending_info.estimate_rate,
                             );
                             exchange_client.submit_lending_offer(&coin, amount).await?;
                             println!("{}", msg);
@@ -3506,6 +3507,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             "Locked:        {}",
                             lending_info.locked.separated_string_with_fixed_place(2),
                         );
+                        println!(
+                            "Current rate:  {:.1}% (estimated)",
+                            lending_info.estimate_rate
+                        );
+                        println!("Previous rate: {:.1}%", lending_info.previous_rate);
                     }
                 }
                 ("sync", Some(_arg_matches)) => {
