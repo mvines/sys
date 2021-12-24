@@ -23,11 +23,11 @@ struct AccountInfoBalance {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct AccountInfo {
-    account_type: String,
+    // account_type: String,
     balances: Vec<AccountInfoBalance>,
     can_deposit: bool,
-    can_trade: bool,
-    can_withdraw: bool,
+    // can_trade: bool,
+    // can_withdraw: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -50,17 +50,17 @@ struct TickerPrice {
     low_price: String,
     price_change: String,
     price_change_percent: String,
-    symbol: String,
-    volume: String,
-    quote_volume: String,
+    // symbol: String,
+    // volume: String,
+    // quote_volume: String,
     weighted_avg_price: String,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct DepositRecord {
-    address: String,
-    asset: String,
+    // address: String,
+    // asset: String,
     amount: f64,
     tx_id: String,
     status: usize, // 0 = pending, 1 = success, 6 = credited but cannot withdraw
@@ -76,16 +76,17 @@ impl DepositRecord {
 #[serde(rename_all = "camelCase")]
 struct DepositHistory {
     deposit_list: Vec<DepositRecord>,
-    success: bool,
+    // success: bool,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Order {
     client_order_id: String,
-    cummulative_quote_qty: String,
+    // cummulative_quote_qty: String,
     executed_qty: String,
-    order_id: usize,
+    // order_id: usize,
+    #[allow(dead_code)]
     order_list_id: isize,
     orig_qty: String,
     price: String,
@@ -94,7 +95,7 @@ struct Order {
     symbol: String,
     time_in_force: String,
     r#type: String,
-    time: Option<i64>,
+    // time: Option<i64>,
     update_time: Option<i64>,
 }
 
