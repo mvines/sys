@@ -1,16 +1,19 @@
 use {
     crate::exchange::*,
     async_trait::async_trait,
-    chrono::prelude::*,
+    chrono::{prelude::*, Duration},
     ftx::rest::{
-        CancelOrder, GetHistoricalPrices, GetLendingInfo, GetLendingRates, GetMarket, GetOrder,
-        GetWalletBalances, GetWalletDepositAddress, GetWalletDeposits,
-        OrderStatus as FtxOrderStatus, OrderType, PlaceOrder, Rest, Side as FtxOrderSide,
-        SubmitLendingOffer,
+        CancelOrder, GetHistoricalPrices, GetLendingInfo, GetLendingRates, GetMarket,
+        GetMyLendingHistory, GetOrder, GetWalletBalances, GetWalletDepositAddress,
+        GetWalletDeposits, MyLendingHistory, OrderStatus as FtxOrderStatus, OrderType, PlaceOrder,
+        Rest, Side as FtxOrderSide, SubmitLendingOffer,
     },
     rust_decimal::prelude::*,
     solana_sdk::pubkey::Pubkey,
-    std::{collections::HashMap, convert::TryInto},
+    std::{
+        collections::HashMap,
+        convert::{TryFrom, TryInto},
+    },
 };
 
 pub struct FtxExchangeClient {
@@ -296,6 +299,63 @@ impl ExchangeClient for FtxExchangeClient {
                 estimate_rate: lending_rate.estimate.to_f64().unwrap() * HOURS_PER_YEAR * 100.,
                 previous_rate: lending_rate.previous.to_f64().unwrap() * HOURS_PER_YEAR * 100.,
             }))
+    }
+
+    async fn get_lending_history(
+        &self,
+        lending_history: LendingHistory,
+    ) -> Result<HashMap<String, f64>, Box<dyn std::error::Error>> {
+        let one_day = Duration::days(1);
+
+        let (mut start_time, end_time) = match lending_history {
+            LendingHistory::Range {
+                start_date,
+                end_date,
+            } => {
+                let start_time = Local.from_local_date(&start_date).unwrap().and_hms(0, 0, 0);
+                let end_time = Local
+                    .from_local_date(&end_date)
+                    .unwrap()
+                    .and_hms(23, 59, 59);
+                (start_time, end_time)
+            }
+            LendingHistory::Previous { days } => {
+                let end_time = Local::now().date().and_hms(0, 0, 0) + one_day;
+                let start_time = end_time - one_day * days as i32;
+
+                (start_time, end_time - Duration::seconds(1))
+            }
+        };
+
+        println!("Start date: {}", start_time);
+        println!("End date:   {}", end_time);
+
+        let mut all_proceeds = HashMap::<String, f64>::default();
+        while start_time < end_time {
+            let page_end_time = std::cmp::min(start_time + one_day, end_time);
+
+            println!(
+                "(Fetching history from {} to {})",
+                start_time, page_end_time
+            );
+
+            let lending_history = self
+                .rest
+                .request(GetMyLendingHistory {
+                    start_time: Some(start_time.into()),
+                    end_time: Some((page_end_time - Duration::seconds(1)).into()),
+                })
+                .await
+                .unwrap();
+
+            for MyLendingHistory { coin, proceeds, .. } in lending_history {
+                let entry: &mut f64 = all_proceeds.entry(coin).or_default();
+                *entry += f64::try_from(proceeds).unwrap();
+            }
+            start_time = page_end_time;
+        }
+
+        Ok(all_proceeds)
     }
 
     async fn submit_lending_offer(

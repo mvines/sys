@@ -97,6 +97,16 @@ pub struct LendingInfo {
     pub previous_rate: f64, // lending rate in the previous spot margin cycle
 }
 
+pub enum LendingHistory {
+    Range {
+        start_date: NaiveDate,
+        end_date: NaiveDate,
+    },
+    Previous {
+        days: usize,
+    },
+}
+
 #[async_trait]
 pub trait ExchangeClient {
     async fn deposit_address(&self) -> Result<Pubkey, Box<dyn std::error::Error>>;
@@ -133,6 +143,10 @@ pub trait ExchangeClient {
         &self,
         coin: &str,
     ) -> Result<Option<LendingInfo>, Box<dyn std::error::Error>>;
+    async fn get_lending_history(
+        &self,
+        lending_history: LendingHistory,
+    ) -> Result<HashMap<String, f64>, Box<dyn std::error::Error>>;
     async fn submit_lending_offer(
         &self,
         coin: &str,

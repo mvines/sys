@@ -2921,6 +2921,44 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .help("The amount to lend; accepts keyword ALL"),
                         ),
                 )
+                .subcommand(
+                    SubCommand::with_name("lending-history")
+                        .about("Display lending history")
+                        .setting(AppSettings::SubcommandRequiredElseHelp)
+                        .setting(AppSettings::InferSubcommands)
+                        .subcommand(
+                            SubCommand::with_name("range")
+                                .about("Display lending history for the given date range")
+                                .arg(
+                                    Arg::with_name("start_date")
+                                        .value_name("YY/MM/DD")
+                                        .takes_value(true)
+                                        .required(true)
+                                        .validator(|value| naivedate_of(&value).map(|_| ()))
+                                        .help("Start date, inclusive")
+                                )
+                                .arg(
+                                    Arg::with_name("end_date")
+                                        .value_name("YY/MM/DD")
+                                        .takes_value(true)
+                                        .required(true)
+                                        .default_value(&default_when)
+                                        .validator(|value| naivedate_of(&value).map(|_| ()))
+                                        .help("End date, inclusive")
+                                )
+                        )
+                        .subcommand(
+                            SubCommand::with_name("previous")
+                                .about("Display lending history for previous days")
+                                .arg(
+                                    Arg::with_name("days")
+                                        .value_name("DAYS")
+                                        .default_value("1")
+                                        .validator(is_parsable::<usize>)
+                                        .help("Number of days, including today")
+                                )
+                        )
+                )
                 .subcommand(SubCommand::with_name("sync").about("Synchronize exchange")),
         );
     }
@@ -3512,6 +3550,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             lending_info.estimate_rate
                         );
                         println!("Previous rate: {:.1}%", lending_info.previous_rate);
+                    }
+                }
+                ("lending-history", Some(lending_history_matches)) => {
+                    let exchange_client = exchange_client()?;
+                    let lending_history = match lending_history_matches.subcommand() {
+                        ("range", Some(arg_matches)) => {
+                            let start_date =
+                                naivedate_of(&value_t_or_exit!(arg_matches, "start_date", String))
+                                    .unwrap();
+                            let end_date =
+                                naivedate_of(&value_t_or_exit!(arg_matches, "end_date", String))
+                                    .unwrap();
+                            exchange_client.get_lending_history(LendingHistory::Range {
+                                start_date,
+                                end_date,
+                            })
+                        }
+                        ("previous", Some(arg_matches)) => {
+                            let days = value_t_or_exit!(arg_matches, "days", usize);
+                            exchange_client.get_lending_history(LendingHistory::Previous { days })
+                        }
+                        _ => unreachable!(),
+                    }
+                    .await?;
+
+                    for (coin, amount) in lending_history.iter() {
+                        println!("{}: {}", coin, amount.separated_string_with_fixed_place(2));
                     }
                 }
                 ("sync", Some(_arg_matches)) => {

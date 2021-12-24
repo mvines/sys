@@ -13,8 +13,8 @@ chrono-humanize = "0.2.1"
 clap = "2.33"
 console = "0.14.1"
 fd-lock = "3.0.0"
-ftx = { git = "https://github.com/fabianboesiger/ftx", rev = "85de35236b456eba427fb7b666cc555645c2c6ba" }
-#ftx = { git = "https://github.com/mvines/ftx", rev = "04f133b53beda3e7ba701f26d22db7cc48092186" }
+#ftx = { git = "https://github.com/fabianboesiger/ftx", rev = "85de35236b456eba427fb7b666cc555645c2c6ba" }
+ftx = { git = "https://github.com/mvines/ftx", rev = "d5e6f4367dfbabd574859ca19a2f047d5eadad5b" }
 #ftx = { path = "../ftx" }
 itertools = "0.10.0"
 separator = "0.4.1"

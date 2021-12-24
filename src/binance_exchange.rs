@@ -331,6 +331,13 @@ impl ExchangeClient for BinanceExchangeClient {
         todo!();
     }
 
+    async fn get_lending_history(
+        &self,
+        _lending_history: LendingHistory,
+    ) -> Result<HashMap<String, f64>, Box<dyn std::error::Error>> {
+        todo!();
+    }
+
     async fn submit_lending_offer(
         &self,
         _coin: &str,
