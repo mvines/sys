@@ -14,7 +14,7 @@ clap = "2.33"
 console = "0.14.1"
 fd-lock = "3.0.0"
 #ftx = { git = "https://github.com/fabianboesiger/ftx", rev = "85de35236b456eba427fb7b666cc555645c2c6ba" }
-ftx = { git = "https://github.com/mvines/ftx", rev = "d5e6f4367dfbabd574859ca19a2f047d5eadad5b" }
+ftx = { git = "https://github.com/mvines/ftx", rev = "600052e6a270bdaeee8f6767ae8f93fc45f83e69" }
 #ftx = { path = "../ftx" }
 itertools = "0.10.0"
 separator = "0.4.1"
@@ -34,6 +34,9 @@ solana-sdk = "=1.8.11"
 solana-stake-program = "=1.8.11"
 solana-transaction-status = "=1.8.11"
 solana-vote-program = "=1.8.11"
+spl-associated-token-account = "1.0.3"
+spl-token = "3.2.0"
+strum = { version = "0.23", features = ["derive"] }
 thiserror = "1.0"
 tokio = { version = "1", features = ["macros", "time"] }
 tokio-binance = "1.0"

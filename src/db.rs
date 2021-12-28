@@ -1,16 +1,15 @@
 use {
-    crate::{exchange::*, field_as_string},
+    crate::{exchange::*, field_as_string, token::*},
     chrono::{prelude::*, NaiveDate},
     pickledb::{PickleDb, PickleDbDumpPolicy},
     serde::{Deserialize, Serialize},
     solana_sdk::{
         clock::{Epoch, Slot},
-        native_token::lamports_to_sol,
         pubkey::Pubkey,
         signature::Signature,
     },
     std::{
-        collections::{BTreeMap, HashSet},
+        collections::HashSet,
         fmt, fs,
         path::{Path, PathBuf},
     },
@@ -28,8 +27,8 @@ pub enum DbError {
     #[error("Account already exists: {0}")]
     AccountAlreadyExists(Pubkey),
 
-    #[error("Account does not exist: {0}")]
-    AccountDoesNotExist(Pubkey),
+    #[error("Account does not exist: {0} ({1})")]
+    AccountDoesNotExist(Pubkey, MaybeToken),
 
     #[error("Pending transfer with signature does not exist: {0}")]
     PendingTransferDoesNotExist(Signature),
@@ -86,7 +85,7 @@ pub struct Db {
 #[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
 pub struct PendingDeposit {
     pub exchange: Exchange,
-    pub amount: u64,
+    pub amount: u64, // lamports/tokens
     pub transfer: PendingTransfer,
 }
 
@@ -100,6 +99,9 @@ pub struct PendingTransfer {
     pub from_address: Pubkey,
     #[serde(with = "field_as_string")]
     pub to_address: Pubkey,
+
+    #[serde(default = "MaybeToken::SOL")]
+    pub token: MaybeToken,
 
     pub lots: Vec<Lot>,
 }
@@ -116,6 +118,9 @@ pub struct OpenOrder {
 
     #[serde(with = "field_as_string")]
     pub deposit_address: Pubkey,
+
+    #[serde(default = "MaybeToken::SOL")]
+    pub token: MaybeToken,
 }
 
 #[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
@@ -159,7 +164,7 @@ impl fmt::Display for LotAcquistionKind {
 #[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
 pub struct LotAcquistion {
     pub when: NaiveDate,
-    pub price: f64, // USD per SOL
+    pub price: f64, // USD per SOL/token
     pub kind: LotAcquistionKind,
 }
 
@@ -167,23 +172,23 @@ pub struct LotAcquistion {
 pub struct Lot {
     pub lot_number: usize,
     pub acquisition: LotAcquistion,
-    pub amount: u64, // lamports
+    pub amount: u64, // lamports/tokens
 }
 
 impl Lot {
     // Figure the amount of income that the Lot incurred
-    pub fn income(&self) -> f64 {
+    pub fn income(&self, token: MaybeToken) -> f64 {
         match self.acquisition.kind {
             LotAcquistionKind::EpochReward { .. } | LotAcquistionKind::NotAvailable => {
-                self.acquisition.price * lamports_to_sol(self.amount)
+                self.acquisition.price * token.ui_amount(self.amount)
             }
             LotAcquistionKind::Exchange { .. } => 0.,
             LotAcquistionKind::Transaction { .. } => 0.,
         }
     }
     // Figure the current cap gain/loss for the Lot
-    pub fn cap_gain(&self, current_price: f64) -> f64 {
-        (current_price - self.acquisition.price) * lamports_to_sol(self.amount)
+    pub fn cap_gain(&self, token: MaybeToken, current_price: f64) -> f64 {
+        (current_price - self.acquisition.price) * token.ui_amount(self.amount)
     }
 }
 
@@ -216,17 +221,21 @@ impl fmt::Display for LotDisposalKind {
 pub struct DisposedLot {
     pub lot: Lot,
     pub when: NaiveDate,
-    pub price: f64, // USD per SOL
+    pub price: f64, // USD per SOL/token
     pub kind: LotDisposalKind,
+    #[serde(default = "MaybeToken::SOL")]
+    pub token: MaybeToken,
 }
 
 #[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
 pub struct TrackedAccount {
     #[serde(with = "field_as_string")]
     pub address: Pubkey,
+    #[serde(default = "MaybeToken::SOL")]
+    pub token: MaybeToken, // if token then `address` is the token owner
     pub description: String,
     pub last_update_epoch: Epoch,
-    pub last_update_balance: u64,
+    pub last_update_balance: u64, // lamports/tokens
     pub lots: Vec<Lot>,
     pub no_sync: Option<bool>,
 }
@@ -432,6 +441,7 @@ impl Db {
         amount: u64,
         exchange: Exchange,
         deposit_address: Pubkey,
+        token: MaybeToken,
         lot_numbers: Option<HashSet<usize>>,
     ) -> DbResult<()> {
         if !self.db.lexists("deposits") {
@@ -439,8 +449,8 @@ impl Db {
         }
 
         let mut from_account = self
-            .get_account(from_address)
-            .ok_or(DbError::AccountDoesNotExist(from_address))?;
+            .get_account(from_address, token)
+            .ok_or(DbError::AccountDoesNotExist(from_address, token))?;
 
         let deposit = PendingDeposit {
             exchange,
@@ -450,6 +460,7 @@ impl Db {
                 last_valid_block_height,
                 from_address,
                 to_address: deposit_address,
+                token,
                 lots: from_account.extract_lots(self, amount, lot_numbers)?,
             },
         };
@@ -473,7 +484,7 @@ impl Db {
         self.db.lcreate("deposits")?;
         self.db.lextend("deposits", &pending_deposits).unwrap();
 
-        self.complete_transfer_or_deposit(transfer, success) // `complete_transfer_or_deposit` calls `save`...
+        self.complete_transfer_or_deposit(transfer, success, false) // `complete_transfer_or_deposit` calls `save`...
     }
 
     pub fn cancel_deposit(&mut self, signature: Signature) -> DbResult<()> {
@@ -526,6 +537,7 @@ impl Db {
             order_id,
             lots,
             deposit_address: deposit_account.address,
+            token: deposit_account.token,
         });
         self.db.set("orders", &open_orders).unwrap();
         self.update_account(deposit_account) // `update_account` calls `save`...
@@ -567,6 +579,7 @@ impl Db {
             order_id,
             lots,
             deposit_address,
+            token,
             ..
         } = open_orders
             .iter()
@@ -583,8 +596,8 @@ impl Db {
 
                 if filled_amount > 0 {
                     let mut deposit_account = self
-                        .get_account(deposit_address)
-                        .ok_or(DbError::AccountDoesNotExist(deposit_address))?;
+                        .get_account(deposit_address, token)
+                        .ok_or(DbError::AccountDoesNotExist(deposit_address, token))?;
 
                     deposit_account.merge_lots(vec![Lot {
                         lot_number: self.next_lot_number(),
@@ -621,6 +634,7 @@ impl Db {
                                 pair: pair.clone(),
                                 order_id: order_id.clone(),
                             },
+                            token,
                         });
                     }
                     self.db.set("disposed-lots", &disposed_lots).unwrap();
@@ -628,8 +642,8 @@ impl Db {
 
                 if !cancelled_lots.is_empty() {
                     let mut deposit_account = self
-                        .get_account(deposit_address)
-                        .ok_or(DbError::AccountDoesNotExist(deposit_address))?;
+                        .get_account(deposit_address, token)
+                        .ok_or(DbError::AccountDoesNotExist(deposit_address, token))?;
 
                     deposit_account.merge_lots(cancelled_lots);
                     self.update_account(deposit_account)?;
@@ -642,14 +656,15 @@ impl Db {
     pub fn record_disposal(
         &mut self,
         from_address: Pubkey,
+        token: MaybeToken,
         amount: u64,
         description: String,
         when: NaiveDate,
         price: f64,
     ) -> DbResult<Vec<DisposedLot>> {
         let mut from_account = self
-            .get_account(from_address)
-            .ok_or(DbError::AccountDoesNotExist(from_address))?;
+            .get_account(from_address, token)
+            .ok_or(DbError::AccountDoesNotExist(from_address, token))?;
 
         let mut disposed_lots = self.disposed_lots();
 
@@ -662,6 +677,7 @@ impl Db {
                 kind: LotDisposalKind::Other {
                     description: description.clone(),
                 },
+                token: from_account.token,
             });
         }
         self.db.set("disposed-lots", &disposed_lots)?;
@@ -695,7 +711,7 @@ impl Db {
             self.db.lcreate("accounts")?;
         }
 
-        if self.get_account(account.address).is_some() {
+        if self.get_account(account.address, account.token).is_some() {
             Err(DbError::AccountAlreadyExists(account.address))
         } else {
             self.db.ladd("accounts", &account).unwrap();
@@ -712,23 +728,24 @@ impl Db {
         account.assert_lot_balance();
 
         let position = self
-            .get_account_position(account.address)
-            .ok_or(DbError::AccountDoesNotExist(account.address))?;
+            .get_account_position(account.address, account.token)
+            .ok_or(DbError::AccountDoesNotExist(account.address, account.token))?;
         assert!(
             self.db
                 .lpop::<TrackedAccount>("accounts", position)
                 .is_some(),
-            "Cannot update unknown account: {}",
-            account.address
+            "Cannot update unknown account: {} ({})",
+            account.address,
+            account.token,
         );
         self.db.ladd("accounts", &account).unwrap();
         self.save()
     }
 
-    fn remove_account_no_save(&mut self, address: Pubkey) -> DbResult<()> {
+    fn remove_account_no_save(&mut self, address: Pubkey, token: MaybeToken) -> DbResult<()> {
         let position = self
-            .get_account_position(address)
-            .ok_or(DbError::AccountDoesNotExist(address))?;
+            .get_account_position(address, token)
+            .ok_or(DbError::AccountDoesNotExist(address, token))?;
         assert!(
             self.db
                 .lpop::<TrackedAccount>("accounts", position)
@@ -739,16 +756,16 @@ impl Db {
         Ok(())
     }
 
-    pub fn remove_account(&mut self, address: Pubkey) -> DbResult<()> {
-        self.remove_account_no_save(address)?;
+    pub fn remove_account(&mut self, address: Pubkey, token: MaybeToken) -> DbResult<()> {
+        self.remove_account_no_save(address, token)?;
         self.save()
     }
 
-    fn get_account_position(&self, address: Pubkey) -> Option<usize> {
+    fn get_account_position(&self, address: Pubkey, token: MaybeToken) -> Option<usize> {
         if self.db.lexists("accounts") {
             for (position, value) in self.db.liter("accounts").enumerate() {
                 if let Some(tracked_account) = value.get_item::<TrackedAccount>() {
-                    if tracked_account.address == address {
+                    if tracked_account.address == address && tracked_account.token == token {
                         return Some(position);
                     }
                 }
@@ -757,28 +774,39 @@ impl Db {
         None
     }
 
-    pub fn get_account(&self, address: Pubkey) -> Option<TrackedAccount> {
+    pub fn get_account(&self, address: Pubkey, token: MaybeToken) -> Option<TrackedAccount> {
         if !self.db.lexists("accounts") {
             None
         } else {
             self.db
                 .liter("accounts")
                 .filter_map(|item_iter| item_iter.get_item::<TrackedAccount>())
-                .find(|tracked_account| tracked_account.address == address)
+                .find(|tracked_account| {
+                    tracked_account.address == address && tracked_account.token == token
+                })
         }
     }
 
-    pub fn get_accounts(&self) -> BTreeMap<Pubkey, TrackedAccount> {
+    /// Returns all `MaybeToken`s associated with an `address`
+    pub fn get_account_tokens(&self, address: Pubkey) -> Vec<TrackedAccount> {
         if !self.db.lexists("accounts") {
-            return BTreeMap::default();
+            vec![]
+        } else {
+            self.db
+                .liter("accounts")
+                .filter_map(|item_iter| item_iter.get_item::<TrackedAccount>())
+                .filter(|tracked_account| tracked_account.address == address)
+                .collect()
+        }
+    }
+
+    pub fn get_accounts(&self) -> Vec<TrackedAccount> {
+        if !self.db.lexists("accounts") {
+            return vec![];
         }
         self.db
             .liter("accounts")
-            .filter_map(|item_iter| {
-                item_iter
-                    .get_item::<TrackedAccount>()
-                    .map(|ta| (ta.address, ta))
-            })
+            .filter_map(|item_iter| item_iter.get_item::<TrackedAccount>())
             .collect()
     }
 
@@ -798,8 +826,10 @@ impl Db {
         sweep_stake_account: SweepStakeAccount,
     ) -> DbResult<()> {
         let _ = self
-            .get_account_position(sweep_stake_account.address)
-            .ok_or(DbError::AccountDoesNotExist(sweep_stake_account.address))?;
+            .get_account_position(sweep_stake_account.address, MaybeToken::SOL())
+            .ok_or_else(|| {
+                DbError::AccountDoesNotExist(sweep_stake_account.address, MaybeToken::SOL())
+            })?;
         self.db
             .set("sweep-stake-account", &sweep_stake_account)
             .unwrap();
@@ -831,6 +861,7 @@ impl Db {
 
         self.add_account_no_save(TrackedAccount {
             address,
+            token: MaybeToken::SOL(),
             description: "Transitory stake account".to_string(),
             last_update_balance: 0,
             last_update_epoch: current_epoch,
@@ -840,12 +871,13 @@ impl Db {
     }
 
     pub fn remove_transitory_sweep_stake_address(&mut self, address: Pubkey) -> DbResult<()> {
-        let _ = self.remove_account_no_save(address);
+        let token = MaybeToken::SOL();
+        let _ = self.remove_account_no_save(address, token);
 
         let mut transitory_sweep_stake_addresses = self.get_transitory_sweep_stake_addresses();
 
         if !transitory_sweep_stake_addresses.contains(&address) {
-            Err(DbError::AccountDoesNotExist(address))
+            Err(DbError::AccountDoesNotExist(address, token))
         } else {
             transitory_sweep_stake_addresses.remove(&address);
             self.set_transitory_sweep_stake_addresses(transitory_sweep_stake_addresses)
@@ -879,22 +911,24 @@ impl Db {
         from_address: Pubkey,
         amount: Option<u64>, // None = all
         to_address: Pubkey,
+        token: MaybeToken,
         lot_numbers: Option<HashSet<usize>>,
     ) -> DbResult<()> {
         let mut pending_transfers = self.pending_transfers();
 
         let mut from_account = self
-            .get_account(from_address)
-            .ok_or(DbError::AccountDoesNotExist(from_address))?;
+            .get_account(from_address, token)
+            .ok_or(DbError::AccountDoesNotExist(from_address, token))?;
         let _to_account = self
-            .get_account(to_address)
-            .ok_or(DbError::AccountDoesNotExist(to_address))?;
+            .get_account(to_address, token)
+            .ok_or(DbError::AccountDoesNotExist(to_address, token))?;
 
         pending_transfers.push(PendingTransfer {
             signature,
             last_valid_block_height,
             from_address,
             to_address,
+            token,
             lots: from_account.extract_lots(
                 self,
                 amount.unwrap_or(from_account.last_update_balance),
@@ -910,23 +944,28 @@ impl Db {
         &mut self,
         pending_transfer: PendingTransfer,
         success: bool,
+        track_fiat_lots: bool,
     ) -> DbResult<()> {
         let PendingTransfer {
             from_address,
             to_address,
             lots,
+            token,
             ..
         } = pending_transfer;
 
         let mut from_account = self
-            .get_account(from_address)
-            .ok_or(DbError::AccountDoesNotExist(from_address))?;
+            .get_account(from_address, token)
+            .ok_or(DbError::AccountDoesNotExist(from_address, token))?;
         let mut to_account = self
-            .get_account(to_address)
-            .ok_or(DbError::AccountDoesNotExist(to_address))?;
+            .get_account(to_address, token)
+            .ok_or(DbError::AccountDoesNotExist(to_address, token))?;
 
         if success {
-            to_account.merge_lots(lots);
+            // If the token is fiat fungible, drop the lots on deposit into an exchange
+            if !token.fiat_fungible() || track_fiat_lots {
+                to_account.merge_lots(lots);
+            }
         } else {
             from_account.merge_lots(lots);
         }
@@ -949,7 +988,7 @@ impl Db {
         pending_transfers.retain(|pt| pt.signature != signature);
         self.db.set("transfers", &pending_transfers).unwrap();
 
-        self.complete_transfer_or_deposit(transfer, success) // `complete_transfer_or_deposit` calls `save`...
+        self.complete_transfer_or_deposit(transfer, success, true) // `complete_transfer_or_deposit` calls `save`...
     }
 
     pub fn cancel_transfer(&mut self, signature: Signature) -> DbResult<()> {
@@ -985,7 +1024,7 @@ impl Db {
         let disposed_lot = disposed_lot.drain(..).next();
 
         let mut tracked_accounts = vec![];
-        for account in self.get_accounts().values().into_iter() {
+        for account in self.get_accounts().into_iter() {
             let lots = account
                 .lots
                 .iter()
@@ -1012,6 +1051,13 @@ impl Db {
 
             let (mut lot2, mut account2) = tracked_accounts.pop().unwrap();
 
+            if account2.token != disposed_lot.token {
+                return Err(DbError::LotSwapFailed(format!(
+                    "Token mismatch ({} != {})",
+                    account2.token, disposed_lot.token
+                )));
+            }
+
             if lot2.acquisition.when >= disposed_lot.when {
                 return Err(DbError::LotSwapFailed(format!(
                     "Lot {} was acquired after disposal of lot {}",
@@ -1031,7 +1077,7 @@ impl Db {
             if disposed_lot.lot.amount < lot2.amount {
                 let mut lot2_split = lot2.clone();
                 lot2_split.amount -= disposed_lot.lot.amount;
-                account2.lots.push(lot2_split); // TOOD: merge_or_addd
+                account2.lots.push(lot2_split); // TODO: merge_or_add
 
                 lot2.lot_number = self.next_lot_number();
                 lot2.amount = disposed_lot.lot.amount;
@@ -1056,6 +1102,13 @@ impl Db {
 
             let (mut lot1, mut account1) = tracked_accounts.pop().unwrap();
             let (mut lot2, mut account2) = tracked_accounts.pop().unwrap();
+
+            if account2.token != account1.token {
+                return Err(DbError::LotSwapFailed(format!(
+                    "Token mismatch ({} != {})",
+                    account2.token, account1.token
+                )));
+            }
 
             std::mem::swap(&mut lot1.lot_number, &mut lot2.lot_number);
 

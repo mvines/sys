@@ -1,5 +1,5 @@
 use {
-    crate::exchange::*,
+    crate::{exchange::*, token::MaybeToken},
     async_trait::async_trait,
     chrono::{Local, TimeZone},
     serde::Deserialize,
@@ -101,7 +101,14 @@ struct Order {
 
 #[async_trait]
 impl ExchangeClient for BinanceExchangeClient {
-    async fn deposit_address(&self) -> Result<Pubkey, Box<dyn std::error::Error>> {
+    async fn deposit_address(
+        &self,
+        token: MaybeToken,
+    ) -> Result<Pubkey, Box<dyn std::error::Error>> {
+        if token != MaybeToken::SOL() {
+            return Err(format!("{} deposits are not supported", token).into());
+        }
+
         if !self
             .account_client
             .get_account()

@@ -1,5 +1,5 @@
 use {
-    crate::{binance_exchange, ftx_exchange},
+    crate::{binance_exchange, ftx_exchange, token::MaybeToken},
     async_trait::async_trait,
     chrono::NaiveDate,
     serde::{Deserialize, Serialize},
@@ -109,7 +109,10 @@ pub enum LendingHistory {
 
 #[async_trait]
 pub trait ExchangeClient {
-    async fn deposit_address(&self) -> Result<Pubkey, Box<dyn std::error::Error>>;
+    async fn deposit_address(
+        &self,
+        token: MaybeToken,
+    ) -> Result<Pubkey, Box<dyn std::error::Error>>;
     async fn recent_deposits(&self) -> Result<Vec<DepositInfo>, Box<dyn std::error::Error>>;
     async fn balances(
         &self,

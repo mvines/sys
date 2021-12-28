@@ -1025,7 +1025,7 @@ dependencies = [
 [[package]]
 name = "ftx"
 version = "0.4.3"
-source = "git+https://github.com/mvines/ftx?rev=d5e6f4367dfbabd574859ca19a2f047d5eadad5b#d5e6f4367dfbabd574859ca19a2f047d5eadad5b"
+source = "git+https://github.com/mvines/ftx?rev=600052e6a270bdaeee8f6767ae8f93fc45f83e69#600052e6a270bdaeee8f6767ae8f93fc45f83e69"
 dependencies = [
  "chrono",
  "crc32fast",
@@ -1237,6 +1237,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d7afe4a420e3fe79967a00898cc1f4db7c8a49a9333a29f8a4bd76a253d5cd04"
 dependencies = [
  "ahash",
+]
+
+[[package]]
+name = "heck"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6d621efb26863f0e9924c6ac577e8275e5e6b77455db64ffa6c65c904e9e132c"
+dependencies = [
+ "unicode-segmentation",
 ]
 
 [[package]]
@@ -3407,6 +3416,28 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "73473c0e59e6d5812c5dfe2a064a6444949f089e20eec9a2e5506596494e4623"
 
 [[package]]
+name = "strum"
+version = "0.23.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cae14b91c7d11c9a851d3fbc80a963198998c2a64eec840477fa92d8ce9b70bb"
+dependencies = [
+ "strum_macros",
+]
+
+[[package]]
+name = "strum_macros"
+version = "0.23.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5bb0dc7ee9c15cea6199cde9a127fa16a4c5819af85395457ad72d68edc85a38"
+dependencies = [
+ "heck",
+ "proc-macro2 1.0.26",
+ "quote 1.0.9",
+ "rustversion",
+ "syn 1.0.72",
+]
+
+[[package]]
 name = "subtle"
 version = "2.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3482,6 +3513,9 @@ dependencies = [
  "solana-stake-program",
  "solana-transaction-status",
  "solana-vote-program",
+ "spl-associated-token-account",
+ "spl-token",
+ "strum",
  "thiserror",
  "tokio",
  "tokio-binance",
@@ -3849,6 +3883,12 @@ checksum = "07fbfce1c8a97d547e8b5334978438d9d6ec8c20e38f56d4a4374d181493eaef"
 dependencies = [
  "tinyvec",
 ]
+
+[[package]]
+name = "unicode-segmentation"
+version = "1.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8895849a949e7845e06bd6dc1aa51731a103c42707010a5b591c0038fb73385b"
 
 [[package]]
 name = "unicode-width"

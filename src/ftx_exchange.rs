@@ -1,5 +1,5 @@
 use {
-    crate::exchange::*,
+    crate::{exchange::*, token::MaybeToken},
     async_trait::async_trait,
     chrono::{prelude::*, Duration},
     ftx::rest::{
@@ -38,12 +38,15 @@ fn ftx_to_binance_pair(ftx_pair: &str) -> Result<&'static str, Box<dyn std::erro
 
 #[async_trait]
 impl ExchangeClient for FtxExchangeClient {
-    async fn deposit_address(&self) -> Result<Pubkey, Box<dyn std::error::Error>> {
+    async fn deposit_address(
+        &self,
+        token: MaybeToken,
+    ) -> Result<Pubkey, Box<dyn std::error::Error>> {
         Ok(self
             .rest
             .request(GetWalletDepositAddress {
-                coin: "SOL".into(),
-                method: None,
+                coin: token.to_string(),
+                method: Some("sol".into()),
             })
             .await
             .map_err(|err| format!("{:?}", err))?
@@ -87,7 +90,7 @@ impl ExchangeClient for FtxExchangeClient {
             .map_err(|err| format!("{:?}", err))?
             .into_iter()
             .filter_map(|wd| {
-                if wd.coin == "SOL" && wd.status == ftx::rest::DepositStatus::Confirmed {
+                if wd.status == ftx::rest::DepositStatus::Confirmed {
                     if let Some(tx_id) = wd.txid {
                         return Some(DepositInfo {
                             tx_id,
@@ -145,14 +148,14 @@ impl ExchangeClient for FtxExchangeClient {
                 println!(
                     "{} | Ask: ${:.2}, Bid: ${:.2}, Last: ${:.2}, 24hr Average: ${:.2}",
                     pair,
-                    market.ask,
-                    market.bid,
+                    market.ask.unwrap(),
+                    market.bid.unwrap(),
                     market.last.unwrap_or_default(),
                     weighted_24h_avg_price
                 );
             }
             MarketInfoFormat::Ask => {
-                println!("{}", market.ask);
+                println!("{}", market.ask.unwrap());
             }
             MarketInfoFormat::Hourly => {
                 println!("hour,low,high,average,volume");
@@ -184,8 +187,8 @@ impl ExchangeClient for FtxExchangeClient {
             .map_err(|err| format!("{:?}", err))?;
 
         Ok(BidAsk {
-            bid_price: market.bid.to_f64().unwrap(),
-            ask_price: market.ask.to_f64().unwrap(),
+            bid_price: market.bid.unwrap().to_f64().unwrap(),
+            ask_price: market.ask.unwrap().to_f64().unwrap(),
         })
     }
 

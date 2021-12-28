@@ -6,8 +6,10 @@ mod field_as_string;
 mod ftx_exchange;
 mod notifier;
 mod rpc_client_utils;
+mod token;
 
 use {
+    crate::token::*,
     chrono::prelude::*,
     chrono_humanize::HumanTime,
     clap::{
@@ -27,7 +29,7 @@ use {
     solana_sdk::{
         commitment_config::CommitmentConfig,
         message::Message,
-        native_token::{lamports_to_sol, sol_to_lamports, Sol},
+        native_token::lamports_to_sol,
         pubkey::Pubkey,
         signature::{read_keypair_file, Keypair, Signature, Signer},
         signers::Signers,
@@ -36,7 +38,7 @@ use {
     },
     solana_transaction_status::UiTransactionEncoding,
     std::{
-        collections::{BTreeMap, HashSet},
+        collections::{BTreeMap, HashMap, HashSet},
         fs,
         path::PathBuf,
         process::exit,
@@ -91,13 +93,15 @@ fn app_version() -> String {
 fn add_exchange_deposit_address_to_db(
     db: &mut Db,
     exchange: Exchange,
+    token: MaybeToken,
     deposit_address: Pubkey,
     rpc_client: &RpcClient,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    if db.get_account(deposit_address).is_none() {
+    if db.get_account(deposit_address, token).is_none() {
         let epoch = rpc_client.get_epoch_info()?.epoch;
         db.add_account(TrackedAccount {
             address: deposit_address,
+            token,
             description: format!("{:?}", exchange),
             last_update_epoch: epoch,
             last_update_balance: 0,
@@ -108,27 +112,34 @@ fn add_exchange_deposit_address_to_db(
     Ok(())
 }
 
-async fn verify_exchange_sol_balance(
+async fn verify_exchange_balance(
     db: &mut Db,
     exchange: Exchange,
     exchange_client: &dyn ExchangeClient,
+    token: MaybeToken,
     deposit_address: &Pubkey,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let exchange_sol_balance = {
+    let exchange_balance = {
         let balances = exchange_client.balances().await?;
-        balances.get("SOL").cloned().unwrap_or_default().total
+        balances
+            .get(&token.to_string())
+            .cloned()
+            .unwrap_or_default()
+            .total
     };
 
     let exchange_account = db
-        .get_account(*deposit_address)
+        .get_account(*deposit_address, token)
         .expect("exchange deposit address does not exist in database");
     let total_lot_balance =
-        lamports_to_sol(exchange_account.lots.iter().map(|lot| lot.amount).sum());
+        token.ui_amount(exchange_account.lots.iter().map(|lot| lot.amount).sum());
 
-    if exchange_sol_balance < total_lot_balance {
+    if exchange_balance < total_lot_balance {
         eprintln!(
-            "{:?} actual balance is less than local database amount. Actual ◎{}, expected ◎{}",
-            exchange, exchange_sol_balance, total_lot_balance
+            "{0:?} {4} actual balance is less than local database amount. Actual {3}{1}, expected {3}{2}",
+            exchange, exchange_balance, total_lot_balance,
+            token.symbol(),
+            token,
         );
         exit(1);
     }
@@ -142,10 +153,15 @@ async fn process_sync_exchange(
     rpc_client: &RpcClient,
     notifier: &Notifier,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let deposit_address = exchange_client.deposit_address().await?;
-    add_exchange_deposit_address_to_db(db, exchange, deposit_address, rpc_client)?;
+    // Validate current exchange SOL balance against local database
+    {
+        let token = MaybeToken::SOL();
 
-    verify_exchange_sol_balance(db, exchange, exchange_client, &deposit_address).await?;
+        let deposit_address = exchange_client.deposit_address(token).await?;
+        add_exchange_deposit_address_to_db(db, exchange, token, deposit_address, rpc_client)?;
+
+        verify_exchange_balance(db, exchange, exchange_client, token, &deposit_address).await?;
+    }
 
     let recent_deposits = exchange_client.recent_deposits().await?;
     let block_height = rpc_client
@@ -160,15 +176,17 @@ async fn process_sync_exchange(
             )?
             .value;
 
+        let token = pending_deposit.transfer.token;
+
         if let Some(deposit_info) = recent_deposits.iter().find(|deposit_info| {
             deposit_info.tx_id == pending_deposit.transfer.signature.to_string()
         }) {
-            let missing_lamports = (sol_to_lamports(deposit_info.amount) as i64
-                - (pending_deposit.amount as i64))
-                .abs();
-            if missing_lamports >= 10 {
+            let missing_tokens =
+                (token.amount(deposit_info.amount) as i64 - (pending_deposit.amount as i64)).abs();
+            if missing_tokens >= 10 {
                 let msg = format!(
-                    "Error! Deposit amount mismatch for {}! Actual amount: ◎{}, expected amount: ◎{}",
+                    "Error! {} deposit amount mismatch for {}! Actual amount: ◎{}, expected amount: ◎{}",
+                    token,
                     pending_deposit.transfer.signature, deposit_info.amount, pending_deposit.amount
                 );
                 println!("{}", msg);
@@ -176,11 +194,11 @@ async fn process_sync_exchange(
 
                 // TODO: Do something more here...?
             } else {
-                if missing_lamports != 0 {
+                if missing_tokens != 0 {
                     // Binance will occasionally steal a lamport or two...
                     let msg = format!(
-                        "{:?} just stole {} lamports from your deposit!",
-                        exchange, missing_lamports
+                        "{:?} just stole {} tokens from your deposit!",
+                        exchange, missing_tokens
                     );
                     println!("{}", msg);
                     notifier.send(&format!("{:?}: {}", exchange, msg)).await;
@@ -189,8 +207,10 @@ async fn process_sync_exchange(
                 db.confirm_deposit(pending_deposit.transfer.signature)?;
 
                 let msg = format!(
-                    "{} deposit successful ({})",
-                    Sol(pending_deposit.amount),
+                    "{} {}{} deposit successful ({})",
+                    token,
+                    token.symbol(),
+                    token.ui_amount(pending_deposit.amount),
                     pending_deposit.transfer.signature
                 );
                 println!("{}", msg);
@@ -198,15 +218,17 @@ async fn process_sync_exchange(
             }
         } else if !confirmed && block_height > pending_deposit.transfer.last_valid_block_height {
             println!(
-                "Pending deposit cancelled: {}",
-                pending_deposit.transfer.signature
+                "Pending {} deposit cancelled: {}",
+                token, pending_deposit.transfer.signature
             );
             db.cancel_deposit(pending_deposit.transfer.signature)
                 .expect("cancel_deposit");
         } else {
             println!(
-                "{} deposit pending for at most {} blocks ({}, confirmed={})",
-                Sol(pending_deposit.amount),
+                "{} {}{} deposit pending for at most {} blocks ({}, confirmed={})",
+                token,
+                token.symbol(),
+                token.ui_amount(pending_deposit.amount),
                 pending_deposit
                     .transfer
                     .last_valid_block_height
@@ -218,14 +240,16 @@ async fn process_sync_exchange(
     }
 
     for order_info in db.open_orders(Some(exchange), None) {
+        let token = order_info.token;
         let order_status = exchange_client
             .order_status(&order_info.pair, &order_info.order_id)
             .await?;
         let order_summary = format!(
-            "{}: {} {:<5} at ${:<.2}{} | id {} created {}",
+            "{}: {} {} {:<5} at ${:<.2}{} | id {} created {}",
             order_info.pair,
+            token,
             format_order_side(order_info.side),
-            format!("◎{}", order_status.amount),
+            format!("{}{}", token.symbol(), order_status.amount),
             order_status.price,
             if order_status.filled_amount == 0. {
                 String::default()
@@ -247,8 +271,8 @@ async fn process_sync_exchange(
         } else {
             db.close_order(
                 &order_info.order_id,
-                sol_to_lamports(order_status.amount),
-                sol_to_lamports(order_status.filled_amount),
+                token.amount(order_status.amount),
+                token.amount(order_status.filled_amount),
                 order_status.price,
                 order_status.last_update,
             )?;
@@ -273,6 +297,7 @@ async fn process_exchange_deposit<T: Signers>(
     rpc_client: &RpcClient,
     exchange: Exchange,
     exchange_client: &dyn ExchangeClient,
+    token: MaybeToken,
     deposit_address: Pubkey,
     amount: Option<u64>,
     from_address: Pubkey,
@@ -282,6 +307,45 @@ async fn process_exchange_deposit<T: Signers>(
     signers: T,
     lot_numbers: Option<HashSet<usize>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    if let Some(if_exchange_balance_less_than) = if_exchange_balance_less_than {
+        let exchange_balance = exchange_client
+            .balances()
+            .await?
+            .get(&token.to_string())
+            .map(|b| token.amount(b.total))
+            .unwrap_or(0)
+            + db.pending_deposits(Some(exchange))
+                .into_iter()
+                .map(|pd| pd.amount)
+                .sum::<u64>();
+
+        if exchange_balance < if_exchange_balance_less_than {
+            println!(
+                "{0} deposit declined because {1:?} balance ({4}{2}) is less than {4}{3}",
+                token,
+                exchange,
+                token.ui_amount(exchange_balance),
+                token.ui_amount(if_exchange_balance_less_than),
+                token.symbol(),
+            );
+            return Ok(());
+        }
+    }
+
+    let from_account_balance = token.balance(rpc_client, &from_address)?;
+    if let Some(if_source_balance_exceeds) = if_source_balance_exceeds {
+        if from_account_balance < if_source_balance_exceeds {
+            println!(
+                "{} deposit declined because {} balance is less than {}{}",
+                token,
+                from_address,
+                token.symbol(),
+                token.ui_amount(if_source_balance_exceeds)
+            );
+            return Ok(());
+        }
+    }
+
     let Fees {
         blockhash: recent_blockhash,
         fee_calculator,
@@ -305,119 +369,122 @@ async fn process_exchange_deposit<T: Signers>(
     if authority_account.lamports < fee_calculator.lamports_per_signature {
         return Err(format!(
             "Authority has insufficient funds for the transaction fee of {}",
-            Sol(fee_calculator.lamports_per_signature)
+            lamports_to_sol(fee_calculator.lamports_per_signature)
         )
         .into());
     }
 
-    let (instructions, lamports, minimum_balance) = if from_account.owner == system_program::id() {
-        let lamports = amount.unwrap_or_else(|| {
-            if from_address == authority_address {
-                from_account
-                    .lamports
-                    .saturating_sub(fee_calculator.lamports_per_signature)
+    let (instructions, amount) = match token.token() {
+        /*SOL*/
+        None => {
+            assert_eq!(from_account.lamports, from_account_balance);
+
+            if from_account.owner == system_program::id() {
+                let amount = amount.unwrap_or_else(|| {
+                    if from_address == authority_address {
+                        from_account_balance.saturating_sub(fee_calculator.lamports_per_signature)
+                    } else {
+                        from_account_balance
+                    }
+                });
+
+                (
+                    vec![system_instruction::transfer(
+                        &from_address,
+                        &deposit_address,
+                        amount,
+                    )],
+                    amount,
+                )
+            } else if from_account.owner == solana_vote_program::id() {
+                let minimum_balance = rpc_client.get_minimum_balance_for_rent_exemption(
+                    solana_vote_program::vote_state::VoteState::size_of(),
+                )?;
+
+                let amount =
+                    amount.unwrap_or_else(|| from_account_balance.saturating_sub(minimum_balance));
+
+                (
+                    vec![solana_vote_program::vote_instruction::withdraw(
+                        &from_address,
+                        &authority_address,
+                        amount,
+                        &deposit_address,
+                    )],
+                    amount,
+                )
+            } else if from_account.owner == solana_stake_program::id() {
+                let amount = amount.unwrap_or(from_account_balance);
+
+                (
+                    vec![solana_stake_program::stake_instruction::withdraw(
+                        &from_address,
+                        &authority_address,
+                        &deposit_address,
+                        amount,
+                        None,
+                    )],
+                    amount,
+                )
             } else {
-                from_account.lamports
+                return Err(
+                    format!("Unsupported `from` account owner: {}", from_account.owner).into(),
+                );
             }
-        });
+        }
+        Some(token) => {
+            let amount = amount.unwrap_or(from_account_balance);
 
-        (
-            vec![system_instruction::transfer(
-                &from_address,
-                &deposit_address,
-                lamports,
-            )],
-            lamports,
-            if from_address == authority_address {
-                fee_calculator.lamports_per_signature
-            } else {
-                0
-            },
-        )
-    } else if from_account.owner == solana_vote_program::id() {
-        let minimum_balance = rpc_client.get_minimum_balance_for_rent_exemption(
-            solana_vote_program::vote_state::VoteState::size_of(),
-        )?;
+            let mut instructions = vec![];
 
-        let lamports =
-            amount.unwrap_or_else(|| from_account.lamports.saturating_sub(minimum_balance));
+            if rpc_client
+                .get_account_with_commitment(&token.ata(&deposit_address), rpc_client.commitment())?
+                .value
+                .is_none()
+            {
+                instructions.push(
+                    spl_associated_token_account::create_associated_token_account(
+                        &authority_address,
+                        &deposit_address,
+                        &token.mint(),
+                    ),
+                );
+            }
 
-        (
-            vec![solana_vote_program::vote_instruction::withdraw(
-                &from_address,
-                &authority_address,
-                lamports,
-                &deposit_address,
-            )],
-            lamports,
-            minimum_balance,
-        )
-    } else if from_account.owner == solana_stake_program::id() {
-        let lamports = amount.unwrap_or(from_account.lamports);
+            instructions.push(
+                spl_token::instruction::transfer_checked(
+                    &spl_token::id(),
+                    &token.ata(&from_address),
+                    &token.mint(),
+                    &token.ata(&deposit_address),
+                    &authority_address,
+                    &[],
+                    amount,
+                    token.decimals(),
+                )
+                .unwrap(),
+            );
 
-        (
-            vec![solana_stake_program::stake_instruction::withdraw(
-                &from_address,
-                &authority_address,
-                &deposit_address,
-                lamports,
-                None,
-            )],
-            lamports,
-            0,
-        )
-    } else {
-        return Err(format!("Unsupported `from` account owner: {}", from_account.owner).into());
+            (instructions, amount)
+        }
     };
 
-    if lamports == 0 {
+    if amount == 0 {
         return Err("Nothing to deposit".into());
     }
-
-    if let Some(if_source_balance_exceeds) = if_source_balance_exceeds {
-        if from_account.lamports < if_source_balance_exceeds {
-            println!(
-                "Deposit declined because {} balance is less than {}",
-                from_address,
-                Sol(if_source_balance_exceeds)
-            );
-            return Ok(());
-        }
-    }
-
-    if let Some(if_exchange_balance_less_than) = if_exchange_balance_less_than {
-        let exchange_balance = exchange_client
-            .balances()
-            .await?
-            .get("SOL")
-            .map(|b| sol_to_lamports(b.total))
-            .unwrap_or(0)
-            + db.pending_deposits(Some(exchange))
-                .into_iter()
-                .map(|pd| pd.amount)
-                .sum::<u64>();
-
-        if exchange_balance < if_exchange_balance_less_than {
-            println!(
-                "Deposit declined because {:?} balance ({}) is less than {}",
-                exchange,
-                Sol(exchange_balance),
-                Sol(if_exchange_balance_less_than)
-            );
-            return Ok(());
-        }
-    }
-
-    if from_account.lamports < lamports + minimum_balance {
+    if from_account_balance < amount {
         return Err("From account has insufficient funds".into());
     }
 
-    println!("From address: {}", from_address);
+    println!("From address: {} ({})", from_address, token);
     if from_address != authority_address {
         println!("Authority address: {}", authority_address);
     }
-    println!("Amount: {}", Sol(lamports));
-    println!("{:?} deposit address: {}", exchange, deposit_address);
+    println!("Amount: {}{}", token.symbol(), token.ui_amount(amount));
+    println!(
+        "{} {:?} deposit address: {}",
+        token, exchange, deposit_address
+    );
 
     let message = Message::new(&instructions, Some(&authority_address));
     if fee_calculator.calculate_fee(&message) > authority_account.lamports {
@@ -439,9 +506,10 @@ async fn process_exchange_deposit<T: Signers>(
         signature,
         last_valid_block_height,
         from_address,
-        lamports,
+        amount,
         exchange,
         deposit_address,
+        token,
         lot_numbers,
     )?;
     loop {
@@ -512,6 +580,7 @@ async fn process_exchange_buy(
     db: &mut Db,
     exchange: Exchange,
     exchange_client: &dyn ExchangeClient,
+    token: MaybeToken,
     pair: String,
     amount: Option<f64>,
     price: LimitOrderPrice,
@@ -524,11 +593,11 @@ async fn process_exchange_buy(
         pair, bid_ask.ask_price, bid_ask.bid_price
     );
 
-    let deposit_address = exchange_client.deposit_address().await?;
-    let deposit_account = db.get_account(deposit_address).ok_or_else(|| {
+    let deposit_address = exchange_client.deposit_address(token).await?;
+    let deposit_account = db.get_account(deposit_address, token).ok_or_else(|| {
         format!(
-            "Exchange deposit account does not exist: {}",
-            deposit_address
+            "Exchange deposit account does not exist, run `sync` first: {} ({})",
+            deposit_address, token,
         )
     })?;
 
@@ -593,6 +662,7 @@ async fn process_exchange_sell(
     db: &mut Db,
     exchange: Exchange,
     exchange_client: &dyn ExchangeClient,
+    token: MaybeToken,
     pair: String,
     amount: f64,
     price: LimitOrderPrice,
@@ -609,11 +679,11 @@ async fn process_exchange_sell(
         pair, bid_ask.ask_price, bid_ask.bid_price
     );
 
-    let deposit_address = exchange_client.deposit_address().await?;
-    let mut deposit_account = db.get_account(deposit_address).ok_or_else(|| {
+    let deposit_address = exchange_client.deposit_address(token).await?;
+    let mut deposit_account = db.get_account(deposit_address, token).ok_or_else(|| {
         format!(
-            "Exchange deposit account does not exist: {}",
-            deposit_address
+            "Exchange deposit account does not exist, run `sync` first: {} ({})",
+            deposit_address, token,
         )
     })?;
 
@@ -622,7 +692,7 @@ async fn process_exchange_sell(
             println!(
                 "Order declined because {:?} available balance is less than {}",
                 exchange,
-                Sol(if_balance_exceeds)
+                token.ui_amount(if_balance_exceeds)
             );
             return Ok(());
         }
@@ -661,7 +731,7 @@ async fn process_exchange_sell(
         }
     }
 
-    let order_lots = deposit_account.extract_lots(db, sol_to_lamports(amount), lot_numbers)?;
+    let order_lots = deposit_account.extract_lots(db, token.amount(amount), lot_numbers)?;
     if if_price_over_basis {
         if let Some(basis) = order_lots.iter().find_map(|lot| {
             let basis = lot.acquisition.price;
@@ -688,7 +758,17 @@ async fn process_exchange_sell(
     println!("Placing sell order for ◎{} at ${}", amount, price);
     println!("Lots");
     for lot in &order_lots {
-        println_lot(lot, price, &mut 0., &mut 0., &mut false, &mut 0., None).await;
+        println_lot(
+            deposit_account.token,
+            lot,
+            price,
+            &mut 0.,
+            &mut 0.,
+            &mut false,
+            &mut 0.,
+            None,
+        )
+        .await;
     }
 
     let order_id = exchange_client
@@ -716,7 +796,9 @@ async fn process_exchange_sell(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn println_lot(
+    token: MaybeToken,
     lot: &Lot,
     current_price: f64,
     total_income: &mut f64,
@@ -725,9 +807,9 @@ async fn println_lot(
     total_current_value: &mut f64,
     notifier: Option<&Notifier>,
 ) {
-    let current_value = lamports_to_sol(lot.amount) * current_price;
-    let income = lot.income();
-    let cap_gain = lot.cap_gain(current_price);
+    let current_value = token.ui_amount(lot.amount) * current_price;
+    let income = lot.income(token);
+    let cap_gain = lot.cap_gain(token, current_price);
 
     *total_income += income;
     *total_cap_gain += cap_gain;
@@ -735,10 +817,11 @@ async fn println_lot(
     *long_term_cap_gain = is_long_term_cap_gain(lot.acquisition.when, None);
 
     let msg = format!(
-        "{:>3}. {} | ◎{:<17.9} at ${:<6} | current value: ${:<14} | income: ${:<11} | {} gain: ${:<14} | {}",
+        "{:>3}. {} | {}{:<17.9} at ${:<6} | current value: ${:<14} | income: ${:<11} | {} gain: ${:<14} | {}",
         lot.lot_number,
         lot.acquisition.when,
-        lamports_to_sol(lot.amount),
+        token.symbol(),
+        token.ui_amount(lot.amount),
         lot.acquisition.price.separated_string_with_fixed_place(2),
         current_value.separated_string_with_fixed_place(2),
         income.separated_string_with_fixed_place(2),
@@ -764,8 +847,10 @@ fn format_disposed_lot(
     long_term_cap_gain: &mut bool,
     total_current_value: &mut f64,
 ) -> String {
-    let cap_gain = disposed_lot.lot.cap_gain(disposed_lot.price);
-    let income = disposed_lot.lot.income();
+    let cap_gain = disposed_lot
+        .lot
+        .cap_gain(disposed_lot.token, disposed_lot.price);
+    let income = disposed_lot.lot.income(disposed_lot.token);
 
     *long_term_cap_gain =
         is_long_term_cap_gain(disposed_lot.lot.acquisition.when, Some(disposed_lot.when));
@@ -774,10 +859,12 @@ fn format_disposed_lot(
     *total_cap_gain += cap_gain;
 
     format!(
-        "{:>3}. {} | ◎{:<17.9} at ${:<6} | income: ${:<11} | sold {} at ${:6} | {} gain: ${:<14} | {} | {}",
+        "{:>3}. {} | {:<4} | {}{:<17.9} at ${:<6} | income: ${:<11} | sold {} at ${:6} | {} gain: ${:<14} | {} | {}",
         disposed_lot.lot.lot_number,
         disposed_lot.lot.acquisition.when,
-        lamports_to_sol(disposed_lot.lot.amount),
+        disposed_lot.token,
+        disposed_lot.token.symbol(),
+        disposed_lot.token.ui_amount(disposed_lot.lot.amount),
         disposed_lot.lot.acquisition.price.separated_string_with_fixed_place(2),
         income.separated_string_with_fixed_place(2),
         disposed_lot.when,
@@ -793,10 +880,12 @@ fn format_disposed_lot(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn process_account_add(
     db: &mut Db,
     rpc_client: &RpcClient,
     address: Pubkey,
+    token: MaybeToken,
     description: String,
     when: NaiveDate,
     price: Option<f64>,
@@ -840,10 +929,28 @@ async fn process_account_add(
                 .message
                 .account_keys
                 .iter()
-                .position(|k| *k == address)
+                .position(|k| {
+                    *k == match token.token() {
+                        None => address,
+                        Some(token) => token.ata(&address),
+                    }
+                })
                 .ok_or_else(|| format!("{} not found in the transaction {}", address, signature))?;
 
-            let amount = meta.post_balances[account_index];
+            let amount = match token.token() {
+                None => meta.post_balances[account_index],
+                Some(_) => u64::from_str(
+                    &meta
+                        .post_token_balances
+                        .unwrap()
+                        .iter()
+                        .find(|ptb| ptb.account_index as usize == account_index)
+                        .unwrap()
+                        .ui_token_amount
+                        .amount,
+                )
+                .unwrap_or_default(),
+            };
 
             let epoch_schdule = rpc_client.get_epoch_schedule()?;
             let last_update_epoch = epoch_schdule
@@ -859,11 +966,7 @@ async fn process_account_add(
             )
         }
         None => {
-            let amount = rpc_client
-                .get_account_with_commitment(&address, rpc_client.commitment())?
-                .value
-                .ok_or_else(|| format!("{} does not exist", address))?
-                .lamports;
+            let amount = token.balance(rpc_client, &address)?;
             let last_update_epoch = rpc_client.get_epoch_info()?.epoch.saturating_sub(1);
             (
                 when,
@@ -874,36 +977,43 @@ async fn process_account_add(
         }
     };
 
-    println!("Adding {}", address);
+    println!("Adding {} (token: {})", address, token);
 
-    let current_price = coin_gecko::get_current_price().await?;
+    let current_price = coin_gecko::get_current_price(token).await?;
     let price = match price {
         Some(price) => price,
-        None => coin_gecko::get_price(when).await?,
+        None => coin_gecko::get_price(when, token).await?,
     };
 
-    let lot = Lot {
-        lot_number: db.next_lot_number(),
-        acquisition: LotAcquistion { when, price, kind },
-        amount,
-    };
-    println_lot(
-        &lot,
-        current_price,
-        &mut 0.,
-        &mut 0.,
-        &mut false,
-        &mut 0.,
-        None,
-    )
-    .await;
+    let mut lots = vec![];
+    if amount > 0 {
+        let lot = Lot {
+            lot_number: db.next_lot_number(),
+            acquisition: LotAcquistion { when, price, kind },
+            amount,
+        };
+        println_lot(
+            token,
+            &lot,
+            current_price,
+            &mut 0.,
+            &mut 0.,
+            &mut false,
+            &mut 0.,
+            None,
+        )
+        .await;
+
+        lots.push(lot);
+    }
 
     let account = TrackedAccount {
         address,
+        token,
         description,
         last_update_epoch,
-        last_update_balance: lot.amount,
-        lots: vec![lot],
+        last_update_balance: amount,
+        lots,
         no_sync: None,
     };
     db.add_account(account)?;
@@ -914,18 +1024,25 @@ async fn process_account_add(
 async fn process_account_dispose(
     db: &mut Db,
     address: Pubkey,
-    amount: f64,
+    token: MaybeToken,
+    ui_amount: f64,
     description: String,
     when: NaiveDate,
     price: Option<f64>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let price = match price {
         Some(price) => price,
-        None => coin_gecko::get_price(when).await?,
+        None => coin_gecko::get_price(when, token).await?,
     };
 
-    let disposed_lots =
-        db.record_disposal(address, sol_to_lamports(amount), description, when, price)?;
+    let disposed_lots = db.record_disposal(
+        address,
+        token,
+        token.amount(ui_amount),
+        description,
+        when,
+        price,
+    )?;
     if !disposed_lots.is_empty() {
         println!("Disposed Lots:");
         for disposed_lot in disposed_lots {
@@ -952,36 +1069,46 @@ async fn process_account_list(
     show_all_disposed_lots: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut annual_realized_gains = BTreeMap::<usize, [RealizedGain; 4]>::default();
+    let mut held_tokens = HashMap::<MaybeToken, (/*price*/ f64, /*amount*/ u64)>::default();
 
     let accounts = db.get_accounts();
     if accounts.is_empty() {
         println!("No accounts");
     } else {
-        let current_price = coin_gecko::get_current_price().await?;
-
         let mut total_income = 0.;
-        let mut total_held_lamports = 0;
         let mut total_unrealized_short_term_gain = 0.;
         let mut total_unrealized_long_term_gain = 0.;
         let mut total_current_value = 0.;
 
         let open_sell_orders = db.open_orders(None, Some(OrderSide::Sell));
 
-        for account in accounts.values() {
+        for account in accounts {
             if let Some(ref account_filter) = account_filter {
                 if account.address != *account_filter {
                     continue;
                 }
             }
 
+            if let std::collections::hash_map::Entry::Vacant(e) = held_tokens.entry(account.token) {
+                e.insert((coin_gecko::get_current_price(account.token).await?, 0));
+            }
+
+            let held_token = held_tokens.get_mut(&account.token).unwrap();
+            let current_token_price = held_token.0;
+            held_token.1 += account.last_update_balance;
+
             println!(
-                "{}: ◎{} - {}",
+                "{} ({}): {}{} - {}",
                 account.address.to_string(),
-                lamports_to_sol(account.last_update_balance).separated_string_with_fixed_place(2),
+                account.token,
+                account.token.symbol(),
+                account
+                    .token
+                    .ui_amount(account.last_update_balance)
+                    .separated_string_with_fixed_place(2),
                 account.description
             );
             account.assert_lot_balance();
-            total_held_lamports += account.last_update_balance;
 
             let sell_open_orders = open_sell_orders
                 .iter()
@@ -1001,8 +1128,9 @@ async fn process_account_list(
                     let mut account_unrealized_gain = 0.;
                     let mut long_term_cap_gain = false;
                     println_lot(
+                        account.token,
                         lot,
-                        current_price,
+                        current_token_price,
                         &mut account_income,
                         &mut account_unrealized_gain,
                         &mut long_term_cap_gain,
@@ -1014,7 +1142,7 @@ async fn process_account_list(
                     annual_realized_gains
                         .entry(lot.acquisition.when.year() as usize)
                         .or_default()[lot.acquisition.when.month0() as usize / 3]
-                        .income += lot.income();
+                        .income += lot.income(account.token);
 
                     if long_term_cap_gain {
                         account_unrealized_long_term_gain += account_unrealized_gain;
@@ -1028,10 +1156,11 @@ async fn process_account_list(
                     lots.sort_by_key(|lot| lot.acquisition.when);
                     let amount = lots.iter().map(|lot| lot.amount).sum::<u64>();
                     println!(
-                        " [Open {}: {} ◎{} at ${} | id {} created {}]",
+                        " [Open {}: {} {}{} at ${} | id {} created {}]",
                         open_sell_order.pair,
                         format_order_side(OrderSide::Sell),
-                        lamports_to_sol(amount),
+                        account.token.symbol(),
+                        account.token.ui_amount(amount),
                         open_sell_order.price,
                         open_sell_order.order_id,
                         HumanTime::from(open_sell_order.creation_time),
@@ -1040,8 +1169,9 @@ async fn process_account_list(
                         let mut account_unrealized_gain = 0.;
                         let mut long_term_cap_gain = false;
                         println_lot(
+                            account.token,
                             lot,
-                            current_price,
+                            current_token_price,
                             &mut account_income,
                             &mut account_unrealized_gain,
                             &mut long_term_cap_gain,
@@ -1053,7 +1183,7 @@ async fn process_account_list(
                         annual_realized_gains
                             .entry(lot.acquisition.when.year() as usize)
                             .or_default()[lot.acquisition.when.month0() as usize / 3]
-                            .income += lot.income();
+                            .income += lot.income(account.token);
 
                         if long_term_cap_gain {
                             account_unrealized_long_term_gain += account_unrealized_gain;
@@ -1089,14 +1219,12 @@ async fn process_account_list(
         if !disposed_lots.is_empty() {
             println!("Disposed ({} lots):", disposed_lots.len());
 
-            let mut disposed_lamports = 0;
             let mut disposed_income = 0.;
             let mut disposed_short_term_cap_gain = 0.;
             let mut disposed_long_term_cap_gain = 0.;
-            let mut disposed_current_value = 0.;
+            let mut disposed_value = 0.;
 
             for (i, disposed_lot) in disposed_lots.iter().enumerate() {
-                disposed_lamports += disposed_lot.lot.amount;
                 let mut long_term_cap_gain = false;
                 let mut disposed_cap_gain = 0.;
                 let msg = format_disposed_lot(
@@ -1104,7 +1232,7 @@ async fn process_account_list(
                     &mut disposed_income,
                     &mut disposed_cap_gain,
                     &mut long_term_cap_gain,
-                    &mut disposed_current_value,
+                    &mut disposed_value,
                 );
 
                 if show_all_disposed_lots {
@@ -1121,7 +1249,7 @@ async fn process_account_list(
                 annual_realized_gains
                     .entry(disposed_lot.lot.acquisition.when.year() as usize)
                     .or_default()[disposed_lot.lot.acquisition.when.month0() as usize / 3]
-                    .income += disposed_lot.lot.income();
+                    .income += disposed_lot.lot.income(disposed_lot.token);
 
                 let mut realized_gain = &mut annual_realized_gains
                     .entry(disposed_lot.when.year() as usize)
@@ -1136,9 +1264,8 @@ async fn process_account_list(
                 }
             }
             println!(
-                "    Disposed ◎{}, value: ${}, income: ${}, short-term cap gain: ${}, long-term cap gain: ${}",
-                lamports_to_sol(disposed_lamports).separated_string_with_fixed_place(2),
-                disposed_current_value.separated_string_with_fixed_place(2),
+                "    Disposed value: ${} (income: ${}, short-term cap gain: ${}, long-term cap gain: ${})",
+                disposed_value.separated_string_with_fixed_place(2),
                 disposed_income.separated_string_with_fixed_place(2),
                 disposed_short_term_cap_gain.separated_string_with_fixed_place(2),
                 disposed_long_term_cap_gain.separated_string_with_fixed_place(2),
@@ -1184,14 +1311,18 @@ async fn process_account_list(
         println!();
 
         println!("Current Holdings Summary");
-        println!(
-            "  Price per SOL:       ${}",
-            current_price.separated_string_with_fixed_place(2)
-        );
-        println!(
-            "  Balance:             ◎{}",
-            lamports_to_sol(total_held_lamports).separated_string_with_fixed_place(2)
-        );
+        for (held_token, (current_token_price, total_held_amount)) in held_tokens {
+            println!(
+                "  {: >4}:                {}{} (${} per {})",
+                held_token.to_string(),
+                held_token.symbol(),
+                held_token
+                    .ui_amount(total_held_amount)
+                    .separated_string_with_fixed_place(3),
+                current_token_price.separated_string_with_fixed_place(3),
+                held_token,
+            );
+        }
         println!(
             "  Value:               ${}",
             total_current_value.separated_string_with_fixed_place(2)
@@ -1221,7 +1352,8 @@ async fn process_account_xls(
 
     let mut workbook = Workbook::create(outfile);
 
-    let mut sheet = workbook.create_sheet("Disposed SOL");
+    let mut sheet = workbook.create_sheet("Disposed");
+    sheet.add_column(Column { width: 12. });
     sheet.add_column(Column { width: 15. });
     sheet.add_column(Column { width: 12. });
     sheet.add_column(Column { width: 12. });
@@ -1239,14 +1371,15 @@ async fn process_account_xls(
         // Exclude disposed lots that were neither acquired nor disposed of in the filter year
         disposed_lots.retain(|disposed_lot| {
             (disposed_lot.lot.acquisition.when.year() == filter_by_year
-                && disposed_lot.lot.income() > 0.)
+                && disposed_lot.lot.income(disposed_lot.token) > 0.)
                 || disposed_lot.when.year() == filter_by_year
         })
     }
 
     workbook.write_sheet(&mut sheet, |sheet_writer| {
         sheet_writer.append_row(row![
-            "Amount (SOL)",
+            "Token",
+            "Amount",
             "Income",
             "Acq. Date",
             "Acq. Price",
@@ -1259,12 +1392,13 @@ async fn process_account_xls(
 
         for disposed_lot in disposed_lots {
             sheet_writer.append_row(row![
-                lamports_to_sol(disposed_lot.lot.amount),
+                disposed_lot.token.to_string(),
+                disposed_lot.token.ui_amount(disposed_lot.lot.amount),
                 format!(
                     "${}",
                     disposed_lot
                         .lot
-                        .income()
+                        .income(disposed_lot.token)
                         .separated_string_with_fixed_place(2)
                 ),
                 disposed_lot.lot.acquisition.when.to_string(),
@@ -1281,7 +1415,7 @@ async fn process_account_xls(
                     "${}",
                     disposed_lot
                         .lot
-                        .cap_gain(disposed_lot.price)
+                        .cap_gain(disposed_lot.token, disposed_lot.price)
                         .separated_string_with_fixed_place(2)
                 ),
                 disposed_lot.when.to_string(),
@@ -1295,7 +1429,8 @@ async fn process_account_xls(
         Ok(())
     })?;
 
-    let mut sheet = workbook.create_sheet("Current SOL Holdings");
+    let mut sheet = workbook.create_sheet("Current Holdings");
+    sheet.add_column(Column { width: 12. });
     sheet.add_column(Column { width: 15. });
     sheet.add_column(Column { width: 12. });
     sheet.add_column(Column { width: 12. });
@@ -1306,7 +1441,8 @@ async fn process_account_xls(
 
     workbook.write_sheet(&mut sheet, |sheet_writer| {
         sheet_writer.append_row(row![
-            "Amount (SOL)",
+            "Token",
+            "Amount",
             "Income",
             "Acq. Date",
             "Acq. Price",
@@ -1317,11 +1453,13 @@ async fn process_account_xls(
 
         let mut rows = vec![];
 
-        for account in db.get_accounts().values() {
+        for account in db.get_accounts() {
             for lot in account.lots.iter() {
                 if let Some(filter_by_year) = filter_by_year {
                     // Exclude lot if it was not acquired in the filter year
-                    if lot.acquisition.when.year() != filter_by_year || lot.income() == 0. {
+                    if lot.acquisition.when.year() != filter_by_year
+                        || lot.income(account.token) == 0.
+                    {
                         continue;
                     }
                 }
@@ -1329,8 +1467,13 @@ async fn process_account_xls(
                 rows.push((
                     lot.acquisition.when,
                     row![
-                        lamports_to_sol(lot.amount),
-                        format!("${}", lot.income().separated_string_with_fixed_place(2)),
+                        account.token.to_string(),
+                        account.token.ui_amount(lot.amount),
+                        format!(
+                            "${}",
+                            lot.income(account.token)
+                                .separated_string_with_fixed_place(2)
+                        ),
                         lot.acquisition.when.to_string(),
                         format!(
                             "${}",
@@ -1348,15 +1491,22 @@ async fn process_account_xls(
             for lot in open_order.lots.iter() {
                 if let Some(filter_by_year) = filter_by_year {
                     // Exclude lot if it was not acquired in the filter year
-                    if lot.acquisition.when.year() != filter_by_year || lot.income() == 0. {
+                    if lot.acquisition.when.year() != filter_by_year
+                        || lot.income(open_order.token) == 0.
+                    {
                         continue;
                     }
                 }
                 rows.push((
                     lot.acquisition.when,
                     row![
-                        lamports_to_sol(lot.amount),
-                        format!("${}", lot.income().separated_string_with_fixed_place(2)),
+                        open_order.token.to_string(),
+                        open_order.token.ui_amount(lot.amount),
+                        format!(
+                            "${}",
+                            lot.income(open_order.token)
+                                .separated_string_with_fixed_place(2)
+                        ),
                         lot.acquisition.when.to_string(),
                         format!(
                             "${}",
@@ -1391,6 +1541,8 @@ async fn process_account_merge<T: Signers>(
     authority_address: Pubkey,
     signers: T,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let token = MaybeToken::SOL(); // TODO: Support merging tokens one day
+
     let Fees {
         blockhash: recent_blockhash,
         fee_calculator,
@@ -1414,7 +1566,7 @@ async fn process_account_merge<T: Signers>(
     if authority_account.lamports < fee_calculator.lamports_per_signature {
         return Err(format!(
             "Authority has insufficient funds for the transaction fee of {}",
-            Sol(fee_calculator.lamports_per_signature)
+            token.ui_amount(fee_calculator.lamports_per_signature)
         )
         .into());
     }
@@ -1426,7 +1578,7 @@ async fn process_account_merge<T: Signers>(
             &authority_address,
         )
     } else {
-        // TODO: Support merging two system accounts, and possibly other variations
+        // TODO: Support merging two system accounts, tokens, and possibly other variations
         return Err(format!("Unsupported `from` account owner: {}", from_account.owner).into());
     };
 
@@ -1457,6 +1609,7 @@ async fn process_account_merge<T: Signers>(
         from_address,
         None,
         into_address,
+        token,
         None,
     )?;
 
@@ -1464,7 +1617,7 @@ async fn process_account_merge<T: Signers>(
         match rpc_client.send_and_confirm_transaction_with_spinner(&transaction) {
             Ok(_) => {
                 db.confirm_transfer(signature)?;
-                db.remove_account(from_address)?;
+                db.remove_account(from_address, token)?;
                 return Ok(());
             }
             Err(err) => {
@@ -1497,6 +1650,8 @@ async fn process_account_sweep<T: Signers>(
     signers: T,
     notifier: &Notifier,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let token = MaybeToken::SOL();
+
     let Fees {
         blockhash: recent_blockhash,
         fee_calculator,
@@ -1509,15 +1664,15 @@ async fn process_account_sweep<T: Signers>(
         .ok_or_else(|| format!("Account, {}, does not exist", from_address))?;
 
     let from_tracked_account = db
-        .get_account(from_address)
+        .get_account(from_address, token)
         .ok_or_else(|| format!("Account, {}, is not tracked", from_address))?;
 
     if from_account.lamports < from_tracked_account.last_update_balance {
         return Err(format!(
             "{}: On-chain account balance ({}) less than tracked balance ({})",
             from_address,
-            Sol(from_account.lamports),
-            Sol(from_tracked_account.last_update_balance)
+            token.ui_amount(from_account.lamports),
+            token.ui_amount(from_tracked_account.last_update_balance)
         )
         .into());
     }
@@ -1566,7 +1721,7 @@ async fn process_account_sweep<T: Signers>(
     {
         return Err(format!(
             "Authority has insufficient funds for the transaction fee of {}",
-            Sol(num_transaction_signatures * fee_calculator.lamports_per_signature)
+            token.ui_amount(num_transaction_signatures * fee_calculator.lamports_per_signature)
         )
         .into());
     }
@@ -1629,11 +1784,12 @@ async fn process_account_sweep<T: Signers>(
         return Err(format!("Unsupported `from` account owner: {}", from_account.owner).into());
     };
 
-    if sweep_amount < sol_to_lamports(1.) {
+    if sweep_amount < token.amount(1.) {
         let msg = format!(
-            "{} has less than ◎1 to sweep ({})",
+            "{} has less than {}1 to sweep ({})",
             from_address,
-            Sol(sweep_amount)
+            token.symbol(),
+            token.ui_amount(sweep_amount)
         );
         return if no_sweep_ok {
             println!("{}", msg);
@@ -1647,7 +1803,7 @@ async fn process_account_sweep<T: Signers>(
     if from_address != from_authority_address {
         println!("Authority address: {}", from_authority_address);
     }
-    println!("Sweep amount: {}", Sol(sweep_amount));
+    println!("Sweep amount: {}", token.ui_amount(sweep_amount));
     println!(
         "Transitory stake address: {}",
         transitory_stake_account.pubkey()
@@ -1689,7 +1845,7 @@ async fn process_account_sweep<T: Signers>(
 
     let msg = format!(
         "Sweeping {} from {} into {} (via {})",
-        Sol(sweep_amount),
+        token.ui_amount(sweep_amount),
         from_address,
         sweep_stake_account.address,
         transitory_stake_account.pubkey(),
@@ -1712,6 +1868,7 @@ async fn process_account_sweep<T: Signers>(
         from_address,
         Some(sweep_amount),
         transitory_stake_account.pubkey(),
+        token,
         None,
     )?;
 
@@ -1758,6 +1915,9 @@ async fn process_account_split<T: Signers>(
     signers: T,
     into_keypair: Option<Keypair>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    // TODO: Support splitting two system accounts? Tokens? Otherwise at least error cleanly when it's attempted
+    let token = MaybeToken::SOL(); // TODO: Support splitting tokens one day
+
     let Fees {
         blockhash: recent_blockhash,
         fee_calculator: _,
@@ -1765,11 +1925,14 @@ async fn process_account_split<T: Signers>(
     } = rpc_client.get_fees()?;
 
     let into_keypair = into_keypair.unwrap_or_else(Keypair::new);
-    if db.get_account(into_keypair.pubkey()).is_some() {
-        return Err(format!("Account {} already exists", into_keypair.pubkey()).into());
+    if db.get_account(into_keypair.pubkey(), token).is_some() {
+        return Err(format!(
+            "Account {} ({}) already exists",
+            into_keypair.pubkey(),
+            token
+        )
+        .into());
     }
-
-    // TODO: Support splitting two system accounts? Otherwise at least error cleanly when it's attempted
 
     let instructions = solana_stake_program::stake_instruction::split(
         &from_address,
@@ -1789,7 +1952,7 @@ async fn process_account_split<T: Signers>(
 
     println!(
         "Splitting {} from {} into {}",
-        Sol(amount),
+        token.ui_amount(amount),
         from_address,
         into_keypair.pubkey(),
     );
@@ -1803,6 +1966,7 @@ async fn process_account_split<T: Signers>(
     let epoch = rpc_client.get_epoch_info()?.epoch;
     db.add_account(TrackedAccount {
         address: into_keypair.pubkey(),
+        token,
         description,
         last_update_epoch: epoch.saturating_sub(1),
         last_update_balance: 0,
@@ -1815,6 +1979,7 @@ async fn process_account_split<T: Signers>(
         from_address,
         Some(amount),
         into_keypair.pubkey(),
+        token,
         lot_numbers,
     )?;
 
@@ -1835,7 +2000,7 @@ async fn process_account_split<T: Signers>(
             }
             Ok(None) => {
                 db.cancel_transfer(signature)?;
-                db.remove_account(into_keypair.pubkey())?;
+                db.remove_account(into_keypair.pubkey(), MaybeToken::SOL())?;
                 return Err("Split failed: {}".into());
             }
             Ok(_) => {
@@ -1858,17 +2023,20 @@ async fn process_account_sync(
 
     let mut accounts = match address {
         Some(address) => {
-            vec![db
-                .get_account(address)
-                .ok_or_else(|| format!("{} does not exist", address))?]
+            // sync all tokens for the given address...
+            let accounts = db.get_account_tokens(address);
+            if accounts.is_empty() {
+                return Err(format!("{} does not exist", address).into());
+            }
+            accounts
         }
-        None => db.get_accounts().values().cloned().collect(),
+        None => db.get_accounts(),
     }
     .into_iter()
     .filter(|account| !account.no_sync.unwrap_or_default())
     .collect::<Vec<_>>();
 
-    let current_price = coin_gecko::get_current_price().await?;
+    let current_sol_price = coin_gecko::get_current_price(MaybeToken::SOL()).await?;
 
     let addresses: Vec<Pubkey> = accounts
         .iter()
@@ -1912,10 +2080,13 @@ async fn process_account_sync(
             }
 
             if let Some(inflation_reward) = inflation_reward {
+                assert!(!account.token.is_token()); // Only SOL accounts can receive inflationary rewards
+
                 account.last_update_balance += inflation_reward.amount;
 
                 let slot = inflation_reward.effective_slot;
-                let (when, price) = coin_gecko::get_block_date_and_price(rpc_client, slot).await?;
+                let (when, price) =
+                    coin_gecko::get_block_date_and_price(rpc_client, slot, account.token).await?;
 
                 let lot = Lot {
                     lot_number: db.next_lot_number(),
@@ -1932,8 +2103,9 @@ async fn process_account_sync(
                 println!("{}", msg);
 
                 println_lot(
+                    account.token,
                     &lot,
-                    current_price,
+                    current_sol_price,
                     &mut 0.,
                     &mut 0.,
                     &mut false,
@@ -1950,18 +2122,22 @@ async fn process_account_sync(
     for mut account in accounts.iter_mut() {
         account.last_update_epoch = stop_epoch;
 
-        let current_balance = rpc_client.get_balance(&account.address)?;
-
+        let current_balance = account.token.balance(rpc_client, &account.address)?;
         if current_balance < account.last_update_balance {
             println!(
-                "\nWarning: {} balance is less than expected. Actual: {}, expected: {}\n",
+                "\nWarning: {} ({}) balance is less than expected. Actual: {}{}, expected: {}{}\n",
                 account.address,
-                Sol(current_balance),
-                Sol(account.last_update_balance)
+                account.token,
+                account.token.symbol(),
+                account.token.ui_amount(current_balance),
+                account.token.symbol(),
+                account.token.ui_amount(account.last_update_balance)
             );
-        } else if current_balance > account.last_update_balance + sol_to_lamports(1.) {
+        } else if current_balance > account.last_update_balance + account.token.amount(0.005) {
             let slot = epoch_info.absolute_slot;
-            let (when, price) = coin_gecko::get_block_date_and_price(rpc_client, slot).await?;
+            let current_token_price = coin_gecko::get_current_price(account.token).await?;
+            let (when, price) =
+                coin_gecko::get_block_date_and_price(rpc_client, slot, account.token).await?;
             let amount = current_balance - account.last_update_balance;
 
             let lot = Lot {
@@ -1974,13 +2150,17 @@ async fn process_account_sync(
                 amount,
             };
 
-            let msg = format!("{}: {}", account.address, account.description);
+            let msg = format!(
+                "{} ({}): {}",
+                account.address, account.token, account.description
+            );
             notifier.send(&msg).await;
             println!("{}", msg);
 
             println_lot(
+                account.token,
                 &lot,
-                current_price,
+                current_token_price,
                 &mut 0.,
                 &mut 0.,
                 &mut false,
@@ -2031,6 +2211,8 @@ async fn process_account_sync_sweep(
     rpc_client: &RpcClient,
     _notifier: &Notifier,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let token = MaybeToken::SOL();
+
     let transitory_sweep_stake_addresses = db.get_transitory_sweep_stake_addresses();
     if transitory_sweep_stake_addresses.is_empty() {
         return Ok(());
@@ -2087,7 +2269,8 @@ async fn process_account_sync_sweep(
                     transitory_sweep_stake_address
                 );
 
-                if let Some(tracked_account) = db.get_account(transitory_sweep_stake_address) {
+                if let Some(tracked_account) = db.get_account(transitory_sweep_stake_address, token)
+                {
                     if tracked_account.last_update_balance > 0 || !tracked_account.lots.is_empty() {
                         panic!("Tracked account is not empty: {:?}", tracked_account);
 
@@ -2170,6 +2353,7 @@ async fn process_account_sync_sweep(
             transitory_sweep_stake_address,
             None,
             sweep_stake_account_info.address,
+            token,
             None,
         )?;
 
@@ -2200,6 +2384,14 @@ async fn process_account_sync_sweep(
         db.remove_transitory_sweep_stake_address(transitory_sweep_stake_address)?;
     }
     Ok(())
+}
+
+fn is_valid_token_or_sol(value: String) -> Result<(), String> {
+    if value == "SOL" {
+        Ok(())
+    } else {
+        is_valid_token(value)
+    }
 }
 
 #[tokio::main]
@@ -2255,9 +2447,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     Arg::with_name("when")
                         .value_name("YY/MM/DD")
                         .takes_value(true)
+                        .required(true)
                         .default_value(&default_when)
                         .validator(|value| naivedate_of(&value).map(|_| ()))
                         .help("Date to fetch the price for"),
+                )
+                .arg(
+                    Arg::with_name("token")
+                        .value_name("SOL or SPL Token")
+                        .takes_value(true)
+                        .required(true)
+                        .validator(is_valid_token_or_sol)
+                        .default_value("SOL")
+                        .help("Token type"),
                 ),
         )
         .subcommand(SubCommand::with_name("sync").about("Synchronize with all exchanges"))
@@ -2270,8 +2472,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     SubCommand::with_name("add")
                         .about("Register an account")
                         .arg(
+                            Arg::with_name("token")
+                                .value_name("SOL or SPL Token")
+                                .takes_value(true)
+                                .required(true)
+                                .validator(is_valid_token_or_sol)
+                                .help("Token type"),
+                        )
+                        .arg(
                             Arg::with_name("address")
-                                .index(1)
                                 .value_name("ADDRESS")
                                 .takes_value(true)
                                 .required(true)
@@ -2313,29 +2522,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .value_name("USD")
                                 .takes_value(true)
                                 .validator(is_parsable::<f64>)
-                                .help("Acquisition price per SOL [default: market price on acquisition date]"),
+                                .help("Acquisition price per SOL/token [default: market price on acquisition date]"),
                         ),
                 )
                 .subcommand(
                     SubCommand::with_name("dispose")
-                        .about("Manually record the disposal of SOL from an account")
+                        .about("Manually record the disposal of SOL/tokens from an account")
+                        .arg(
+                            Arg::with_name("token")
+                                .value_name("SOL or SPL Token")
+                                .takes_value(true)
+                                .required(true)
+                                .validator(is_valid_token_or_sol)
+                                .help("Token type"),
+                        )
                         .arg(
                             Arg::with_name("address")
-                                .index(1)
                                 .value_name("ADDRESS")
                                 .takes_value(true)
                                 .required(true)
                                 .validator(is_valid_pubkey)
-                                .help("Account that the SOL was disposed from"),
+                                .help("Account that the SOL/tokens was/where disposed from"),
                         )
                         .arg(
                             Arg::with_name("amount")
-                                .index(2)
                                 .value_name("AMOUNT")
                                 .takes_value(true)
                                 .validator(is_amount)
                                 .required(true)
-                                .help("Amount of SOL that was disposed from the account"),
+                                .help("Amount of SOL/tokens that was/where disposed from the account"),
                         )
                         .arg(
                             Arg::with_name("description")
@@ -2363,7 +2578,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .value_name("USD")
                                 .takes_value(true)
                                 .validator(is_parsable::<f64>)
-                                .help("Disposal price per SOL [default: market price on disposal date]"),
+                                .help("Disposal price per SOL/token [default: market price on disposal date]"),
                         ),
                 )
                 .subcommand(
@@ -2377,11 +2592,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         )
                         .arg(
                             Arg::with_name("account")
-                                .index(1)
                                 .value_name("ADDRESS")
                                 .takes_value(true)
                                 .validator(is_valid_pubkey)
-                                .help("Limit output to this account"),
+                                .help("Limit output to this address"),
                         ),
                 )
                 .subcommand(
@@ -2389,7 +2603,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .about("Export an Excel spreadsheet file")
                         .arg(
                             Arg::with_name("outfile")
-                                .index(1)
                                 .value_name("FILEPATH")
                                 .takes_value(true)
                                 .help(".xls file to write"),
@@ -2407,8 +2620,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     SubCommand::with_name("remove")
                         .about("Unregister an account")
                         .arg(
+                            Arg::with_name("token")
+                                .value_name("SOL or SPL Token")
+                                .takes_value(true)
+                                .required(true)
+                                .validator(is_valid_token_or_sol)
+                                .help("Token type"),
+                        )
+                        .arg(
                             Arg::with_name("address")
-                                .index(1)
                                 .value_name("ADDRESS")
                                 .takes_value(true)
                                 .required(true)
@@ -2427,7 +2647,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .about("Set the sweep stake account")
                         .arg(
                             Arg::with_name("address")
-                                .index(1)
                                 .value_name("ADDRESS")
                                 .takes_value(true)
                                 .required(true)
@@ -2436,7 +2655,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         )
                         .arg(
                             Arg::with_name("stake_authority")
-                                .index(2)
                                 .value_name("KEYPAIR")
                                 .takes_value(true)
                                 .required(true)
@@ -2445,10 +2663,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 )
                 .subcommand(
                     SubCommand::with_name("merge")
-                        .about("Merge one account into another")
+                        .about("Merge one stake account into another")
                         .arg(
                             Arg::with_name("from_address")
-                                .index(1)
                                 .value_name("ADDRESS")
                                 .takes_value(true)
                                 .required(true)
@@ -2478,7 +2695,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .about("Sweep SOL into the sweep stake account")
                         .arg(
                             Arg::with_name("address")
-                                .index(1)
                                 .value_name("ADDRESS")
                                 .takes_value(true)
                                 .required(true)
@@ -2487,7 +2703,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         )
                         .arg(
                             Arg::with_name("authority")
-                                .index(2)
                                 .value_name("KEYPAIR")
                                 .takes_value(true)
                                 .required(true)
@@ -2512,10 +2727,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 )
                 .subcommand(
                     SubCommand::with_name("split")
-                        .about("Split an account")
+                        .about("Split a stake account")
                         .arg(
                             Arg::with_name("from_address")
-                                .index(1)
                                 .value_name("ADDRESS")
                                 .takes_value(true)
                                 .required(true)
@@ -2524,7 +2738,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         )
                         .arg(
                             Arg::with_name("amount")
-                                .index(2)
                                 .value_name("AMOUNT")
                                 .takes_value(true)
                                 .validator(is_amount)
@@ -2567,10 +2780,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 )
                 .subcommand(
                     SubCommand::with_name("sync")
-                        .about("Synchronize account")
+                        .about("Synchronize an account address")
                         .arg(
                             Arg::with_name("address")
-                                .index(1)
                                 .value_name("ADDRESS")
                                 .takes_value(true)
                                 .required(false)
@@ -2588,7 +2800,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .about("Swap lots")
                                 .arg(
                                     Arg::with_name("lot_number1")
-                                        .index(1)
                                         .value_name("LOT NUMBER")
                                         .takes_value(true)
                                         .required(true)
@@ -2597,7 +2808,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 )
                                 .arg(
                                     Arg::with_name("lot_number2")
-                                        .index(2)
                                         .value_name("LOT NUMBER")
                                         .takes_value(true)
                                         .required(true)
@@ -2637,7 +2847,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .help("Output integer values with no currency symbols")
                         )
                 )
-                .subcommand(SubCommand::with_name("address").about("Show SOL deposit address"))
+                .subcommand(
+                    SubCommand::with_name("address")
+                        .about("Show deposit address")
+                        .arg(
+                            Arg::with_name("token")
+                                .value_name("SOL or SPL Token")
+                                .takes_value(true)
+                                .required(true)
+                                .validator(is_valid_token_or_sol)
+                                .default_value("SOL")
+                                .help("Token type"),
+                        )
+                )
                 .subcommand(
                     SubCommand::with_name("market")
                         .about("Display market info for a given trading pair")
@@ -2685,10 +2907,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 )
                 .subcommand(
                     SubCommand::with_name("deposit")
-                        .about("Deposit SOL")
+                        .about("Deposit SOL or SPL Tokens")
+                        .arg(
+                            Arg::with_name("token")
+                                .value_name("SOL or SPL Token")
+                                .takes_value(true)
+                                .required(true)
+                                .validator(is_valid_token_or_sol)
+                                .default_value("SOL")
+                                .help("Token type"),
+                        )
                         .arg(
                             Arg::with_name("amount")
-                                .index(1)
                                 .value_name("AMOUNT")
                                 .takes_value(true)
                                 .validator(is_amount_or_all)
@@ -2751,7 +2981,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .about("Cancel orders")
                         .arg(
                             Arg::with_name("order_id")
-                                .index(1)
                                 .value_name("ORDER ID")
                                 .takes_value(true)
                                 .multiple(true)
@@ -2780,7 +3009,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .about("Place an order to buy SOL")
                         .arg(
                             Arg::with_name("amount")
-                                .index(1)
                                 .value_name("AMOUNT")
                                 .takes_value(true)
                                 .validator(is_amount_or_all)
@@ -2829,7 +3057,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .about("Place an order to sell SOL")
                         .arg(
                             Arg::with_name("amount")
-                                .index(1)
                                 .value_name("AMOUNT")
                                 .takes_value(true)
                                 .validator(is_amount)
@@ -2934,7 +3161,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .about("Make a lending offer")
                         .arg(
                             Arg::with_name("coin")
-                                .index(1)
                                 .value_name("COIN")
                                 .takes_value(true)
                                 .required(true)
@@ -2942,7 +3168,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         )
                         .arg(
                             Arg::with_name("amount")
-                                .index(2)
                                 .value_name("AMOUNT")
                                 .takes_value(true)
                                 .validator(is_amount_or_all)
@@ -3023,7 +3248,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     match app_matches.subcommand() {
         ("price", Some(arg_matches)) => {
             let when = naivedate_of(&value_t_or_exit!(arg_matches, "when", String)).unwrap();
-            let price = coin_gecko::get_price(when).await?;
+            let token = value_t!(arg_matches, "token", Token).ok();
+            let price = coin_gecko::get_price(when, token.into()).await?;
             if verbose {
                 println!("Historical price on {}: ${:.2}", when, price);
             } else {
@@ -3059,6 +3285,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let when = naivedate_of(&value_t_or_exit!(arg_matches, "when", String)).unwrap();
                 let signature = value_t!(arg_matches, "transaction", Signature).ok();
                 let address = pubkey_of(arg_matches, "address").unwrap();
+                let token = value_t!(arg_matches, "token", Token).ok();
                 let description = value_t!(arg_matches, "description", String)
                     .ok()
                     .unwrap_or_default();
@@ -3067,6 +3294,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     &mut db,
                     &rpc_client,
                     address,
+                    token.into(),
                     description,
                     when,
                     price,
@@ -3077,6 +3305,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             ("dispose", Some(arg_matches)) => {
                 let address = pubkey_of(arg_matches, "address").unwrap();
+                let token = value_t!(arg_matches, "token", Token).ok();
                 let amount = value_t_or_exit!(arg_matches, "amount", f64);
                 let description = value_t!(arg_matches, "description", String)
                     .ok()
@@ -3084,7 +3313,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let when = naivedate_of(&value_t_or_exit!(arg_matches, "when", String)).unwrap();
                 let price = value_t!(arg_matches, "price", f64).ok();
 
-                process_account_dispose(&mut db, address, amount, description, when, price).await?;
+                process_account_dispose(
+                    &mut db,
+                    address,
+                    token.into(),
+                    amount,
+                    description,
+                    when,
+                    price,
+                )
+                .await?;
             }
             ("ls", Some(arg_matches)) => {
                 let all = arg_matches.is_present("all");
@@ -3098,22 +3336,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             ("remove", Some(arg_matches)) => {
                 let address = pubkey_of(arg_matches, "address").unwrap();
+                let token = MaybeToken::from(value_t!(arg_matches, "token", Token).ok());
                 let confirm = arg_matches.is_present("confirm");
 
                 let account = db
-                    .get_account(address)
-                    .ok_or_else(|| format!("Account {} does not exist", address))?;
+                    .get_account(address, token)
+                    .ok_or_else(|| format!("Account {} ({}) does not exist", address, token))?;
                 if !account.lots.is_empty() {
-                    return Err(format!("Account {} is not empty", address).into());
+                    return Err(format!("Account {} ({}) is not empty", address, token).into());
                 }
 
                 if !confirm {
-                    println!("Add --confirm to remove {}", address);
+                    println!("Add --confirm to remove {} ({})", address, token);
                     return Ok(());
                 }
 
-                db.remove_account(address)?;
-                println!("Removed {}", address);
+                db.remove_account(address, token)?;
+                println!("Removed {} ({})", address, token);
             }
             ("set-sweep-stake-account", Some(arg_matches)) => {
                 let address = pubkey_of(arg_matches, "address").unwrap();
@@ -3176,7 +3415,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let from_authority_address = from_authority_address.expect("authority_address");
                 let from_authority_signer = from_authority_signer.expect("authority_signer");
                 let retain_amount =
-                    sol_to_lamports(value_t!(arg_matches, "retain", f64).unwrap_or(0.));
+                    MaybeToken::SOL().amount(value_t!(arg_matches, "retain", f64).unwrap_or(0.));
                 let no_sweep_ok = arg_matches.is_present("no_sweep_ok");
 
                 process_account_sweep(
@@ -3193,7 +3432,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             ("split", Some(arg_matches)) => {
                 let from_address = pubkey_of(arg_matches, "from_address").unwrap();
-                let amount = sol_to_lamports(value_t_or_exit!(arg_matches, "amount", f64));
+                let amount = MaybeToken::SOL().amount(value_t_or_exit!(arg_matches, "amount", f64));
                 let description = value_t!(arg_matches, "description", String)
                     .ok()
                     .unwrap_or_else(|| format!("Split at {}", Local::now()));
@@ -3247,9 +3486,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
 
             match exchange_matches.subcommand() {
-                ("address", Some(_arg_matches)) => {
-                    let deposit_address = exchange_client()?.deposit_address().await?;
-                    println!("{}", deposit_address);
+                ("address", Some(arg_matches)) => {
+                    let token = MaybeToken::from(value_t!(arg_matches, "token", Token).ok());
+                    let deposit_address = exchange_client()?.deposit_address(token).await?;
+                    println!("{} deposit address: {}", token, deposit_address);
                 }
                 ("pending-deposits", Some(arg_matches)) => {
                     let quiet = arg_matches.is_present("quiet");
@@ -3263,9 +3503,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     } else {
                         for pending_deposit in pending_deposits {
+                            let token = pending_deposit.transfer.token;
                             println!(
-                                "{} deposit pending ({})",
-                                Sol(pending_deposit.amount),
+                                "{} deposit pending: {}{} (signature: {})",
+                                token,
+                                token.symbol(),
+                                token.ui_amount(pending_deposit.amount),
                                 pending_deposit.transfer.signature
                             );
                         }
@@ -3338,18 +3581,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     exchange_client()?.print_market_info(&pair, format).await?;
                 }
                 ("deposit", Some(arg_matches)) => {
+                    let token = MaybeToken::from(value_t!(arg_matches, "token", Token).ok());
                     let amount = match arg_matches.value_of("amount").unwrap() {
                         "ALL" => None,
-                        amount => Some(sol_to_lamports(amount.parse().unwrap())),
+                        amount => Some(token.amount(amount.parse().unwrap())),
                     };
                     let if_source_balance_exceeds =
                         value_t!(arg_matches, "if_source_balance_exceeds", f64)
                             .ok()
-                            .map(sol_to_lamports);
+                            .map(|x| token.amount(x));
                     let if_exchange_balance_less_than =
                         value_t!(arg_matches, "if_exchange_balance_less_than", f64)
                             .ok()
-                            .map(sol_to_lamports);
+                            .map(|x| token.amount(x));
                     let from_address =
                         pubkey_of_signer(arg_matches, "from", &mut wallet_manager)?.expect("from");
                     let lot_numbers = values_t!(arg_matches, "lot_numbers", usize)
@@ -3371,10 +3615,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let authority_signer = authority_signer.expect("authority_signer");
 
                     let exchange_client = exchange_client()?;
-                    let deposit_address = exchange_client.deposit_address().await?;
+                    let deposit_address = exchange_client.deposit_address(token).await?;
                     add_exchange_deposit_address_to_db(
                         &mut db,
                         exchange,
+                        token,
                         deposit_address,
                         &rpc_client,
                     )?;
@@ -3384,6 +3629,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         &rpc_client,
                         exchange,
                         exchange_client.as_ref(),
+                        token,
                         deposit_address,
                         amount,
                         from_address,
@@ -3443,6 +3689,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .await?;
                 }
                 ("buy", Some(arg_matches)) => {
+                    let token = MaybeToken::SOL();
                     let pair = value_t_or_exit!(arg_matches, "pair", String);
                     let amount = match arg_matches.value_of("amount").unwrap() {
                         "ALL" => None,
@@ -3464,6 +3711,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         &mut db,
                         exchange,
                         exchange_client.as_ref(),
+                        token,
                         pair,
                         amount,
                         price,
@@ -3481,11 +3729,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .await?;
                 }
                 ("sell", Some(arg_matches)) => {
+                    let token = MaybeToken::SOL();
                     let pair = value_t_or_exit!(arg_matches, "pair", String);
                     let amount = value_t_or_exit!(arg_matches, "amount", f64);
                     let if_balance_exceeds = value_t!(arg_matches, "if_balance_exceeds", f64)
                         .ok()
-                        .map(sol_to_lamports);
+                        .map(|x| token.amount(x));
                     let if_price_over = value_t!(arg_matches, "if_price_over", f64).ok();
                     let if_price_over_basis = arg_matches.is_present("if_price_over_basis");
                     let price_floor = value_t!(arg_matches, "price_floor", f64).ok();
@@ -3505,6 +3754,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         &mut db,
                         exchange,
                         exchange_client.as_ref(),
+                        token,
                         pair,
                         amount,
                         price,
