@@ -598,6 +598,7 @@ async fn process_exchange_sell(
     price: LimitOrderPrice,
     if_balance_exceeds: Option<u64>,
     if_price_over: Option<f64>,
+    if_price_over_basis: bool,
     price_floor: Option<f64>,
     lot_numbers: Option<HashSet<usize>>,
     notifier: &Notifier,
@@ -660,13 +661,31 @@ async fn process_exchange_sell(
         }
     }
 
+    let order_lots = deposit_account.extract_lots(db, sol_to_lamports(amount), lot_numbers)?;
+    if if_price_over_basis {
+        if let Some(basis) = order_lots.iter().find_map(|lot| {
+            let basis = lot.acquisition.price;
+            if price < basis {
+                Some(basis)
+            } else {
+                None
+            }
+        }) {
+            let msg = format!(
+                "Order declined because price, ${}, is less than basis ${}",
+                price, basis,
+            );
+            println!("{}", msg);
+            notifier.send(&format!("{:?}: {}", exchange, msg)).await;
+            return Ok(());
+        }
+    }
+
     if price < bid_ask.ask_price {
         return Err("Order price is less than ask price".into());
     }
 
     println!("Placing sell order for ◎{} at ${}", amount, price);
-
-    let order_lots = deposit_account.extract_lots(db, sol_to_lamports(amount), lot_numbers)?;
     println!("Lots");
     for lot in &order_lots {
         println_lot(lot, price, &mut 0., &mut 0., &mut false, &mut 0., None).await;
@@ -2876,6 +2895,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 ),
                         )
                         .arg(
+                            Arg::with_name("if_price_over_basis")
+                                .long("if-price-over-basis")
+                                .takes_value(false)
+                                .help(
+                                    "Exit successfully without placing a sell order if the \
+                                       order price would be less than the basis",
+                                ),
+                        )
+                        .arg(
                             Arg::with_name("price_floor")
                                 .long("price-floor")
                                 .value_name("AMOUNT")
@@ -3459,6 +3487,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .ok()
                         .map(sol_to_lamports);
                     let if_price_over = value_t!(arg_matches, "if_price_over", f64).ok();
+                    let if_price_over_basis = arg_matches.is_present("if_price_over_basis");
                     let price_floor = value_t!(arg_matches, "price_floor", f64).ok();
                     let lot_numbers = values_t!(arg_matches, "lot_numbers", usize)
                         .ok()
@@ -3481,6 +3510,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         price,
                         if_balance_exceeds,
                         if_price_over,
+                        if_price_over_basis,
                         price_floor,
                         lot_numbers,
                         &notifier,
