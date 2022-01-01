@@ -14,7 +14,7 @@ clap = "2.33"
 console = "0.14.1"
 fd-lock = "3.0.0"
 #ftx = { git = "https://github.com/fabianboesiger/ftx", rev = "85de35236b456eba427fb7b666cc555645c2c6ba" }
-ftx = { git = "https://github.com/mvines/ftx", rev = "bc72909dfeb538cb1c411b8fc6c0e3463bb8afcf" }
+ftx = { git = "https://github.com/mvines/ftx", rev = "aa2907f2be779434f8418cf73c14cd67789eacef" }
 #ftx = { path = "../ftx" }
 itertools = "0.10.0"
 separator = "0.4.1"

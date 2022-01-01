@@ -164,9 +164,48 @@ async fn process_sync_exchange(
     }
 
     let recent_deposits = exchange_client.recent_deposits().await?;
+    let recent_withdrawals = exchange_client.recent_withdrawals().await?;
     let block_height = rpc_client
         .get_epoch_info_with_commitment(CommitmentConfig::finalized())?
         .block_height;
+
+    for pending_withdrawal in db.pending_withdrawals(Some(exchange)) {
+        let wi = recent_withdrawals
+            .iter()
+            .find(|wi| wi.tag == pending_withdrawal.tag)
+            .unwrap_or_else(|| {
+                panic!("Unknown pending withdrawal: {}", pending_withdrawal.tag);
+            });
+
+        let token = pending_withdrawal.token;
+
+        if wi.completed {
+            if let Some(ref tx_id) = wi.tx_id {
+                let msg = format!(
+                    "{} {}{} withdrawal to {} successful ({})",
+                    token,
+                    token.symbol(),
+                    token.ui_amount(pending_withdrawal.amount),
+                    wi.address,
+                    tx_id,
+                );
+                println!("{}", msg);
+                db.confirm_withdrawal(pending_withdrawal)?;
+                notifier.send(&format!("{:?}: {}", exchange, msg)).await;
+            } else {
+                println!("Pending {} withdrawal to {} cancelled", token, wi.address);
+                db.cancel_withdrawal(pending_withdrawal)?;
+            }
+        } else {
+            println!(
+                "{} {}{} withdrawal to {} pending",
+                token,
+                token.symbol(),
+                token.ui_amount(pending_withdrawal.amount),
+                wi.address,
+            );
+        }
+    }
 
     for pending_deposit in db.pending_deposits(Some(exchange)) {
         let confirmed = rpc_client
@@ -532,6 +571,49 @@ async fn process_exchange_deposit<T: Signers>(
             }
         };
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn process_exchange_withdraw(
+    db: &mut Db,
+    exchange: Exchange,
+    exchange_client: &dyn ExchangeClient,
+    token: MaybeToken,
+    deposit_address: Pubkey,
+    amount: Option<u64>,
+    to_address: Pubkey,
+    lot_numbers: Option<HashSet<usize>>,
+    withdrawal_password: Option<String>,
+    withdrawal_code: Option<String>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let amount = amount.unwrap_or_else(|| {
+        let deposit_account = db.get_account(deposit_address, token).unwrap();
+        deposit_account.last_update_balance
+    });
+
+    let tag = db.generate_withdrawal_tag(token, deposit_address, to_address)?;
+
+    exchange_client
+        .request_withdraw(
+            to_address,
+            token,
+            token.ui_amount(amount),
+            tag.clone(),
+            withdrawal_password,
+            withdrawal_code,
+        )
+        .await?;
+
+    db.record_withdrawal(
+        exchange,
+        tag,
+        token,
+        amount,
+        deposit_address,
+        to_address,
+        lot_numbers,
+    )?;
+    Ok(())
 }
 
 enum LimitOrderPrice {
@@ -2914,7 +2996,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .takes_value(true)
                                 .required(true)
                                 .validator(is_valid_token_or_sol)
-                                .default_value("SOL")
                                 .help("Token type"),
                         )
                         .arg(
@@ -2975,6 +3056,52 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         exchange SOL balance is less than this amount",
                                 ),
                         ),
+                )
+                .subcommand(
+                    SubCommand::with_name("withdraw")
+                        .about("Withdraw SOL or SPL Tokens")
+                        .arg(
+                            Arg::with_name("token")
+                                .value_name("SOL or SPL Token")
+                                .takes_value(true)
+                                .required(true)
+                                .validator(is_valid_token_or_sol)
+                                .help("Token type"),
+                        )
+                        .arg(
+                            Arg::with_name("to")
+                                .value_name("RECIPIENT_ADDRESS")
+                                .takes_value(true)
+                                .required(true)
+                                .validator(is_valid_pubkey)
+                                .help("Address to receive the withdrawal of funds"),
+                        )
+                        .arg(
+                            Arg::with_name("amount")
+                                .value_name("AMOUNT")
+                                .takes_value(true)
+                                .validator(is_amount)
+                                .required(true)
+                                .help("The amount to withdraw; accepts keyword ALL"),
+                        )
+                        .arg(
+                            Arg::with_name("lot_numbers")
+                                .long("lot")
+                                .value_name("LOT NUMBER")
+                                .takes_value(true)
+                                .multiple(true)
+                                .validator(is_parsable::<usize>)
+                                .help(
+                                    "Lot to fund the withdrawal from [default: first in, first out]",
+                                ),
+                        )
+                        .arg(
+                            Arg::with_name("code")
+                                .long("code")
+                                .value_name("CODE")
+                                .takes_value(true)
+                                .help("2FA withdrawal code"),
+                        )
                 )
                 .subcommand(
                     SubCommand::with_name("cancel")
@@ -3153,6 +3280,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .help(
                                     "Disable output and exit with a non-zero status code \
                                         if any deposits are pending"
+                                ),
+                        ),
+                )
+                .subcommand(
+                    SubCommand::with_name("pending-withdrawals")
+                        .about("Display pending withdrawals")
+                        .arg(
+                            Arg::with_name("quiet")
+                                .long("quiet")
+                                .takes_value(false)
+                                .help(
+                                    "Disable output and exit with a non-zero status code \
+                                        if any withdrawals are pending"
                                 ),
                         ),
                 )
@@ -3514,6 +3654,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
                 }
+                ("pending-withdrawals", Some(arg_matches)) => {
+                    let quiet = arg_matches.is_present("quiet");
+
+                    let pending_withdrawals = db.pending_withdrawals(Some(exchange));
+                    if quiet {
+                        if !pending_withdrawals.is_empty() {
+                            return Err(format!(
+                                "{} withdrawals pending",
+                                pending_withdrawals.len()
+                            )
+                            .into());
+                        }
+                    } else {
+                        for pending_withdrawals in pending_withdrawals {
+                            let token = pending_withdrawals.token;
+                            println!(
+                                "{} withdrawal pending: {}{} (destination: {})",
+                                token,
+                                token.symbol(),
+                                token.ui_amount(pending_withdrawals.amount),
+                                pending_withdrawals.to_address,
+                            );
+                        }
+                    }
+                }
                 ("balance", Some(arg_matches)) => {
                     let available_only = arg_matches.is_present("available_only");
                     let total_only = arg_matches.is_present("total_only");
@@ -3638,6 +3803,54 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         authority_address,
                         vec![authority_signer],
                         lot_numbers,
+                    )
+                    .await?;
+                    process_sync_exchange(
+                        &mut db,
+                        exchange,
+                        exchange_client.as_ref(),
+                        &rpc_client,
+                        &notifier,
+                    )
+                    .await?;
+                }
+                ("withdraw", Some(arg_matches)) => {
+                    let token = MaybeToken::from(value_t!(arg_matches, "token", Token).ok());
+                    let amount = match arg_matches.value_of("amount").unwrap() {
+                        "ALL" => None,
+                        amount => Some(token.amount(amount.parse().unwrap())),
+                    };
+                    let to_address =
+                        pubkey_of_signer(arg_matches, "to", &mut wallet_manager)?.expect("to");
+
+                    let lot_numbers = values_t!(arg_matches, "lot_numbers", usize)
+                        .ok()
+                        .map(|x| x.into_iter().collect());
+
+                    let withdrawal_password = None; // TODO: Support reading password from stdin
+                    let withdrawal_code = value_t!(arg_matches, "code", String).ok();
+
+                    let exchange_client = exchange_client()?;
+                    let deposit_address = exchange_client.deposit_address(token).await?;
+                    add_exchange_deposit_address_to_db(
+                        &mut db,
+                        exchange,
+                        token,
+                        deposit_address,
+                        &rpc_client,
+                    )?;
+
+                    process_exchange_withdraw(
+                        &mut db,
+                        exchange,
+                        exchange_client.as_ref(),
+                        token,
+                        deposit_address,
+                        amount,
+                        to_address,
+                        lot_numbers,
+                        withdrawal_password,
+                        withdrawal_code,
                     )
                     .await?;
                     process_sync_exchange(

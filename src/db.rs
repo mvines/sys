@@ -90,6 +90,22 @@ pub struct PendingDeposit {
 }
 
 #[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
+pub struct PendingWithdrawal {
+    pub exchange: Exchange,
+    pub tag: String,
+    pub token: MaybeToken,
+    pub amount: u64, // lamports/tokens
+
+    #[serde(with = "field_as_string")]
+    pub from_address: Pubkey,
+
+    #[serde(with = "field_as_string")]
+    pub to_address: Pubkey,
+
+    pub lots: Vec<Lot>,
+}
+
+#[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
 pub struct PendingTransfer {
     #[serde(with = "field_as_string")]
     pub signature: Signature, // transaction signature of the transfer
@@ -140,6 +156,7 @@ pub enum LotAcquistionKind {
         order_id: String,
     },
     NotAvailable,
+    Fiat,
 }
 
 impl fmt::Display for LotAcquistionKind {
@@ -154,6 +171,9 @@ impl fmt::Display for LotAcquistionKind {
                 pair,
                 order_id,
             } => write!(f, "{:?} {}, order {}", exchange, pair, order_id),
+            LotAcquistionKind::Fiat => {
+                write!(f, "fiat")
+            }
             LotAcquistionKind::NotAvailable => {
                 write!(f, "other")
             }
@@ -184,6 +204,7 @@ impl Lot {
             }
             LotAcquistionKind::Exchange { .. } => 0.,
             LotAcquistionKind::Transaction { .. } => 0.,
+            LotAcquistionKind::Fiat => 0.,
         }
     }
     // Figure the current cap gain/loss for the Lot
@@ -509,6 +530,154 @@ impl Db {
             .filter(|pending_deposit| {
                 if let Some(exchange) = exchange {
                     pending_deposit.exchange == exchange
+                } else {
+                    true
+                }
+            })
+            .collect()
+    }
+
+    pub fn generate_withdrawal_tag(
+        &mut self,
+        token: MaybeToken,
+        from_address: Pubkey,
+        to_address: Pubkey,
+    ) -> DbResult<String> {
+        let _from_account = self
+            .get_account(from_address, token)
+            .ok_or(DbError::AccountDoesNotExist(from_address, token))?;
+        let _to_account = self
+            .get_account(to_address, token)
+            .ok_or(DbError::AccountDoesNotExist(to_address, token))?;
+
+        Ok(solana_sdk::pubkey::new_rand().to_string())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn record_withdrawal(
+        &mut self,
+        exchange: Exchange,
+        tag: String,
+        token: MaybeToken,
+        amount: u64,
+        from_address: Pubkey,
+        to_address: Pubkey,
+        lot_numbers: Option<HashSet<usize>>,
+    ) -> DbResult<()> {
+        if !self.db.lexists("withdrawals") {
+            self.db.lcreate("withdrawals")?;
+        }
+
+        {
+            let pending_withdrawals = self.pending_withdrawals(None);
+            if pending_withdrawals.iter().any(|pw| pw.tag == tag) {
+                panic!("Withdrawal tag already present in database: {}", tag);
+            }
+        }
+
+        let mut from_account = self
+            .get_account(from_address, token)
+            .ok_or(DbError::AccountDoesNotExist(from_address, token))?;
+
+        let lots = if token.fiat_fungible() {
+            // invent a new lot if `token.fiat_fungible()`
+            assert!(from_account.lots.is_empty());
+
+            let today = Local::now().date();
+            let when = NaiveDate::from_ymd(today.year(), today.month(), today.day());
+
+            vec![Lot {
+                lot_number: self.next_lot_number(),
+                acquisition: LotAcquistion {
+                    price: 1.,
+                    when,
+                    kind: LotAcquistionKind::Fiat,
+                },
+                amount,
+            }]
+        } else {
+            from_account.extract_lots(self, amount, lot_numbers)?
+        };
+
+        let withdrawal = PendingWithdrawal {
+            exchange,
+            tag,
+            token,
+            amount,
+            from_address,
+            to_address,
+            lots,
+        };
+
+        self.db.ladd("withdrawals", &withdrawal).unwrap();
+        self.update_account(from_account) // `update_account` calls `save`.../
+    }
+
+    fn remove_pending_withdrawal(&mut self, tag: &str) -> DbResult<()> {
+        let mut pending_withdrawals = self.pending_withdrawals(None);
+        pending_withdrawals.retain(|pw| pw.tag != tag);
+
+        self.db.lrem_list("withdrawals")?;
+        self.db.lcreate("withdrawals")?;
+        self.db
+            .lextend("withdrawals", &pending_withdrawals)
+            .unwrap();
+
+        Ok(())
+    }
+
+    pub fn cancel_withdrawal(
+        &mut self,
+        PendingWithdrawal {
+            tag,
+            from_address,
+            token,
+            lots,
+            ..
+        }: PendingWithdrawal,
+    ) -> DbResult<()> {
+        self.remove_pending_withdrawal(&tag)?;
+
+        let mut from_account = self
+            .get_account(from_address, token)
+            .ok_or(DbError::AccountDoesNotExist(from_address, token))?;
+        if !token.fiat_fungible() {
+            from_account.merge_lots(lots);
+        }
+        self.update_account(from_account) // `update_account` calls `save`...
+    }
+
+    pub fn confirm_withdrawal(
+        &mut self,
+        PendingWithdrawal {
+            tag,
+            to_address,
+            token,
+            lots,
+            ..
+        }: PendingWithdrawal,
+    ) -> DbResult<()> {
+        self.remove_pending_withdrawal(&tag)?;
+
+        let mut to_account = self
+            .get_account(to_address, token)
+            .ok_or(DbError::AccountDoesNotExist(to_address, token))?;
+
+        to_account.merge_lots(lots);
+        self.update_account(to_account) // `update_account` calls `save`...
+    }
+
+    pub fn pending_withdrawals(&self, exchange: Option<Exchange>) -> Vec<PendingWithdrawal> {
+        if !self.db.lexists("withdrawals") {
+            return vec![];
+        }
+
+        self.db
+            .liter("withdrawals")
+            .filter_map(|item_iter| item_iter.get_item::<PendingWithdrawal>())
+            .filter(|pending_withdrawal| {
+                if let Some(exchange) = exchange {
+                    pending_withdrawal.exchange == exchange
                 } else {
                     true
                 }

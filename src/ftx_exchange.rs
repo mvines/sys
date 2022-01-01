@@ -1,12 +1,16 @@
 use {
-    crate::{exchange::*, token::MaybeToken},
+    crate::{
+        exchange::*,
+        token::{MaybeToken, Token},
+    },
     async_trait::async_trait,
     chrono::{prelude::*, Duration},
     ftx::rest::{
         CancelOrder, GetHistoricalPrices, GetLendingInfo, GetLendingRates, GetMarket,
         GetMyLendingHistory, GetOrder, GetWalletBalances, GetWalletDepositAddress,
-        GetWalletDeposits, MyLendingHistory, OrderStatus as FtxOrderStatus, OrderType, PlaceOrder,
-        Rest, Side as FtxOrderSide, SubmitLendingOffer,
+        GetWalletDeposits, GetWalletWithdrawals, MyLendingHistory, OrderStatus as FtxOrderStatus,
+        OrderType, PlaceOrder, RequestWithdrawal, Rest, Side as FtxOrderSide, SubmitLendingOffer,
+        WithdrawStatus,
     },
     rust_decimal::prelude::*,
     solana_sdk::pubkey::Pubkey,
@@ -101,6 +105,79 @@ impl ExchangeClient for FtxExchangeClient {
                 None
             })
             .collect())
+    }
+
+    async fn recent_withdrawals(&self) -> Result<Vec<WithdrawalInfo>, Box<dyn std::error::Error>> {
+        Ok(self
+            .rest
+            .request(GetWalletWithdrawals {
+                limit: None,
+                start_time: None,
+                end_time: None,
+            })
+            .await
+            .map_err(|err| format!("{:?}", err))?
+            .into_iter()
+            .filter_map(|wd| {
+                if let Some(address) = wd.address {
+                    if let (Ok(address), Some(tag)) = (address.parse::<Pubkey>(), wd.tag) {
+                        let token = if &wd.coin == "SOL" {
+                            None
+                        } else {
+                            Token::from_str(&wd.coin).ok()
+                        };
+
+                        let (completed, tx_id) = if wd.status == WithdrawStatus::Complete {
+                            (true, wd.txid)
+                        } else {
+                            (false, None)
+                        };
+
+                        return Some(WithdrawalInfo {
+                            address,
+                            token: token.into(),
+                            amount: wd.size.to_f64().unwrap(),
+                            tag,
+                            completed,
+                            tx_id,
+                        });
+                    }
+                }
+                None
+            })
+            .collect())
+    }
+
+    async fn request_withdraw(
+        &self,
+        address: Pubkey,
+        token: MaybeToken,
+        amount: f64,
+        tag: String,
+        password: Option<String>,
+        code: Option<String>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let coin = token.to_string();
+        let size = FromPrimitive::from_f64(amount).unwrap();
+
+        let wd = self
+            .rest
+            .request(RequestWithdrawal {
+                coin: coin.clone(),
+                size,
+                address: address.to_string(),
+                tag: Some(tag.clone()),
+                method: Some("sol".into()),
+                password,
+                code,
+            })
+            .await?;
+
+        assert_eq!(wd.coin, coin);
+        assert_eq!(wd.address, Some(address.to_string()));
+        assert_eq!(wd.size, size);
+        assert_eq!(wd.tag.as_ref(), Some(&tag));
+        Ok(())
     }
 
     async fn print_market_info(

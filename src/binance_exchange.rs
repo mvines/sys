@@ -152,6 +152,22 @@ impl ExchangeClient for BinanceExchangeClient {
             .collect())
     }
 
+    async fn recent_withdrawals(&self) -> Result<Vec<WithdrawalInfo>, Box<dyn std::error::Error>> {
+        todo!();
+    }
+
+    async fn request_withdraw(
+        &self,
+        _address: Pubkey,
+        _token: MaybeToken,
+        _amount: f64,
+        _tag: String,
+        _withdrawal_password: Option<String>,
+        _withdrawal_code: Option<String>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        todo!();
+    }
+
     async fn balances(
         &self,
     ) -> Result<HashMap<String, ExchangeBalance>, Box<dyn std::error::Error>> {

@@ -54,7 +54,18 @@ pub struct ExchangeBalance {
 #[derive(Debug)]
 pub struct DepositInfo {
     pub tx_id: String,
-    pub amount: f64,
+    pub amount: f64, // TODO: rename to `ui_amount`
+}
+
+#[derive(Debug)]
+pub struct WithdrawalInfo {
+    pub address: Pubkey,
+    pub token: MaybeToken,
+    pub amount: f64, // TODO: rename to `ui_amount`
+    pub tag: String,
+
+    pub completed: bool, // when `completed`, a `tx_id` of `None` indicates a cancelled withdrawal
+    pub tx_id: Option<String>,
 }
 
 #[derive(Debug)]
@@ -114,6 +125,16 @@ pub trait ExchangeClient {
         token: MaybeToken,
     ) -> Result<Pubkey, Box<dyn std::error::Error>>;
     async fn recent_deposits(&self) -> Result<Vec<DepositInfo>, Box<dyn std::error::Error>>;
+    async fn recent_withdrawals(&self) -> Result<Vec<WithdrawalInfo>, Box<dyn std::error::Error>>;
+    async fn request_withdraw(
+        &self,
+        address: Pubkey,
+        token: MaybeToken,
+        amount: f64,
+        tag: String,
+        withdrawal_password: Option<String>,
+        withdrawal_code: Option<String>,
+    ) -> Result<(), Box<dyn std::error::Error>>;
     async fn balances(
         &self,
     ) -> Result<HashMap<String, ExchangeBalance>, Box<dyn std::error::Error>>;
