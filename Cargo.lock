@@ -1025,7 +1025,7 @@ dependencies = [
 [[package]]
 name = "ftx"
 version = "0.4.3"
-source = "git+https://github.com/mvines/ftx?rev=600052e6a270bdaeee8f6767ae8f93fc45f83e69#600052e6a270bdaeee8f6767ae8f93fc45f83e69"
+source = "git+https://github.com/mvines/ftx?rev=bc72909dfeb538cb1c411b8fc6c0e3463bb8afcf#bc72909dfeb538cb1c411b8fc6c0e3463bb8afcf"
 dependencies = [
  "chrono",
  "crc32fast",
