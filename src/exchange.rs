@@ -90,6 +90,7 @@ pub struct OrderStatus {
     pub amount: f64,
     pub filled_amount: f64,
     pub last_update: NaiveDate,
+    pub fee: Option<(f64, String)>,
 }
 
 #[derive(PartialEq)]

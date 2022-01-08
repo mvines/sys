@@ -308,19 +308,24 @@ async fn process_sync_exchange(
                 println!("   Open {}", order_summary);
             }
         } else {
+            let fee_summary = match &order_status.fee {
+                None => "".into(),
+                Some((amount, coin)) => format!(" (fee: {} {})", amount, coin),
+            };
             db.close_order(
                 &order_info.order_id,
                 token.amount(order_status.amount),
                 token.amount(order_status.filled_amount),
                 order_status.price,
                 order_status.last_update,
+                order_status.fee,
             )?;
             let msg = if (order_status.amount - order_status.filled_amount).abs() < f64::EPSILON {
-                format!(" Filled {}", order_summary)
+                format!(" Filled {}{}", order_summary, fee_summary)
             } else if order_status.filled_amount < f64::EPSILON {
-                format!(" Cancel {}", order_summary)
+                format!(" Cancel {}{}", order_summary, fee_summary)
             } else {
-                format!("Partial {}", order_summary)
+                format!("Partial {}{}", order_summary, fee_summary)
             };
             println!("{}", msg);
             notifier.send(&format!("{:?}: {}", exchange, msg)).await;
@@ -1444,6 +1449,7 @@ async fn process_account_xls(
     sheet.add_column(Column { width: 12. });
     sheet.add_column(Column { width: 10. });
     sheet.add_column(Column { width: 10. });
+    sheet.add_column(Column { width: 10. });
     sheet.add_column(Column { width: 40. });
 
     let mut disposed_lots = db.disposed_lots();
@@ -1469,6 +1475,7 @@ async fn process_account_xls(
             "Cap Gain",
             "Sale Date",
             "Sale Price",
+            "Fee",
             "Sale Description"
         ])?;
 
@@ -1505,6 +1512,14 @@ async fn process_account_xls(
                     "${}",
                     disposed_lot.price.separated_string_with_fixed_place(2)
                 ),
+                disposed_lot
+                    .kind
+                    .fee()
+                    .map(|(amount, currency)| {
+                        assert_eq!(currency, "USD");
+                        format!("${}", amount.separated_string_with_fixed_place(2),)
+                    })
+                    .unwrap_or_default(),
                 disposed_lot.kind.to_string()
             ])?;
         }

@@ -6,7 +6,7 @@ use {
     async_trait::async_trait,
     chrono::{prelude::*, Duration},
     ftx::rest::{
-        CancelOrder, GetHistoricalPrices, GetLendingInfo, GetLendingRates, GetMarket,
+        CancelOrder, GetFills, GetHistoricalPrices, GetLendingInfo, GetLendingRates, GetMarket,
         GetMyLendingHistory, GetOrder, GetWalletBalances, GetWalletDepositAddress,
         GetWalletDeposits, GetWalletWithdrawals, MyLendingHistory, OrderStatus as FtxOrderStatus,
         OrderType, PlaceOrder, RequestWithdrawal, Rest, Side as FtxOrderSide, SubmitLendingOffer,
@@ -344,6 +344,27 @@ impl ExchangeClient for FtxExchangeClient {
             NaiveDate::from_ymd(today.year(), today.month(), today.day())
         };
 
+        let fills = self
+            .rest
+            .request(GetFills {
+                market_name: order_info.market,
+                order_id: Some(order_id),
+                ..GetFills::default()
+            })
+            .await
+            .map_err(|err| format!("{:?}", err))?;
+
+        let mut fee = 0.;
+        let mut fee_currency = None;
+        for fill in fills {
+            fee += fill.fee.to_f64().unwrap();
+            if fee_currency == None {
+                fee_currency = Some(fill.fee_currency);
+            } else {
+                assert_eq!(fee_currency, Some(fill.fee_currency));
+            }
+        }
+
         Ok(OrderStatus {
             open: order_info.status != FtxOrderStatus::Closed,
             side,
@@ -351,6 +372,7 @@ impl ExchangeClient for FtxExchangeClient {
             amount: order_info.size.to_f64().unwrap(),
             filled_amount: order_info.filled_size.unwrap_or_default().to_f64().unwrap(),
             last_update,
+            fee: fee_currency.map(|fee_currency| (fee, fee_currency)),
         })
     }
 

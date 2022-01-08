@@ -219,10 +219,20 @@ pub enum LotDisposalKind {
         exchange: Exchange,
         pair: String,
         order_id: String,
+        fee: Option<(f64, String)>,
     },
     Other {
         description: String,
     },
+}
+
+impl LotDisposalKind {
+    pub fn fee(&self) -> Option<&(f64, String)> {
+        match self {
+            LotDisposalKind::Usd { fee, .. } => fee.as_ref(),
+            LotDisposalKind::Other { .. } => None,
+        }
+    }
 }
 
 impl fmt::Display for LotDisposalKind {
@@ -232,7 +242,18 @@ impl fmt::Display for LotDisposalKind {
                 exchange,
                 pair,
                 order_id,
-            } => write!(f, "{:?} {}, order {}", exchange, pair, order_id),
+                fee,
+            } => write!(
+                f,
+                "{:?} {}, order {}{})",
+                exchange,
+                pair,
+                order_id,
+                match fee {
+                    None => "".into(),
+                    Some((amount, coin)) => format!("(fee: {} {})", amount, coin),
+                }
+            ),
             LotDisposalKind::Other { description } => write!(f, "{}", description),
         }
     }
@@ -737,6 +758,7 @@ impl Db {
         filled_amount: u64,
         price: f64,
         when: NaiveDate,
+        fee: Option<(f64, String)>,
     ) -> DbResult<()> {
         self.auto_save(false)?;
         let mut open_orders = self.open_orders(None, None);
@@ -794,6 +816,13 @@ impl Db {
                 if !filled_lots.is_empty() {
                     let mut disposed_lots = self.disposed_lots();
                     for lot in filled_lots {
+                        // Split fee proportionally across all disposed lots
+                        let fee = fee.clone().map(|(fee_amount, fee_coin)| {
+                            (
+                                lot.amount as f64 / filled_amount as f64 * fee_amount,
+                                fee_coin,
+                            )
+                        });
                         disposed_lots.push(DisposedLot {
                             lot,
                             when,
@@ -802,6 +831,7 @@ impl Db {
                                 exchange,
                                 pair: pair.clone(),
                                 order_id: order_id.clone(),
+                                fee,
                             },
                             token,
                         });

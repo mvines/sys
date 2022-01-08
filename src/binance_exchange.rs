@@ -344,6 +344,7 @@ impl ExchangeClient for BinanceExchangeClient {
             amount: order.orig_qty.parse()?,
             filled_amount: order.executed_qty.parse()?,
             last_update,
+            fee: None, // TODO
         })
     }
 
