@@ -904,7 +904,7 @@ async fn println_lot(
     *long_term_cap_gain = is_long_term_cap_gain(lot.acquisition.when, None);
 
     let msg = format!(
-        "{:>3}. {} | {}{:<17.9} at ${:<6} | current value: ${:<14} | income: ${:<11} | {} gain: ${:<14} | {}",
+        "{:>4}. {} | {}{:<17.9} at ${:<6} | current value: ${:<14} | income: ${:<11} | {} gain: ${:<14} | {}",
         lot.lot_number,
         lot.acquisition.when,
         token.symbol(),
@@ -946,7 +946,7 @@ fn format_disposed_lot(
     *total_cap_gain += cap_gain;
 
     format!(
-        "{:>3}. {} | {:<4} | {}{:<17.9} at ${:<6} | income: ${:<11} | sold {} at ${:6} | {} gain: ${:<14} | {} | {}",
+        "{:>4}. {} | {:<4} | {}{:<17.9} at ${:<6} | income: ${:<11} | sold {} at ${:6} | {} gain: ${:<14} | {} | {}",
         disposed_lot.lot.lot_number,
         disposed_lot.lot.acquisition.when,
         disposed_lot.token,
