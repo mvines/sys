@@ -1440,7 +1440,7 @@ async fn process_account_xls(
     let mut workbook = Workbook::create(outfile);
 
     let mut sheet = workbook.create_sheet(&match filter_by_year {
-        Some(year) => format!("Disposed {}", year),
+        Some(year) => format!("Disposed in {}", year),
         None => "Disposed".into(),
     });
     sheet.add_column(Column { width: 12. });
@@ -1632,9 +1632,9 @@ async fn process_account_xls(
         })
     };
     if let Some(year) = filter_by_year {
-        write_holdings(format!("Acquired {}", year), current_holdings_by_year_rows)?;
+        write_holdings(format!("Holdings acquired in {}", year), current_holdings_by_year_rows)?;
     }
-    write_holdings("Current Holdings".to_string(), current_holdings_rows)?;
+    write_holdings("All Holdings".to_string(), current_holdings_rows)?;
 
     workbook.close()?;
     println!("Wrote {}", outfile);
