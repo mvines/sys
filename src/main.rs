@@ -1439,7 +1439,10 @@ async fn process_account_xls(
 
     let mut workbook = Workbook::create(outfile);
 
-    let mut sheet = workbook.create_sheet("Disposed");
+    let mut sheet = workbook.create_sheet(&match filter_by_year {
+        Some(year) => format!("Disposed {}", year),
+        None => "Disposed".into(),
+    });
     sheet.add_column(Column { width: 12. });
     sheet.add_column(Column { width: 15. });
     sheet.add_column(Column { width: 12. });
@@ -1455,12 +1458,12 @@ async fn process_account_xls(
     let mut disposed_lots = db.disposed_lots();
     disposed_lots.sort_by_key(|lot| lot.when);
 
-    if let Some(filter_by_year) = filter_by_year {
+    if let Some(year) = filter_by_year {
         // Exclude disposed lots that were neither acquired nor disposed of in the filter year
         disposed_lots.retain(|disposed_lot| {
-            (disposed_lot.lot.acquisition.when.year() == filter_by_year
+            (disposed_lot.lot.acquisition.when.year() == year
                 && disposed_lot.lot.income(disposed_lot.token) > 0.)
-                || disposed_lot.when.year() == filter_by_year
+                || disposed_lot.when.year() == year
         })
     }
 
@@ -1526,103 +1529,112 @@ async fn process_account_xls(
         Ok(())
     })?;
 
-    let mut sheet = workbook.create_sheet("Current Holdings");
-    sheet.add_column(Column { width: 12. });
-    sheet.add_column(Column { width: 15. });
-    sheet.add_column(Column { width: 12. });
-    sheet.add_column(Column { width: 12. });
-    sheet.add_column(Column { width: 10. });
-    sheet.add_column(Column { width: 40. });
-    sheet.add_column(Column { width: 40. });
-    sheet.add_column(Column { width: 50. });
+    let mut current_holdings_rows = vec![];
+    let mut current_holdings_by_year_rows = vec![];
 
-    workbook.write_sheet(&mut sheet, |sheet_writer| {
-        sheet_writer.append_row(row![
-            "Token",
-            "Amount",
-            "Income",
-            "Acq. Date",
-            "Acq. Price",
-            "Acquisition Description",
-            "Account Description",
-            "Account Address"
-        ])?;
-
-        let mut rows = vec![];
-
-        for account in db.get_accounts() {
-            for lot in account.lots.iter() {
-                if let Some(filter_by_year) = filter_by_year {
-                    // Exclude lot if it was not acquired in the filter year
-                    if lot.acquisition.when.year() != filter_by_year
-                        || lot.income(account.token) == 0.
-                    {
-                        continue;
-                    }
+    for account in db.get_accounts() {
+        for lot in account.lots.iter() {
+            let row = (
+                lot.acquisition.when,
+                vec![
+                    account.token.to_string(),
+                    account.token.ui_amount(lot.amount).to_string(),
+                    format!(
+                        "${}",
+                        lot.income(account.token)
+                            .separated_string_with_fixed_place(2)
+                    ),
+                    lot.acquisition.when.to_string(),
+                    format!(
+                        "${}",
+                        lot.acquisition.price.separated_string_with_fixed_place(2)
+                    ),
+                    lot.acquisition.kind.to_string(),
+                    account.description.clone(),
+                    account.address.to_string(),
+                ],
+            );
+            current_holdings_rows.push(row.clone());
+            if let Some(year) = filter_by_year {
+                //if lot.acquisition.when.year() == year && lot.income(account.token) > 0. {
+                if lot.acquisition.when.year() == year {
+                    current_holdings_by_year_rows.push(row);
+                    continue;
                 }
-
-                rows.push((
-                    lot.acquisition.when,
-                    row![
-                        account.token.to_string(),
-                        account.token.ui_amount(lot.amount),
-                        format!(
-                            "${}",
-                            lot.income(account.token)
-                                .separated_string_with_fixed_place(2)
-                        ),
-                        lot.acquisition.when.to_string(),
-                        format!(
-                            "${}",
-                            lot.acquisition.price.separated_string_with_fixed_place(2)
-                        ),
-                        lot.acquisition.kind.to_string(),
-                        account.description.as_str(),
-                        account.address.to_string()
-                    ],
-                ));
             }
         }
+    }
 
-        for open_order in db.open_orders(None, Some(OrderSide::Sell)) {
-            for lot in open_order.lots.iter() {
-                if let Some(filter_by_year) = filter_by_year {
-                    // Exclude lot if it was not acquired in the filter year
-                    if lot.acquisition.when.year() != filter_by_year
-                        || lot.income(open_order.token) == 0.
-                    {
-                        continue;
-                    }
+    for open_order in db.open_orders(None, Some(OrderSide::Sell)) {
+        for lot in open_order.lots.iter() {
+            let row = (
+                lot.acquisition.when,
+                vec![
+                    open_order.token.to_string(),
+                    open_order.token.ui_amount(lot.amount).to_string(),
+                    format!(
+                        "${}",
+                        lot.income(open_order.token)
+                            .separated_string_with_fixed_place(2)
+                    ),
+                    lot.acquisition.when.to_string(),
+                    format!(
+                        "${}",
+                        lot.acquisition.price.separated_string_with_fixed_place(2)
+                    ),
+                    lot.acquisition.kind.to_string(),
+                    format!("Open Order: {:?} {}", open_order.exchange, open_order.pair),
+                    open_order.deposit_address.to_string(),
+                ],
+            );
+            current_holdings_rows.push(row.clone());
+            if let Some(year) = filter_by_year {
+                //if lot.acquisition.when.year() == year && lot.income(open_order.token) > 0. {
+                if lot.acquisition.when.year() == year {
+                    current_holdings_by_year_rows.push(row);
+                    continue;
                 }
-                rows.push((
-                    lot.acquisition.when,
-                    row![
-                        open_order.token.to_string(),
-                        open_order.token.ui_amount(lot.amount),
-                        format!(
-                            "${}",
-                            lot.income(open_order.token)
-                                .separated_string_with_fixed_place(2)
-                        ),
-                        lot.acquisition.when.to_string(),
-                        format!(
-                            "${}",
-                            lot.acquisition.price.separated_string_with_fixed_place(2)
-                        ),
-                        lot.acquisition.kind.to_string(),
-                        format!("Open Order: {:?} {}", open_order.exchange, open_order.pair),
-                        open_order.deposit_address.to_string()
-                    ],
-                ));
             }
         }
-        rows.sort_by_key(|row| row.0);
-        for (_, row) in rows {
-            sheet_writer.append_row(row)?;
-        }
+    }
+    current_holdings_rows.sort_by_key(|row| row.0);
+    current_holdings_by_year_rows.sort_by_key(|row| row.0);
 
-        Ok(())
-    })?;
+    let mut write_holdings = |name: String, rows: Vec<(_, Vec<String>)>| {
+        let mut sheet = workbook.create_sheet(&name);
+
+        sheet.add_column(Column { width: 12. });
+        sheet.add_column(Column { width: 15. });
+        sheet.add_column(Column { width: 12. });
+        sheet.add_column(Column { width: 12. });
+        sheet.add_column(Column { width: 10. });
+        sheet.add_column(Column { width: 40. });
+        sheet.add_column(Column { width: 40. });
+        sheet.add_column(Column { width: 50. });
+
+        workbook.write_sheet(&mut sheet, |sheet_writer| {
+            sheet_writer.append_row(row![
+                "Token",
+                "Amount",
+                "Income",
+                "Acq. Date",
+                "Acq. Price",
+                "Acquisition Description",
+                "Account Description",
+                "Account Address"
+            ])?;
+
+            for (_, row) in rows {
+                sheet_writer.append_row(Row::from_iter(row.into_iter()))?;
+            }
+
+            Ok(())
+        })
+    };
+    if let Some(year) = filter_by_year {
+        write_holdings(format!("Acquired {}", year), current_holdings_by_year_rows)?;
+    }
+    write_holdings("Current Holdings".to_string(), current_holdings_rows)?;
 
     workbook.close()?;
     println!("Wrote {}", outfile);

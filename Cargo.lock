@@ -370,16 +370,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bzip2"
-version = "0.4.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6afcd980b5f3a45017c57e57a2fcccbb351cc43a356ce117ef760ef8052b89b0"
-dependencies = [
- "bzip2-sys",
- "libc",
-]
-
-[[package]]
 name = "bzip2-sys"
 version = "0.1.11+1.0.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2727,9 +2717,9 @@ checksum = "0f0242b8e50dd9accdd56170e94ca1ebd223b098eb9c83539a6e367d0f36ae68"
 
 [[package]]
 name = "simple_excel_writer"
-version = "0.1.7"
+version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b82c3169adf7720aa3cb8af21a2ef75dff29b6ffcb41be81c4975bc31b489290"
+checksum = "6db230f8c2b728df78fe7a53de78139e1fd370454a85113793956e945de8cb5c"
 dependencies = [
  "zip",
 ]
@@ -3155,7 +3145,7 @@ dependencies = [
  "blake3",
  "bv",
  "byteorder",
- "bzip2 0.3.3",
+ "bzip2",
  "crossbeam-channel 0.4.4",
  "dashmap",
  "dir-diff",
@@ -4176,7 +4166,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "93ab48844d61251bb3835145c521d88aa4031d7139e8485990f60ca911fa0815"
 dependencies = [
  "byteorder",
- "bzip2 0.4.3",
  "crc32fast",
  "flate2",
  "thiserror",
