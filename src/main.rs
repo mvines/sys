@@ -1632,7 +1632,10 @@ async fn process_account_xls(
         })
     };
     if let Some(year) = filter_by_year {
-        write_holdings(format!("Holdings acquired in {}", year), current_holdings_by_year_rows)?;
+        write_holdings(
+            format!("Holdings acquired in {}", year),
+            current_holdings_by_year_rows,
+        )?;
     }
     write_holdings("All Holdings".to_string(), current_holdings_rows)?;
 
