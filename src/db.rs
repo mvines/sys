@@ -250,8 +250,8 @@ impl fmt::Display for LotDisposalKind {
                 pair,
                 order_id,
                 match fee {
-                    None => "".into(),
-                    Some((amount, coin)) => format!(" (fee: {} {})", amount, coin),
+                    Some((amount, coin)) if *amount > 0. => format!(" (fee: {} {})", amount, coin),
+                    _ => "".into(),
                 }
             ),
             LotDisposalKind::Other { description } => write!(f, "{}", description),
