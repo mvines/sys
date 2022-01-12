@@ -1471,14 +1471,14 @@ async fn process_account_xls(
         sheet_writer.append_row(row![
             "Token",
             "Amount",
-            "Income",
+            "Income (USD)",
             "Acq. Date",
-            "Acq. Price",
+            "Acq. Price (USD)",
             "Acquisition Description",
-            "Cap Gain",
+            "Cap Gain (USD)",
             "Sale Date",
-            "Sale Price",
-            "Fee",
+            "Sale Price (USD)",
+            "Fee (USD)",
             "Sale Description"
         ])?;
 
@@ -1486,41 +1486,21 @@ async fn process_account_xls(
             sheet_writer.append_row(row![
                 disposed_lot.token.to_string(),
                 disposed_lot.token.ui_amount(disposed_lot.lot.amount),
-                format!(
-                    "${}",
-                    disposed_lot
-                        .lot
-                        .income(disposed_lot.token)
-                        .separated_string_with_fixed_place(2)
-                ),
+                disposed_lot.lot.income(disposed_lot.token),
                 disposed_lot.lot.acquisition.when.to_string(),
-                format!(
-                    "${}",
-                    disposed_lot
-                        .lot
-                        .acquisition
-                        .price
-                        .separated_string_with_fixed_place(2)
-                ),
+                disposed_lot.lot.acquisition.price,
                 disposed_lot.lot.acquisition.kind.to_string(),
-                format!(
-                    "${}",
-                    disposed_lot
-                        .lot
-                        .cap_gain(disposed_lot.token, disposed_lot.price)
-                        .separated_string_with_fixed_place(2)
-                ),
+                disposed_lot
+                    .lot
+                    .cap_gain(disposed_lot.token, disposed_lot.price),
                 disposed_lot.when.to_string(),
-                format!(
-                    "${}",
-                    disposed_lot.price.separated_string_with_fixed_place(2)
-                ),
+                disposed_lot.price,
                 disposed_lot
                     .kind
                     .fee()
                     .map(|(amount, currency)| {
                         assert_eq!(currency, "USD");
-                        format!("${}", amount.separated_string_with_fixed_place(2),)
+                        *amount
                     })
                     .unwrap_or_default(),
                 disposed_lot.kind.to_string()
@@ -1532,31 +1512,38 @@ async fn process_account_xls(
     let mut current_holdings_rows = vec![];
     let mut current_holdings_by_year_rows = vec![];
 
+    #[derive(Clone)]
+    enum R {
+        Number(f64),
+        Text(String),
+    }
+
+    impl ToCellValue for R {
+        fn to_cell_value(&self) -> CellValue {
+            match self {
+                R::Number(x) => x.to_cell_value(),
+                R::Text(x) => x.to_cell_value(),
+            }
+        }
+    }
+
     for account in db.get_accounts() {
         for lot in account.lots.iter() {
             let row = (
                 lot.acquisition.when,
                 vec![
-                    account.token.to_string(),
-                    account.token.ui_amount(lot.amount).to_string(),
-                    format!(
-                        "${}",
-                        lot.income(account.token)
-                            .separated_string_with_fixed_place(2)
-                    ),
-                    lot.acquisition.when.to_string(),
-                    format!(
-                        "${}",
-                        lot.acquisition.price.separated_string_with_fixed_place(2)
-                    ),
-                    lot.acquisition.kind.to_string(),
-                    account.description.clone(),
-                    account.address.to_string(),
+                    R::Text(account.token.to_string()),
+                    R::Number(account.token.ui_amount(lot.amount)),
+                    R::Number(lot.income(account.token)),
+                    R::Text(lot.acquisition.when.to_string()),
+                    R::Number(lot.acquisition.price),
+                    R::Text(lot.acquisition.kind.to_string()),
+                    R::Text(account.description.clone()),
+                    R::Text(account.address.to_string()),
                 ],
             );
             current_holdings_rows.push(row.clone());
             if let Some(year) = filter_by_year {
-                //if lot.acquisition.when.year() == year && lot.income(account.token) > 0. {
                 if lot.acquisition.when.year() == year {
                     current_holdings_by_year_rows.push(row);
                     continue;
@@ -1570,26 +1557,21 @@ async fn process_account_xls(
             let row = (
                 lot.acquisition.when,
                 vec![
-                    open_order.token.to_string(),
-                    open_order.token.ui_amount(lot.amount).to_string(),
-                    format!(
-                        "${}",
-                        lot.income(open_order.token)
-                            .separated_string_with_fixed_place(2)
-                    ),
-                    lot.acquisition.when.to_string(),
-                    format!(
-                        "${}",
-                        lot.acquisition.price.separated_string_with_fixed_place(2)
-                    ),
-                    lot.acquisition.kind.to_string(),
-                    format!("Open Order: {:?} {}", open_order.exchange, open_order.pair),
-                    open_order.deposit_address.to_string(),
+                    R::Text(open_order.token.to_string()),
+                    R::Number(open_order.token.ui_amount(lot.amount)),
+                    R::Number(lot.income(open_order.token)),
+                    R::Text(lot.acquisition.when.to_string()),
+                    R::Number(lot.acquisition.price),
+                    R::Text(lot.acquisition.kind.to_string()),
+                    R::Text(format!(
+                        "Open Order: {:?} {}",
+                        open_order.exchange, open_order.pair
+                    )),
+                    R::Text(open_order.deposit_address.to_string()),
                 ],
             );
             current_holdings_rows.push(row.clone());
             if let Some(year) = filter_by_year {
-                //if lot.acquisition.when.year() == year && lot.income(open_order.token) > 0. {
                 if lot.acquisition.when.year() == year {
                     current_holdings_by_year_rows.push(row);
                     continue;
@@ -1600,7 +1582,7 @@ async fn process_account_xls(
     current_holdings_rows.sort_by_key(|row| row.0);
     current_holdings_by_year_rows.sort_by_key(|row| row.0);
 
-    let mut write_holdings = |name: String, rows: Vec<(_, Vec<String>)>| {
+    let mut write_holdings = |name: String, rows: Vec<(_, Vec<R>)>| {
         let mut sheet = workbook.create_sheet(&name);
 
         sheet.add_column(Column { width: 12. });
@@ -1616,9 +1598,9 @@ async fn process_account_xls(
             sheet_writer.append_row(row![
                 "Token",
                 "Amount",
-                "Income",
+                "Income (USD)",
                 "Acq. Date",
-                "Acq. Price",
+                "Acq. Price (USD)",
                 "Acquisition Description",
                 "Account Description",
                 "Account Address"
