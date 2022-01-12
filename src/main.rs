@@ -591,19 +591,20 @@ async fn process_exchange_withdraw(
     withdrawal_password: Option<String>,
     withdrawal_code: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let amount = amount.unwrap_or_else(|| {
-        let deposit_account = db.get_account(deposit_address, token).unwrap();
-        deposit_account.last_update_balance
-    });
+    let deposit_account = db
+        .get_account(deposit_address, token)
+        .expect("unknown deposit address");
+    let _to_account = db
+        .get_account(to_address, token)
+        .expect("unknown to address");
 
-    let tag = db.generate_withdrawal_tag(token, deposit_address, to_address)?;
+    let amount = amount.unwrap_or(deposit_account.last_update_balance);
 
-    exchange_client
+    let tag = exchange_client
         .request_withdraw(
             to_address,
             token,
             token.ui_amount(amount),
-            tag.clone(),
             withdrawal_password,
             withdrawal_code,
         )

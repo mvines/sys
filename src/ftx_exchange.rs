@@ -120,7 +120,7 @@ impl ExchangeClient for FtxExchangeClient {
             .into_iter()
             .filter_map(|wd| {
                 if let Some(address) = wd.address {
-                    if let (Ok(address), Some(tag)) = (address.parse::<Pubkey>(), wd.tag) {
+                    if let (Ok(address), tag) = (address.parse::<Pubkey>(), wd.time) {
                         let token = if &wd.coin == "SOL" {
                             None
                         } else {
@@ -153,10 +153,9 @@ impl ExchangeClient for FtxExchangeClient {
         address: Pubkey,
         token: MaybeToken,
         amount: f64,
-        tag: String,
         password: Option<String>,
         code: Option<String>,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<String, Box<dyn std::error::Error>> {
         let coin = token.to_string();
         let size = FromPrimitive::from_f64(amount).unwrap();
 
@@ -166,7 +165,7 @@ impl ExchangeClient for FtxExchangeClient {
                 coin: coin.clone(),
                 size,
                 address: address.to_string(),
-                tag: Some(tag.clone()),
+                tag: None,
                 method: Some("sol".into()),
                 password,
                 code,
@@ -176,8 +175,7 @@ impl ExchangeClient for FtxExchangeClient {
         assert_eq!(wd.coin, coin);
         assert_eq!(wd.address, Some(address.to_string()));
         assert_eq!(wd.size, size);
-        assert_eq!(wd.tag.as_ref(), Some(&tag));
-        Ok(())
+        Ok(wd.time) // `time` field is used as a tag
     }
 
     async fn print_market_info(

@@ -161,10 +161,9 @@ impl ExchangeClient for BinanceExchangeClient {
         _address: Pubkey,
         _token: MaybeToken,
         _amount: f64,
-        _tag: String,
         _withdrawal_password: Option<String>,
         _withdrawal_code: Option<String>,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<String, Box<dyn std::error::Error>> {
         todo!();
     }
 

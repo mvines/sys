@@ -132,10 +132,9 @@ pub trait ExchangeClient {
         address: Pubkey,
         token: MaybeToken,
         amount: f64,
-        tag: String,
         withdrawal_password: Option<String>,
         withdrawal_code: Option<String>,
-    ) -> Result<(), Box<dyn std::error::Error>>;
+    ) -> Result<String, Box<dyn std::error::Error>>;
     async fn balances(
         &self,
     ) -> Result<HashMap<String, ExchangeBalance>, Box<dyn std::error::Error>>;

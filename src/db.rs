@@ -558,22 +558,6 @@ impl Db {
             .collect()
     }
 
-    pub fn generate_withdrawal_tag(
-        &mut self,
-        token: MaybeToken,
-        from_address: Pubkey,
-        to_address: Pubkey,
-    ) -> DbResult<String> {
-        let _from_account = self
-            .get_account(from_address, token)
-            .ok_or(DbError::AccountDoesNotExist(from_address, token))?;
-        let _to_account = self
-            .get_account(to_address, token)
-            .ok_or(DbError::AccountDoesNotExist(to_address, token))?;
-
-        Ok(solana_sdk::pubkey::new_rand().to_string())
-    }
-
     #[allow(clippy::too_many_arguments)]
     pub fn record_withdrawal(
         &mut self,
