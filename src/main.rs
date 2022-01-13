@@ -739,6 +739,7 @@ async fn process_exchange_buy(
         price,
         order_id,
         vec![],
+        Some(amount),
     )?;
     println!("{}", msg);
     notifier.send(&format!("{:?}: {}", exchange, msg)).await;
@@ -878,6 +879,7 @@ async fn process_exchange_sell(
         price,
         order_id,
         order_lots,
+        None,
     )?;
     println!("{}", msg);
     notifier.send(&format!("{:?}: {}", exchange, msg)).await;
@@ -1168,7 +1170,7 @@ async fn process_account_list(
         let mut total_unrealized_long_term_gain = 0.;
         let mut total_current_value = 0.;
 
-        let open_sell_orders = db.open_orders(None, Some(OrderSide::Sell));
+        let open_orders = db.open_orders(None, None);
 
         for account in accounts {
             if let Some(ref account_filter) = account_filter {
@@ -1198,12 +1200,12 @@ async fn process_account_list(
             );
             account.assert_lot_balance();
 
-            let sell_open_orders = open_sell_orders
+            let open_orders = open_orders
                 .iter()
                 .filter(|oo| oo.deposit_address == account.address)
                 .collect::<Vec<_>>();
 
-            if !account.lots.is_empty() || !sell_open_orders.is_empty() {
+            if !account.lots.is_empty() || !open_orders.is_empty() {
                 let mut lots = account.lots.iter().collect::<Vec<_>>();
                 lots.sort_by_key(|lot| lot.acquisition.when);
 
@@ -1239,19 +1241,23 @@ async fn process_account_list(
                     }
                 }
 
-                for open_sell_order in sell_open_orders {
-                    let mut lots = open_sell_order.lots.iter().collect::<Vec<_>>();
+                for open_order in open_orders {
+                    let mut lots = open_order.lots.iter().collect::<Vec<_>>();
                     lots.sort_by_key(|lot| lot.acquisition.when);
-                    let amount = lots.iter().map(|lot| lot.amount).sum::<u64>();
+                    let ui_amount = open_order.ui_amount.unwrap_or_else(|| {
+                        account
+                            .token
+                            .ui_amount(lots.iter().map(|lot| lot.amount).sum::<u64>())
+                    });
                     println!(
                         " [Open {}: {} {}{} at ${} | id {} created {}]",
-                        open_sell_order.pair,
-                        format_order_side(OrderSide::Sell),
+                        open_order.pair,
+                        format_order_side(open_order.side),
                         account.token.symbol(),
-                        account.token.ui_amount(amount),
-                        open_sell_order.price,
-                        open_sell_order.order_id,
-                        HumanTime::from(open_sell_order.creation_time),
+                        ui_amount,
+                        open_order.price,
+                        open_order.order_id,
+                        HumanTime::from(open_order.creation_time),
                     );
                     for lot in lots {
                         let mut account_unrealized_gain = 0.;

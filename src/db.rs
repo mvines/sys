@@ -130,7 +130,8 @@ pub struct OpenOrder {
     pub pair: String,
     pub price: f64,
     pub order_id: String,
-    pub lots: Vec<Lot>, // if OrderSide::Sell the lots in the order, empty if OrderSide::Buy
+    pub lots: Vec<Lot>, // if OrderSide::Sell the lots in the order; empty if OrderSide::Buy
+    pub ui_amount: Option<f64>, // if OrderSide::Buy, `Some` amount that to buy; `None` if OrderSide::Sell
 
     #[serde(with = "field_as_string")]
     pub deposit_address: Pubkey,
@@ -700,7 +701,18 @@ impl Db {
         price: f64,
         order_id: String,
         lots: Vec<Lot>,
+        ui_amount: Option<f64>,
     ) -> DbResult<()> {
+        match side {
+            OrderSide::Buy => {
+                assert!(lots.is_empty());
+                assert!(ui_amount.is_some())
+            }
+            OrderSide::Sell => {
+                assert!(!lots.is_empty());
+                assert!(ui_amount.is_none())
+            }
+        }
         let mut open_orders = self.open_orders(None, None);
         open_orders.push(OpenOrder {
             side,
@@ -712,6 +724,7 @@ impl Db {
             lots,
             deposit_address: deposit_account.address,
             token: deposit_account.token,
+            ui_amount,
         });
         self.db.set("orders", &open_orders).unwrap();
         self.update_account(deposit_account) // `update_account` calls `save`...
