@@ -309,8 +309,8 @@ async fn process_sync_exchange(
             }
         } else {
             let fee_summary = match &order_status.fee {
-                None => "".into(),
-                Some((amount, coin)) => format!(" (fee: {} {})", amount, coin),
+                Some((amount, coin)) if *amount > 0. => format!(" (fee: {} {})", amount, coin),
+                _ => "".into(),
             };
             db.close_order(
                 &order_info.order_id,
