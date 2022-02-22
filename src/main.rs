@@ -1189,7 +1189,7 @@ async fn process_account_list(
 
             println!(
                 "{} ({}): {}{} - {}",
-                account.address.to_string(),
+                account.address,
                 account.token,
                 account.token.symbol(),
                 account
