@@ -98,7 +98,7 @@ impl ExchangeClient for FtxExchangeClient {
                     if let Some(tx_id) = wd.txid {
                         return Some(DepositInfo {
                             tx_id,
-                            amount: wd.size.to_f64().unwrap(),
+                            amount: wd.size.unwrap().to_f64().unwrap(),
                         });
                     }
                 }
