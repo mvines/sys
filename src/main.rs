@@ -262,9 +262,17 @@ async fn process_sync_exchange(
             );
             db.cancel_deposit(pending_deposit.transfer.signature)
                 .expect("cancel_deposit");
+        } else if confirmed {
+            println!(
+                "{} {}{} deposit pending ({} confirmed)",
+                token,
+                token.symbol(),
+                token.ui_amount(pending_deposit.amount),
+                pending_deposit.transfer.signature,
+            );
         } else {
             println!(
-                "{} {}{} deposit pending for at most {} blocks ({}, confirmed={})",
+                "{} {}{} deposit pending for at most {} blocks ({} unconfirmed)",
                 token,
                 token.symbol(),
                 token.ui_amount(pending_deposit.amount),
@@ -273,7 +281,6 @@ async fn process_sync_exchange(
                     .last_valid_block_height
                     .saturating_sub(block_height),
                 pending_deposit.transfer.signature,
-                confirmed,
             );
         }
     }
