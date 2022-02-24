@@ -3894,10 +3894,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .map(|x| x.into_iter().collect())
                         .unwrap_or_default();
 
-                    let max_create_time = value_t!(arg_matches, "age", i64)
-                        .ok()
-                        .map(|age| Utc::now().checked_sub_signed(chrono::Duration::hours(age)))
-                        .flatten();
+                    let max_create_time = value_t!(arg_matches, "age", i64).ok().and_then(|age| {
+                        Utc::now().checked_sub_signed(chrono::Duration::hours(age))
+                    });
 
                     let side = value_t_or_exit!(arg_matches, "side", String);
                     let side = match side.as_str() {
