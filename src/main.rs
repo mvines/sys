@@ -3405,14 +3405,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let mut db_fd_lock = fd_lock::RwLock::new(fs::File::open(&db_path).unwrap());
-    let _db_write_lock = db_fd_lock.try_write().unwrap_or_else(|err| {
-        eprintln!(
-            "Unable to lock database directory: {}: {}",
-            db_path.display(),
-            err
-        );
-        exit(1);
-    });
+    let _db_write_lock = loop {
+        match db_fd_lock.try_write() {
+            Ok(lock) => break lock,
+            Err(err) => {
+                eprintln!(
+                    "Unable to lock database directory: {}: {}",
+                    db_path.display(),
+                    err
+                );
+                std::thread::sleep(std::time::Duration::from_secs(1));
+            }
+        }
+    };
 
     let mut db = db::new(&db_path).unwrap_or_else(|err| {
         eprintln!("Failed to open {}: {}", db_path.display(), err);
