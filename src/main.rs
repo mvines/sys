@@ -3338,7 +3338,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .takes_value(true)
                                 .validator(is_amount_or_all)
                                 .help("The amount to lend; accepts keyword ALL"),
-                        ),
+                        )
+                        .arg(
+                            Arg::with_name("available")
+                                .short("a")
+                                .long("available")
+                                .requires("amount")
+                                .takes_value(false)
+                                .help("Invert AMOUNT to mean, the amount to keep available and lend the rest"),
+                        )
                 )
                 .subcommand(
                     SubCommand::with_name("lending-history")
@@ -4016,6 +4024,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ("lend", Some(arg_matches)) => {
                     let coin = value_t_or_exit!(arg_matches, "coin", String);
                     let amount = arg_matches.value_of("amount");
+                    let available = arg_matches.is_present("available");
 
                     let exchange_client = exchange_client()?;
 
@@ -4025,12 +4034,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .ok_or_else(|| format!("Lending not available for {}", coin))?;
 
                     if let Some(amount) = amount {
-                        let amount = if amount == "ALL" {
+                        let amount = if available {
+                            if amount == "ALL" {
+                                0.
+                            } else {
+                                lending_info.lendable - amount.parse::<f64>().unwrap()
+                            }
+                        } else if amount == "ALL" {
                             lending_info.lendable
                         } else {
                             amount.parse::<f64>().unwrap()
                         }
-                        .floor();
+                        .floor()
+                        .max(0.);
 
                         let additional_amount = amount - lending_info.offered;
                         if additional_amount.abs() > f64::EPSILON {
