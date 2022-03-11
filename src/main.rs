@@ -90,6 +90,36 @@ fn app_version() -> String {
     })
 }
 
+fn send_transaction_until_expired(
+    rpc_client: &RpcClient,
+    transaction: &Transaction,
+    last_valid_block_height: u64,
+) -> bool {
+    loop {
+        match rpc_client.send_and_confirm_transaction_with_spinner(transaction) {
+            Ok(_) => return true,
+            Err(err) => {
+                println!("Transaction failed to send: {:?}", err);
+            }
+        }
+
+        match rpc_client.get_epoch_info() {
+            Ok(epoch_info) => {
+                if epoch_info.block_height > last_valid_block_height {
+                    return false;
+                }
+                println!(
+                    "Transaction pending for at most {} blocks",
+                    last_valid_block_height.saturating_sub(epoch_info.block_height),
+                );
+            }
+            Err(err) => {
+                println!("Failed to get epoch info: {:?}", err);
+            }
+        };
+    }
+}
+
 fn add_exchange_deposit_address_to_db(
     db: &mut Db,
     exchange: Exchange,
@@ -563,26 +593,11 @@ async fn process_exchange_deposit<T: Signers>(
         token,
         lot_numbers,
     )?;
-    loop {
-        match rpc_client.send_and_confirm_transaction_with_spinner(&transaction) {
-            Ok(_) => return Ok(()),
-            Err(err) => {
-                println!("Send transaction failed: {:?}", err);
-            }
-        }
-        match rpc_client.get_fee_calculator_for_blockhash(&recent_blockhash) {
-            Err(err) => {
-                println!("Failed to get fee calculator: {:?}", err);
-            }
-            Ok(None) => {
-                db.cancel_deposit(signature).expect("cancel_deposit");
-                return Err("Deposit failed: {}".into());
-            }
-            Ok(_) => {
-                println!("Blockhash has not yet expired, retrying transaction...");
-            }
-        };
+    if !send_transaction_until_expired(rpc_client, &transaction, last_valid_block_height) {
+        db.cancel_deposit(signature).expect("cancel_deposit");
+        return Err("Deposit failed".into());
     }
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1721,30 +1736,13 @@ async fn process_account_merge<T: Signers>(
         None,
     )?;
 
-    loop {
-        match rpc_client.send_and_confirm_transaction_with_spinner(&transaction) {
-            Ok(_) => {
-                db.confirm_transfer(signature)?;
-                db.remove_account(from_address, token)?;
-                return Ok(());
-            }
-            Err(err) => {
-                println!("Send transaction failed: {:?}", err);
-            }
-        }
-        match rpc_client.get_fee_calculator_for_blockhash(&recent_blockhash) {
-            Err(err) => {
-                println!("Failed to get fee calculator: {:?}", err);
-            }
-            Ok(None) => {
-                db.cancel_transfer(signature)?;
-                return Err("Merge failed: {}".into());
-            }
-            Ok(_) => {
-                println!("Blockhash has not yet expired, retrying transaction...");
-            }
-        };
+    if !send_transaction_until_expired(rpc_client, &transaction, last_valid_block_height) {
+        db.cancel_transfer(signature)?;
+        return Err("Merge failed".into());
     }
+    db.confirm_transfer(signature)?;
+    db.remove_account(from_address, token)?;
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1980,31 +1978,13 @@ async fn process_account_sweep<T: Signers>(
         None,
     )?;
 
-    loop {
-        match rpc_client.send_and_confirm_transaction_with_spinner(&transaction) {
-            Ok(_) => {
-                println!("Confirming sweep: {}", signature);
-                db.confirm_transfer(signature)?;
-                break;
-            }
-            Err(err) => {
-                println!("Send transaction failed: {:?}", err);
-            }
-        }
-        match rpc_client.get_fee_calculator_for_blockhash(&recent_blockhash) {
-            Err(err) => {
-                println!("Failed to get fee calculator: {:?}", err);
-            }
-            Ok(None) => {
-                db.cancel_transfer(signature)?;
-                db.remove_transitory_sweep_stake_address(transitory_stake_account.pubkey())?;
-                return Err("Sweep failed: {}".into());
-            }
-            Ok(_) => {
-                println!("Blockhash has not yet expired, retrying transaction...");
-            }
-        };
+    if !send_transaction_until_expired(rpc_client, &transaction, last_valid_block_height) {
+        db.cancel_transfer(signature)?;
+        db.remove_transitory_sweep_stake_address(transitory_stake_account.pubkey())?;
+        return Err("Sweep failed".into());
     }
+    println!("Confirming sweep: {}", signature);
+    db.confirm_transfer(signature)?;
 
     notifier.send(&msg).await;
     println!("{}", msg);
@@ -2091,32 +2071,13 @@ async fn process_account_split<T: Signers>(
         lot_numbers,
     )?;
 
-    loop {
-        match rpc_client.send_and_confirm_transaction_with_spinner(&transaction) {
-            Ok(_) => {
-                println!("Split confirmed: {}", signature);
-                db.confirm_transfer(signature)?;
-                break;
-            }
-            Err(err) => {
-                println!("Send transaction failed: {:?}", err);
-            }
-        }
-        match rpc_client.get_fee_calculator_for_blockhash(&recent_blockhash) {
-            Err(err) => {
-                println!("Failed to get fee calculator: {:?}", err);
-            }
-            Ok(None) => {
-                db.cancel_transfer(signature)?;
-                db.remove_account(into_keypair.pubkey(), MaybeToken::SOL())?;
-                return Err("Split failed: {}".into());
-            }
-            Ok(_) => {
-                println!("Blockhash has not yet expired, retrying transaction...");
-            }
-        };
+    if !send_transaction_until_expired(rpc_client, &transaction, last_valid_block_height) {
+        db.cancel_transfer(signature)?;
+        db.remove_account(into_keypair.pubkey(), MaybeToken::SOL())?;
+        return Err("Split failed".into());
     }
-
+    println!("Split confirmed: {}", signature);
+    db.confirm_transfer(signature)?;
     Ok(())
 }
 
@@ -2465,30 +2426,11 @@ async fn process_account_sync_sweep(
             None,
         )?;
 
-        loop {
-            match rpc_client.send_and_confirm_transaction_with_spinner(&transaction) {
-                Ok(_) => {
-                    db.confirm_transfer(signature)?;
-                    break;
-                }
-                Err(err) => {
-                    println!("Send transaction failed: {:?}", err);
-                }
-            }
-            match rpc_client.get_fee_calculator_for_blockhash(&recent_blockhash) {
-                Err(err) => {
-                    println!("Failed to get fee calculator: {:?}", err);
-                }
-                Ok(None) => {
-                    db.cancel_transfer(signature)?;
-                    return Err("Sweep merge failed: {}".into());
-                }
-                Ok(_) => {
-                    println!("Blockhash has not yet expired, retrying transaction...");
-                }
-            };
+        if !send_transaction_until_expired(rpc_client, &transaction, last_valid_block_height) {
+            db.cancel_transfer(signature)?;
+            return Err("Merge failed".into());
         }
-
+        db.confirm_transfer(signature)?;
         db.remove_transitory_sweep_stake_address(transitory_sweep_stake_address)?;
     }
     Ok(())
