@@ -44,6 +44,9 @@ pub enum DbError {
 
     #[error("Lot swap failed: {0}")]
     LotSwapFailed(String),
+
+    #[error("Lot move failed: {0}")]
+    LotMoveFailed(String),
 }
 
 pub type DbResult<T> = std::result::Result<T, DbError>;
@@ -1330,6 +1333,53 @@ impl Db {
             self.update_account(account1)?;
             self.update_account(account2)?;
         }
+
+        self.auto_save(true)
+    }
+
+    pub fn move_lot(&mut self, lot_number: usize, to_address: Pubkey) -> DbResult<()> {
+        self.auto_save(false)?;
+
+        let mut from_account = self
+            .get_accounts()
+            .into_iter()
+            .find(|tracked_account| {
+                tracked_account
+                    .lots
+                    .iter()
+                    .any(|lot| lot.lot_number == lot_number)
+            })
+            .ok_or_else(|| DbError::LotMoveFailed(format!("Unknown lot: {}", lot_number)))?;
+
+        let mut to_account = self
+            .get_accounts()
+            .into_iter()
+            .find(|tracked_account| tracked_account.address == to_address)
+            .ok_or_else(|| {
+                DbError::LotMoveFailed(format!("Unknown destination account: {}", to_address))
+            })?;
+
+        if to_account.token != from_account.token {
+            return Err(DbError::LotMoveFailed(format!(
+                "Token mismatch ({} != {})",
+                to_account.token, from_account.token
+            )));
+        }
+
+        let lot = from_account
+            .lots
+            .iter()
+            .find(|lot| lot.lot_number == lot_number)
+            .cloned()
+            .unwrap();
+
+        from_account.remove_lot(lot_number);
+        to_account.last_update_balance -= lot.amount;
+        from_account.last_update_balance += lot.amount;
+        to_account.merge_or_add_lot(lot);
+
+        self.update_account(to_account)?;
+        self.update_account(from_account)?;
 
         self.auto_save(true)
     }

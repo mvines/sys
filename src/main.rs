@@ -2847,7 +2847,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .setting(AppSettings::InferSubcommands)
                         .subcommand(
                             SubCommand::with_name("swap")
-                                .about("Swap lots")
+                                .about("Swap lots in the local database only")
                                 .arg(
                                     Arg::with_name("lot_number1")
                                         .value_name("LOT NUMBER")
@@ -2863,6 +2863,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         .required(true)
                                         .validator(is_parsable::<usize>)
                                         .help("Second lot number"),
+                                )
+                        )
+                        .subcommand(
+                            SubCommand::with_name("move")
+                                .about("Move a lot to a new addresses in the local database only. \
+                                        Useful if the on-chain state is out of sync with the database")
+                                .arg(
+                                    Arg::with_name("lot_number")
+                                        .long("lot")
+                                        .value_name("LOT NUMBER")
+                                        .takes_value(true)
+                                        .required(true)
+                                        .validator(is_parsable::<usize>)
+                                        .help("Lot number to move. Must not be a disposed lot"),
+                                )
+                                .arg(
+                                    Arg::with_name("to_address")
+                                        .long("to")
+                                        .value_name("RECIPIENT_ADDRESS")
+                                        .takes_value(true)
+                                        .required(true)
+                                        .validator(is_valid_pubkey)
+                                        .help("Address to receive the lot"),
                                 )
                         ),
                 ),
@@ -3398,6 +3421,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let lot_number2 = value_t_or_exit!(arg_matches, "lot_number2", usize);
                     println!("Swapping lots {} and {}", lot_number1, lot_number2);
                     db.swap_lots(lot_number1, lot_number2)?;
+                }
+                ("move", Some(arg_matches)) => {
+                    let lot_number = value_t_or_exit!(arg_matches, "lot_number", usize);
+                    let to_address =
+                        pubkey_of_signer(arg_matches, "to_address", &mut wallet_manager)?
+                            .expect("to");
+                    db.move_lot(lot_number, to_address)?;
                 }
                 _ => unreachable!(),
             },
