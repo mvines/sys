@@ -2866,12 +2866,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 )
                         )
                         .subcommand(
+                            SubCommand::with_name("delete")
+                                .about("Delete a lot from the local database only. \
+                                        Useful if the on-chain state is out of sync with the database")
+                                .arg(
+                                    Arg::with_name("lot_number")
+                                        .value_name("LOT NUMBER")
+                                        .takes_value(true)
+                                        .required(true)
+                                        .validator(is_parsable::<usize>)
+                                        .help("Lot number to delete. Must not be a disposed lot"),
+                                )
+                                .arg(
+                                    Arg::with_name("confirm")
+                                        .long("confirm")
+                                        .takes_value(false)
+                                        .help("Confirm the operation"),
+                                )
+                        )
+                        .subcommand(
                             SubCommand::with_name("move")
                                 .about("Move a lot to a new addresses in the local database only. \
                                         Useful if the on-chain state is out of sync with the database")
                                 .arg(
                                     Arg::with_name("lot_number")
-                                        .long("lot")
                                         .value_name("LOT NUMBER")
                                         .takes_value(true)
                                         .required(true)
@@ -2880,7 +2898,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 )
                                 .arg(
                                     Arg::with_name("to_address")
-                                        .long("to")
                                         .value_name("RECIPIENT_ADDRESS")
                                         .takes_value(true)
                                         .required(true)
@@ -3428,6 +3445,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         pubkey_of_signer(arg_matches, "to_address", &mut wallet_manager)?
                             .expect("to");
                     db.move_lot(lot_number, to_address)?;
+                }
+                ("delete", Some(arg_matches)) => {
+                    let lot_number = value_t_or_exit!(arg_matches, "lot_number", usize);
+                    let confirm = arg_matches.is_present("confirm");
+
+                    if !confirm {
+                        println!("Add --confirm to remove lot {}", lot_number);
+                        return Ok(());
+                    }
+                    db.delete_lot(lot_number)?;
                 }
                 _ => unreachable!(),
             },

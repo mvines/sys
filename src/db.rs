@@ -47,6 +47,9 @@ pub enum DbError {
 
     #[error("Lot move failed: {0}")]
     LotMoveFailed(String),
+
+    #[error("Lot delete failed: {0}")]
+    LotDeleteFailed(String),
 }
 
 pub type DbResult<T> = std::result::Result<T, DbError>;
@@ -1337,6 +1340,31 @@ impl Db {
         self.auto_save(true)
     }
 
+    pub fn delete_lot(&mut self, lot_number: usize) -> DbResult<()> {
+        let mut account = self
+            .get_accounts()
+            .into_iter()
+            .find(|tracked_account| {
+                tracked_account
+                    .lots
+                    .iter()
+                    .any(|lot| lot.lot_number == lot_number)
+            })
+            .ok_or_else(|| DbError::LotDeleteFailed(format!("Unknown lot: {}", lot_number)))?;
+
+        let lot = account
+            .lots
+            .iter()
+            .find(|lot| lot.lot_number == lot_number)
+            .cloned()
+            .unwrap();
+
+        account.remove_lot(lot_number);
+        account.last_update_balance -= lot.amount;
+
+        self.update_account(account)
+    }
+
     pub fn move_lot(&mut self, lot_number: usize, to_address: Pubkey) -> DbResult<()> {
         self.auto_save(false)?;
 
@@ -1374,8 +1402,8 @@ impl Db {
             .unwrap();
 
         from_account.remove_lot(lot_number);
-        to_account.last_update_balance -= lot.amount;
-        from_account.last_update_balance += lot.amount;
+        to_account.last_update_balance += lot.amount;
+        from_account.last_update_balance -= lot.amount;
         to_account.merge_or_add_lot(lot);
 
         self.update_account(to_account)?;
