@@ -1003,6 +1003,7 @@ async fn process_account_add(
     when: NaiveDate,
     price: Option<f64>,
     signature: Option<Signature>,
+    no_sync: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (when, amount, last_update_epoch, kind) = match signature {
         Some(signature) => {
@@ -1127,7 +1128,7 @@ async fn process_account_add(
         last_update_epoch,
         last_update_balance: amount,
         lots,
-        no_sync: None,
+        no_sync: Some(no_sync),
     };
     db.add_account(account)?;
 
@@ -2574,6 +2575,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .takes_value(true)
                                 .validator(is_parsable::<f64>)
                                 .help("Acquisition price per SOL/token [default: market price on acquisition date]"),
+                        )
+                        .arg(
+                            Arg::with_name("no_sync")
+                                .long("no-sync")
+                                .takes_value(false)
+                                .help("Never synchronize this account with the on-chain state (advanced; uncommon)"),
                         ),
                 )
                 .subcommand(
@@ -3468,6 +3475,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let description = value_t!(arg_matches, "description", String)
                     .ok()
                     .unwrap_or_default();
+                let no_sync = arg_matches.is_present("no_sync");
 
                 process_account_add(
                     &mut db,
@@ -3478,6 +3486,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     when,
                     price,
                     signature,
+                    no_sync,
                 )
                 .await?;
                 process_account_sync(&mut db, &rpc_client, Some(address), &notifier).await?;
