@@ -677,7 +677,8 @@ async fn process_exchange_cancel(
             cancelled_count += 1;
             exchange_client
                 .cancel_order(&order_info.pair, &order_info.order_id)
-                .await?
+                .await
+                .unwrap_or_else(|err| eprintln!("{:?}", err));
         }
     }
 
