@@ -2115,6 +2115,7 @@ async fn process_account_sync(
         .collect::<Vec<_>>();
 
     let epoch_info = rpc_client.get_epoch_info()?;
+    let stop_epoch = epoch_info.epoch.saturating_sub(1);
 
     let start_epoch = accounts
         .iter()
@@ -2124,10 +2125,8 @@ async fn process_account_sync(
              }| last_update_epoch,
         )
         .min()
-        .unwrap()
+        .unwrap_or(&stop_epoch)
         + 1;
-
-    let stop_epoch = epoch_info.epoch.saturating_sub(1);
 
     if start_epoch > stop_epoch {
         println!("Processed up to epoch {}", stop_epoch);
