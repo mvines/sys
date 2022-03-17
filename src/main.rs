@@ -1673,7 +1673,6 @@ async fn process_account_merge<T: Signers>(
 
     let (recent_blockhash, last_valid_block_height) =
         rpc_client.get_latest_blockhash_with_commitment(rpc_client.commitment())?;
-    let fee_calculator = get_deprecated_fee_calculator(rpc_client)?;
 
     let from_account = rpc_client
         .get_account_with_commitment(&from_address, rpc_client.commitment())?
@@ -1688,14 +1687,6 @@ async fn process_account_merge<T: Signers>(
             .value
             .ok_or_else(|| format!("Authority account, {}, does not exist", authority_address))?
     };
-
-    if authority_account.lamports < fee_calculator.lamports_per_signature {
-        return Err(format!(
-            "Authority has insufficient funds for the transaction fee of {}",
-            token.ui_amount(fee_calculator.lamports_per_signature)
-        )
-        .into());
-    }
 
     let instructions = if from_account.owner == solana_stake_program::id() {
         solana_stake_program::stake_instruction::merge(
