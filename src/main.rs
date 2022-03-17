@@ -570,13 +570,13 @@ async fn process_exchange_deposit<T: Signers>(
         token, exchange, deposit_address
     );
 
-    let message = Message::new(&instructions, Some(&authority_address));
+    let mut message = Message::new(&instructions, Some(&authority_address));
+    message.recent_blockhash = recent_blockhash;
     if rpc_client.get_fee_for_message(&message)? > authority_account.lamports {
         return Err("Insufficient funds for transaction fee".into());
     }
 
     let mut transaction = Transaction::new_unsigned(message);
-    transaction.message.recent_blockhash = recent_blockhash;
     let simulation_result = rpc_client.simulate_transaction(&transaction)?.value;
     if simulation_result.err.is_some() {
         return Err(format!("Simulation failure: {:?}", simulation_result).into());
@@ -1713,13 +1713,13 @@ async fn process_account_merge<T: Signers>(
         println!("Authority address: {}", authority_address);
     }
 
-    let message = Message::new(&instructions, Some(&authority_address));
+    let mut message = Message::new(&instructions, Some(&authority_address));
+    message.recent_blockhash = recent_blockhash;
     if rpc_client.get_fee_for_message(&message)? > authority_account.lamports {
         return Err("Insufficient funds for transaction fee".into());
     }
 
     let mut transaction = Transaction::new_unsigned(message);
-    transaction.message.recent_blockhash = recent_blockhash;
     let simulation_result = rpc_client.simulate_transaction(&transaction)?.value;
     if simulation_result.err.is_some() {
         return Err(format!("Simulation failure: {:?}", simulation_result).into());
@@ -1937,14 +1937,14 @@ async fn process_account_sweep<T: Signers>(
         ),
     ]);
 
-    let message = Message::new(&instructions, Some(&from_authority_address));
+    let mut message = Message::new(&instructions, Some(&from_authority_address));
+    message.recent_blockhash = recent_blockhash;
     assert_eq!(
         rpc_client.get_fee_for_message(&message)?,
         num_transaction_signatures * fee_calculator.lamports_per_signature
     );
 
     let mut transaction = Transaction::new_unsigned(message);
-    transaction.message.recent_blockhash = recent_blockhash;
     let simulation_result = rpc_client.simulate_transaction(&transaction)?.value;
     if simulation_result.err.is_some() {
         return Err(format!("Simulation failure: {:?}", simulation_result).into());
