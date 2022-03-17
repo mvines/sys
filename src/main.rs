@@ -47,6 +47,7 @@ fn get_deprecated_fee_calculator(
     rpc_client: &RpcClient,
 ) -> solana_client::client_error::Result<solana_sdk::fee_calculator::FeeCalculator> {
     // TODO: Rework calls to avoid the use of `FeeCalculator`
+    #[allow(deprecated)]
     rpc_client.get_fees().map(|fees| fees.fee_calculator)
 }
 
