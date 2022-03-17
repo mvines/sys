@@ -96,13 +96,6 @@ fn send_transaction_until_expired(
     last_valid_block_height: u64,
 ) -> bool {
     loop {
-        match rpc_client.send_and_confirm_transaction_with_spinner(transaction) {
-            Ok(_) => return true,
-            Err(err) => {
-                println!("Transaction failed to send: {:?}", err);
-            }
-        }
-
         match rpc_client.get_epoch_info() {
             Ok(epoch_info) => {
                 if epoch_info.block_height > last_valid_block_height {
@@ -117,6 +110,13 @@ fn send_transaction_until_expired(
                 println!("Failed to get epoch info: {:?}", err);
             }
         };
+
+        match rpc_client.send_and_confirm_transaction_with_spinner(transaction) {
+            Ok(_) => return true,
+            Err(err) => {
+                println!("Transaction failed to send: {:?}", err);
+            }
+        }
     }
 }
 
@@ -2404,9 +2404,12 @@ async fn process_account_sync_sweep(
         );
         let mut transaction = Transaction::new_unsigned(message);
 
-        let (recent_blockhash, _fee_calculator, last_valid_block_height) = rpc_client
-            .get_recent_blockhash_with_commitment(rpc_client.commitment())?
-            .value;
+        let Fees {
+            blockhash: recent_blockhash,
+            fee_calculator: _,
+            last_valid_block_height,
+        } = rpc_client.get_fees()?;
+
         transaction.message.recent_blockhash = recent_blockhash;
         let simulation_result = rpc_client.simulate_transaction(&transaction)?.value;
         if simulation_result.err.is_some() {
