@@ -130,8 +130,7 @@ impl MaybeToken {
                 rpc_client
                     .get_account_with_commitment(address, rpc_client.commitment())?
                     .value
-                    .ok_or_else(|| format!("{} does not exist", address))?
-                    .lamports
+                    .map(|account| account.lamports).unwrap_or_default()
             }
             Some(token) => u64::from_str(
                 &rpc_client
