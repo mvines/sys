@@ -22,10 +22,7 @@ use {
     notifier::*,
     separator::FixedPlaceSeparatable,
     solana_clap_utils::{self, input_parsers::*, input_validators::*},
-    solana_client::{
-        rpc_client::RpcClient,
-        rpc_response::{Fees, StakeActivationState},
-    },
+    solana_client::{rpc_client::RpcClient, rpc_response::StakeActivationState},
     solana_sdk::{
         commitment_config::CommitmentConfig,
         message::Message,
@@ -45,6 +42,13 @@ use {
         str::FromStr,
     },
 };
+
+fn get_deprecated_fee_calculator(
+    rpc_client: &RpcClient,
+) -> solana_client::client_error::Result<solana_sdk::fee_calculator::FeeCalculator> {
+    // TODO: Rework calls to avoid the use of `FeeCalculator`
+    rpc_client.get_fees().map(|fees| fees.fee_calculator)
+}
 
 fn is_long_term_cap_gain(acquisition: NaiveDate, disposal: Option<NaiveDate>) -> bool {
     let disposal = disposal.unwrap_or_else(|| {
@@ -427,11 +431,9 @@ async fn process_exchange_deposit<T: Signers>(
         }
     }
 
-    let Fees {
-        blockhash: recent_blockhash,
-        fee_calculator,
-        last_valid_block_height,
-    } = rpc_client.get_fees()?;
+    let (recent_blockhash, last_valid_block_height) =
+        rpc_client.get_latest_blockhash_with_commitment(rpc_client.commitment())?;
+    let fee_calculator = get_deprecated_fee_calculator(rpc_client)?;
 
     let from_account = rpc_client
         .get_account_with_commitment(&from_address, rpc_client.commitment())?
@@ -568,7 +570,7 @@ async fn process_exchange_deposit<T: Signers>(
     );
 
     let message = Message::new(&instructions, Some(&authority_address));
-    if fee_calculator.calculate_fee(&message) > authority_account.lamports {
+    if rpc_client.get_fee_for_message(&message)? > authority_account.lamports {
         return Err("Insufficient funds for transaction fee".into());
     }
 
@@ -1668,11 +1670,9 @@ async fn process_account_merge<T: Signers>(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let token = MaybeToken::SOL(); // TODO: Support merging tokens one day
 
-    let Fees {
-        blockhash: recent_blockhash,
-        fee_calculator,
-        last_valid_block_height,
-    } = rpc_client.get_fees()?;
+    let (recent_blockhash, last_valid_block_height) =
+        rpc_client.get_latest_blockhash_with_commitment(rpc_client.commitment())?;
+    let fee_calculator = get_deprecated_fee_calculator(rpc_client)?;
 
     let from_account = rpc_client
         .get_account_with_commitment(&from_address, rpc_client.commitment())?
@@ -1713,7 +1713,7 @@ async fn process_account_merge<T: Signers>(
     }
 
     let message = Message::new(&instructions, Some(&authority_address));
-    if fee_calculator.calculate_fee(&message) > authority_account.lamports {
+    if rpc_client.get_fee_for_message(&message)? > authority_account.lamports {
         return Err("Insufficient funds for transaction fee".into());
     }
 
@@ -1760,11 +1760,9 @@ async fn process_account_sweep<T: Signers>(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let token = MaybeToken::SOL();
 
-    let Fees {
-        blockhash: recent_blockhash,
-        fee_calculator,
-        last_valid_block_height,
-    } = rpc_client.get_fees()?;
+    let (recent_blockhash, last_valid_block_height) =
+        rpc_client.get_latest_blockhash_with_commitment(rpc_client.commitment())?;
+    let fee_calculator = get_deprecated_fee_calculator(rpc_client)?;
 
     let from_account = rpc_client
         .get_account_with_commitment(&from_address, rpc_client.commitment())?
@@ -1940,7 +1938,7 @@ async fn process_account_sweep<T: Signers>(
 
     let message = Message::new(&instructions, Some(&from_authority_address));
     assert_eq!(
-        fee_calculator.calculate_fee(&message),
+        rpc_client.get_fee_for_message(&message)?,
         num_transaction_signatures * fee_calculator.lamports_per_signature
     );
 
@@ -2008,11 +2006,8 @@ async fn process_account_split<T: Signers>(
     // TODO: Support splitting two system accounts? Tokens? Otherwise at least error cleanly when it's attempted
     let token = MaybeToken::SOL(); // TODO: Support splitting tokens one day
 
-    let Fees {
-        blockhash: recent_blockhash,
-        fee_calculator: _,
-        last_valid_block_height,
-    } = rpc_client.get_fees()?;
+    let (recent_blockhash, last_valid_block_height) =
+        rpc_client.get_latest_blockhash_with_commitment(rpc_client.commitment())?;
 
     let into_keypair = into_keypair.unwrap_or_else(Keypair::new);
     if db.get_account(into_keypair.pubkey(), token).is_some() {
@@ -2404,11 +2399,8 @@ async fn process_account_sync_sweep(
         );
         let mut transaction = Transaction::new_unsigned(message);
 
-        let Fees {
-            blockhash: recent_blockhash,
-            fee_calculator: _,
-            last_valid_block_height,
-        } = rpc_client.get_fees()?;
+        let (recent_blockhash, last_valid_block_height) =
+            rpc_client.get_latest_blockhash_with_commitment(rpc_client.commitment())?;
 
         transaction.message.recent_blockhash = recent_blockhash;
         let simulation_result = rpc_client.simulate_transaction(&transaction)?.value;
