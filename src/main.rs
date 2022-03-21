@@ -1487,6 +1487,7 @@ async fn process_account_xls(
     sheet.add_column(Column { width: 10. });
     sheet.add_column(Column { width: 10. });
     sheet.add_column(Column { width: 10. });
+    sheet.add_column(Column { width: 10. });
     sheet.add_column(Column { width: 40. });
 
     let mut disposed_lots = db.disposed_lots();
@@ -1510,6 +1511,7 @@ async fn process_account_xls(
             "Acq. Price (USD)",
             "Acquisition Description",
             "Cap Gain (USD)",
+            "Cap Gain Type",
             "Sale Date",
             "Sale Price (USD)",
             "Fee (USD)",
@@ -1517,16 +1519,27 @@ async fn process_account_xls(
         ])?;
 
         for disposed_lot in disposed_lots {
+            let long_term_cap_gain =
+                is_long_term_cap_gain(disposed_lot.lot.acquisition.when, Some(disposed_lot.when));
+
+            let mut income = disposed_lot.lot.income(disposed_lot.token);
+            if let Some(year) = filter_by_year {
+                if disposed_lot.lot.acquisition.when.year() != year {
+                    income = 0.  // Exclude income from other years
+                }
+            }
+
             sheet_writer.append_row(row![
                 disposed_lot.token.to_string(),
                 disposed_lot.token.ui_amount(disposed_lot.lot.amount),
-                disposed_lot.lot.income(disposed_lot.token),
+                income,
                 disposed_lot.lot.acquisition.when.to_string(),
                 disposed_lot.lot.acquisition.price,
                 disposed_lot.lot.acquisition.kind.to_string(),
                 disposed_lot
                     .lot
                     .cap_gain(disposed_lot.token, disposed_lot.price),
+                if long_term_cap_gain { "Long" } else { "Short" },
                 disposed_lot.when.to_string(),
                 disposed_lot.price,
                 disposed_lot

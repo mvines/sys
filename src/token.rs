@@ -126,12 +126,11 @@ impl MaybeToken {
         address: &Pubkey,
     ) -> Result<u64, Box<dyn std::error::Error>> {
         Ok(match self.0 {
-            None => {
-                rpc_client
-                    .get_account_with_commitment(address, rpc_client.commitment())?
-                    .value
-                    .map(|account| account.lamports).unwrap_or_default()
-            }
+            None => rpc_client
+                .get_account_with_commitment(address, rpc_client.commitment())?
+                .value
+                .map(|account| account.lamports)
+                .unwrap_or_default(),
             Some(token) => u64::from_str(
                 &rpc_client
                     .get_token_account_balance(&token.ata(address))
