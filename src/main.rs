@@ -1525,7 +1525,7 @@ async fn process_account_xls(
             let mut income = disposed_lot.lot.income(disposed_lot.token);
             if let Some(year) = filter_by_year {
                 if disposed_lot.lot.acquisition.when.year() != year {
-                    income = 0.  // Exclude income from other years
+                    income = 0. // Exclude income from other years
                 }
             }
 
