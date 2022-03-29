@@ -1176,6 +1176,7 @@ async fn process_account_dispose(
 #[derive(Default, Debug, PartialEq)]
 struct RealizedGain {
     income: f64,
+    rewards_income: f64,
     short_term_cap_gain: f64,
     long_term_cap_gain: f64,
 }
@@ -1260,6 +1261,15 @@ async fn process_account_list(
                         .entry(lot.acquisition.when.year() as usize)
                         .or_default()[lot.acquisition.when.month0() as usize / 3]
                         .income += lot.income(account.token);
+
+                    if let LotAcquistionKind::EpochReward { epoch: _, slot: _ } =
+                        lot.acquisition.kind
+                    {
+                        annual_realized_gains
+                            .entry(lot.acquisition.when.year() as usize)
+                            .or_default()[lot.acquisition.when.month0() as usize / 3]
+                            .rewards_income += lot.income(account.token);
+                    }
 
                     if long_term_cap_gain {
                         account_unrealized_long_term_gain += account_unrealized_gain;
@@ -1405,16 +1415,19 @@ async fn process_account_list(
 
         println!("Realized Gains");
         println!(
-            "  Year    | Income           | Short-term cap gain | Long-term cap gain  | Total"
+            "  Year    | Income           | Rewards income   | Short-term cap gain | Long-term cap gain  | Total"
         );
         for (year, quarters) in annual_realized_gains {
             for (q, realized_gain) in quarters.iter().enumerate() {
                 if *realized_gain != RealizedGain::default() {
                     println!(
-                        "  {} Q{} | ${:15} | ${:18} | ${:18} | ${:18}",
+                        "  {} Q{} | ${:15} | ${:15} | ${:18} | ${:18} | ${:18}",
                         year,
                         q + 1,
                         realized_gain.income.separated_string_with_fixed_place(2),
+                        realized_gain
+                            .rewards_income
+                            .separated_string_with_fixed_place(2),
                         realized_gain
                             .short_term_cap_gain
                             .separated_string_with_fixed_place(2),
