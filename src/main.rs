@@ -1005,6 +1005,7 @@ async fn process_account_add(
     description: String,
     when: NaiveDate,
     price: Option<f64>,
+    income: bool,
     signature: Option<Signature>,
     no_sync: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -1089,7 +1090,11 @@ async fn process_account_add(
                 when,
                 amount,
                 last_update_epoch,
-                LotAcquistionKind::NotAvailable,
+                if income {
+                    LotAcquistionKind::NotAvailable
+                } else {
+                    LotAcquistionKind::Fiat
+                },
             )
         }
     };
@@ -2576,6 +2581,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .help("Acquisition price per SOL/token [default: market price on acquisition date]"),
                         )
                         .arg(
+                            Arg::with_name("income")
+                                .long("income")
+                                .takes_value(false)
+                                .conflicts_with("transaction")
+                                .help("Consider the acquisition value to be subject to income tax [default: post-tax fiat]"),
+                        )
+                        .arg(
                             Arg::with_name("no_sync")
                                 .long("no-sync")
                                 .takes_value(false)
@@ -3467,6 +3479,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             },
             ("add", Some(arg_matches)) => {
                 let price = value_t!(arg_matches, "price", f64).ok();
+                let income = arg_matches.is_present("income");
                 let when = naivedate_of(&value_t_or_exit!(arg_matches, "when", String)).unwrap();
                 let signature = value_t!(arg_matches, "transaction", Signature).ok();
                 let address = pubkey_of(arg_matches, "address").unwrap();
@@ -3484,6 +3497,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     description,
                     when,
                     price,
+                    income,
                     signature,
                     no_sync,
                 )
