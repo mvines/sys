@@ -179,7 +179,7 @@ impl fmt::Display for LotAcquistionKind {
                 order_id,
             } => write!(f, "{:?} {}, order {}", exchange, pair, order_id),
             LotAcquistionKind::Fiat => {
-                write!(f, "post income tax")
+                write!(f, "post tax")
             }
             LotAcquistionKind::NotAvailable => {
                 write!(f, "other income")
