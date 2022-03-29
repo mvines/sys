@@ -162,8 +162,8 @@ pub enum LotAcquistionKind {
         pair: String,
         order_id: String,
     },
-    NotAvailable,
-    Fiat,
+    NotAvailable, // Generic acquisition subject to income tax
+    Fiat,         // Generic acquisition with post-tax fiat
 }
 
 impl fmt::Display for LotAcquistionKind {
@@ -179,10 +179,10 @@ impl fmt::Display for LotAcquistionKind {
                 order_id,
             } => write!(f, "{:?} {}, order {}", exchange, pair, order_id),
             LotAcquistionKind::Fiat => {
-                write!(f, "fiat")
+                write!(f, "post income tax")
             }
             LotAcquistionKind::NotAvailable => {
-                write!(f, "other")
+                write!(f, "other income")
             }
         }
     }
@@ -206,12 +206,14 @@ impl Lot {
     // Figure the amount of income that the Lot incurred
     pub fn income(&self, token: MaybeToken) -> f64 {
         match self.acquisition.kind {
+            // These lots were acquired pre-tax
             LotAcquistionKind::EpochReward { .. } | LotAcquistionKind::NotAvailable => {
                 self.acquisition.price * token.ui_amount(self.amount)
             }
-            LotAcquistionKind::Exchange { .. } => 0.,
-            LotAcquistionKind::Transaction { .. } => 0.,
-            LotAcquistionKind::Fiat => 0.,
+            // Assume these kinds of lots are acquired with post-tax funds
+            LotAcquistionKind::Exchange { .. }
+            | LotAcquistionKind::Transaction { .. }
+            | LotAcquistionKind::Fiat => 0.,
         }
     }
     // Figure the current cap gain/loss for the Lot
