@@ -326,11 +326,11 @@ async fn process_sync_exchange(
             .order_status(&order_info.pair, &order_info.order_id)
             .await?;
         let order_summary = format!(
-            "{}: {} {} {:<5} at ${:<.2}{} | id {} created {}",
+            "{}: {} {} {}{:<5} at ${:<.2}{} | id {} created {}",
             order_info.pair,
             token,
             format_order_side(order_info.side),
-            format!("{}{}", token.symbol(), order_status.amount),
+            token.symbol(), order_status.amount,
             order_status.price,
             if order_status.filled_amount == 0. {
                 String::default()
