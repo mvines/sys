@@ -7,6 +7,7 @@ mod ftx_exchange;
 mod notifier;
 mod rpc_client_utils;
 mod token;
+mod tulip;
 
 use {
     crate::token::*,

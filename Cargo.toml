@@ -41,6 +41,7 @@ strum = { version = "0.23", features = ["derive"] }
 thiserror = "1.0"
 tokio = { version = "1", features = ["macros", "time"] }
 tokio-binance = "1.0"
+tulipv2-sdk-common = "0.9.5"
 
 [profile.dev]
 split-debuginfo = "unpacked"

@@ -192,7 +192,7 @@ impl fmt::Display for LotAcquistionKind {
 #[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
 pub struct LotAcquistion {
     pub when: NaiveDate,
-    price: f64,                     // USD per SOL/token
+    price: Option<f64>,             // USD per SOL/token
     decimal_price: Option<Decimal>, // Prefer over `price` if Some(_)
     pub kind: LotAcquistionKind,
 }
@@ -201,7 +201,7 @@ impl LotAcquistion {
     pub fn new(when: NaiveDate, decimal_price: Decimal, kind: LotAcquistionKind) -> Self {
         Self {
             when,
-            price: f64::NAN,
+            price: None,
             decimal_price: Some(decimal_price),
             kind,
         }
@@ -209,7 +209,7 @@ impl LotAcquistion {
 
     pub fn price(&self) -> Decimal {
         self.decimal_price
-            .unwrap_or_else(|| Decimal::from_f64(self.price).unwrap())
+            .unwrap_or_else(|| Decimal::from_f64(self.price.unwrap_or_default()).unwrap())
     }
 }
 
@@ -635,7 +635,7 @@ impl Db {
             vec![Lot {
                 lot_number: self.next_lot_number(),
                 acquisition: LotAcquistion {
-                    price: 1.,
+                    price: Some(1.),
                     decimal_price: None,
                     when,
                     kind: LotAcquistionKind::Fiat,
@@ -832,7 +832,7 @@ impl Db {
                         lot_number: self.next_lot_number(),
                         acquisition: LotAcquistion {
                             when,
-                            price,
+                            price: Some(price),
                             decimal_price: None,
                             kind: LotAcquistionKind::Exchange {
                                 exchange,
