@@ -69,7 +69,10 @@ impl Token {
         *self == Self::USDC
     }
 
-    pub async fn get_current_price(&self) -> Result<f64, Box<dyn std::error::Error>> {
+    pub async fn get_current_price(
+        &self,
+        _rpc_client: &RpcClient,
+    ) -> Result<f64, Box<dyn std::error::Error>> {
         if self.fiat_fungible() {
             return Ok(1.);
         }
@@ -85,6 +88,7 @@ impl Token {
 
     pub async fn get_historical_price(
         &self,
+        _rpc_client: &RpcClient,
         when: NaiveDate,
     ) -> Result<f64, Box<dyn std::error::Error>> {
         if self.fiat_fungible() {
@@ -180,20 +184,24 @@ impl MaybeToken {
         })
     }
 
-    pub async fn get_current_price(&self) -> Result<f64, Box<dyn std::error::Error>> {
+    pub async fn get_current_price(
+        &self,
+        rpc_client: &RpcClient,
+    ) -> Result<f64, Box<dyn std::error::Error>> {
         match self.0 {
             None => coin_gecko::get_current_price(self).await,
-            Some(token) => token.get_current_price().await,
+            Some(token) => token.get_current_price(rpc_client).await,
         }
     }
 
     pub async fn get_historical_price(
         &self,
+        rpc_client: &RpcClient,
         when: NaiveDate,
     ) -> Result<f64, Box<dyn std::error::Error>> {
         match self.0 {
             None => coin_gecko::get_historical_price(when, self).await,
-            Some(token) => token.get_historical_price(when).await,
+            Some(token) => token.get_historical_price(rpc_client, when).await,
         }
     }
 }

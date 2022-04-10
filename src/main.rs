@@ -110,7 +110,10 @@ async fn get_block_date_and_price(
         local_timestamp.day(),
     );
 
-    Ok((block_date, token.get_historical_price(block_date).await?))
+    Ok((
+        block_date,
+        token.get_historical_price(rpc_client, block_date).await?,
+    ))
 }
 
 fn send_transaction_until_expired(
@@ -1120,10 +1123,10 @@ async fn process_account_add(
 
     println!("Adding {} (token: {})", address, token);
 
-    let current_price = token.get_current_price().await?;
+    let current_price = token.get_current_price(rpc_client).await?;
     let price = match price {
         Some(price) => price,
-        None => token.get_historical_price(when).await?,
+        None => token.get_historical_price(rpc_client, when).await?,
     };
 
     let mut lots = vec![];
@@ -1164,6 +1167,7 @@ async fn process_account_add(
 
 async fn process_account_dispose(
     db: &mut Db,
+    rpc_client: &RpcClient,
     address: Pubkey,
     token: MaybeToken,
     ui_amount: f64,
@@ -1173,7 +1177,7 @@ async fn process_account_dispose(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let price = match price {
         Some(price) => price,
-        None => token.get_historical_price(when).await?,
+        None => token.get_historical_price(rpc_client, when).await?,
     };
 
     let disposed_lots = db.record_disposal(
@@ -1206,6 +1210,7 @@ struct RealizedGain {
 
 async fn process_account_list(
     db: &Db,
+    rpc_client: &RpcClient,
     account_filter: Option<Pubkey>,
     show_all_disposed_lots: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -1231,7 +1236,7 @@ async fn process_account_list(
             }
 
             if let std::collections::hash_map::Entry::Vacant(e) = held_tokens.entry(account.token) {
-                e.insert((account.token.get_current_price().await?, 0));
+                e.insert((account.token.get_current_price(rpc_client).await?, 0));
             }
 
             let held_token = held_tokens.get_mut(&account.token).unwrap();
@@ -2131,7 +2136,7 @@ async fn process_account_sync(
     .filter(|account| !account.no_sync.unwrap_or_default())
     .collect::<Vec<_>>();
 
-    let current_sol_price = MaybeToken::SOL().get_current_price().await?;
+    let current_sol_price = MaybeToken::SOL().get_current_price(rpc_client).await?;
 
     let addresses: Vec<Pubkey> = accounts
         .iter()
@@ -2229,7 +2234,7 @@ async fn process_account_sync(
             );
         } else if current_balance > account.last_update_balance + account.token.amount(0.005) {
             let slot = epoch_info.absolute_slot;
-            let current_token_price = account.token.get_current_price().await?;
+            let current_token_price = account.token.get_current_price(rpc_client).await?;
             let (when, price) = get_block_date_and_price(rpc_client, slot, account.token).await?;
             let amount = current_balance - account.last_update_balance;
 
@@ -3451,12 +3456,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let (price, verbose_msg) = if let Some(when) = when {
                 (
-                    token.get_historical_price(when).await?,
+                    token.get_historical_price(&rpc_client, when).await?,
                     format!("Historical {} price on {}", token, when),
                 )
             } else {
                 (
-                    token.get_current_price().await?,
+                    token.get_current_price(&rpc_client).await?,
                     format!("Current {} price", token),
                 )
             };
@@ -3547,6 +3552,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 process_account_dispose(
                     &mut db,
+                    &rpc_client,
                     address,
                     token.into(),
                     amount,
@@ -3559,7 +3565,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             ("ls", Some(arg_matches)) => {
                 let all = arg_matches.is_present("all");
                 let account_filter = pubkey_of(arg_matches, "account");
-                process_account_list(&db, account_filter, all).await?;
+                process_account_list(&db, &rpc_client, account_filter, all).await?;
             }
             ("xls", Some(arg_matches)) => {
                 let outfile = value_t_or_exit!(arg_matches, "outfile", String);
