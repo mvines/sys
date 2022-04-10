@@ -76,7 +76,7 @@ impl Token {
         match self {
             Token::USDC => coin_gecko::get_current_price(&MaybeToken(Some(*self))).await,
             unsupported_token => Err(format!(
-                "Current price data not available for {}",
+                "Current price data is not available for {}",
                 unsupported_token.name()
             )
             .into()),
@@ -93,7 +93,7 @@ impl Token {
         match self {
             Token::USDC => coin_gecko::get_historical_price(when, &MaybeToken(Some(*self))).await,
             unsupported_token => Err(format!(
-                "Historical price data not available for {}",
+                "Historical price data is not available for {}",
                 unsupported_token.name()
             )
             .into()),

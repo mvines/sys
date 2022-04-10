@@ -2516,16 +2516,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .subcommand(
             SubCommand::with_name("price")
-                .about("Get historical SOL price from CoinGecko")
-                .arg(
-                    Arg::with_name("when")
-                        .value_name("YY/MM/DD")
-                        .takes_value(true)
-                        .required(true)
-                        .default_value(&default_when)
-                        .validator(|value| naivedate_of(&value).map(|_| ()))
-                        .help("Date to fetch the price for"),
-                )
+                .about("Get token price")
                 .arg(
                     Arg::with_name("token")
                         .value_name("SOL or SPL Token")
@@ -2534,7 +2525,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .validator(is_valid_token_or_sol)
                         .default_value("SOL")
                         .help("Token type"),
-                ),
+                )
+                .arg(
+                    Arg::with_name("when")
+                        .value_name("YY/MM/DD")
+                        .takes_value(true)
+                        .required(false)
+                        .validator(|value| naivedate_of(&value).map(|_| ()))
+                        .help("Date to fetch the price for [default: current price]"),
+                )
         )
         .subcommand(SubCommand::with_name("sync").about("Synchronize with all exchanges"))
         .subcommand(
@@ -3445,11 +3444,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     match app_matches.subcommand() {
         ("price", Some(arg_matches)) => {
-            let when = naivedate_of(&value_t_or_exit!(arg_matches, "when", String)).unwrap();
+            let when = value_t!(arg_matches, "when", String)
+                .map(|s| naivedate_of(&s).unwrap())
+                .ok();
             let token = MaybeToken::from(value_t!(arg_matches, "token", Token).ok());
-            let price = token.get_historical_price(when).await?;
+
+            let (price, verbose_msg) = if let Some(when) = when {
+                (
+                    token.get_historical_price(when).await?,
+                    format!("Historical {} price on {}", token, when),
+                )
+            } else {
+                (
+                    token.get_current_price().await?,
+                    format!("Current {} price", token),
+                )
+            };
+
             if verbose {
-                println!("Historical price on {}: ${:.2}", when, price);
+                println!("{}: ${:.2}", verbose_msg, price);
             } else {
                 println!("{:.2}", price);
             }
