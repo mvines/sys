@@ -72,18 +72,14 @@ impl Token {
 
     pub async fn get_current_price(
         &self,
-        _rpc_client: &RpcClient,
+        rpc_client: &RpcClient,
     ) -> Result<Decimal, Box<dyn std::error::Error>> {
         if self.fiat_fungible() {
             return Ok(Decimal::from_f64(1.).unwrap());
         }
         match self {
             Token::USDC => coin_gecko::get_current_price(&MaybeToken(Some(*self))).await,
-            unsupported_token => Err(format!(
-                "Current price data is not available for {}",
-                unsupported_token.name()
-            )
-            .into()),
+            Token::tuUSDC | Token::tuSOL => crate::tulip::get_current_price(rpc_client, self),
         }
     }
 
