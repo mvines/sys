@@ -69,14 +69,31 @@ impl Token {
         *self == Self::USDC
     }
 
-    pub async fn get_price(&self, when: NaiveDate) -> Result<f64, Box<dyn std::error::Error>> {
+    pub async fn get_current_price(&self) -> Result<f64, Box<dyn std::error::Error>> {
         if self.fiat_fungible() {
             return Ok(1.);
         }
         match self {
-            Token::USDC => coin_gecko::get_price(when, &MaybeToken(Some(*self))).await, // <-- Only used if Token::fiat_fungible() is changed to return `false` for USDC
+            Token::USDC => coin_gecko::get_current_price(&MaybeToken(Some(*self))).await,
             unsupported_token => Err(format!(
-                "Coin Gecko price data not available for {}",
+                "Current price data not available for {}",
+                unsupported_token.name()
+            )
+            .into()),
+        }
+    }
+
+    pub async fn get_historical_price(
+        &self,
+        when: NaiveDate,
+    ) -> Result<f64, Box<dyn std::error::Error>> {
+        if self.fiat_fungible() {
+            return Ok(1.);
+        }
+        match self {
+            Token::USDC => coin_gecko::get_historical_price(when, &MaybeToken(Some(*self))).await,
+            unsupported_token => Err(format!(
+                "Historical price data not available for {}",
                 unsupported_token.name()
             )
             .into()),
@@ -163,21 +180,21 @@ impl MaybeToken {
         })
     }
 
-    pub async fn get_price(&self, when: NaiveDate) -> Result<f64, Box<dyn std::error::Error>> {
+    pub async fn get_current_price(&self) -> Result<f64, Box<dyn std::error::Error>> {
         match self.0 {
-            None => coin_gecko::get_price(when, self).await,
-            Some(token) => token.get_price(when).await,
+            None => coin_gecko::get_current_price(self).await,
+            Some(token) => token.get_current_price().await,
         }
     }
 
-    pub async fn get_current_price(&self) -> Result<f64, Box<dyn std::error::Error>> {
-        let today = Local::now().date();
-        self.get_price(NaiveDate::from_ymd(
-            today.year(),
-            today.month(),
-            today.day(),
-        ))
-        .await
+    pub async fn get_historical_price(
+        &self,
+        when: NaiveDate,
+    ) -> Result<f64, Box<dyn std::error::Error>> {
+        match self.0 {
+            None => coin_gecko::get_historical_price(when, self).await,
+            Some(token) => token.get_historical_price(when).await,
+        }
     }
 }
 

@@ -110,7 +110,7 @@ async fn get_block_date_and_price(
         local_timestamp.day(),
     );
 
-    Ok((block_date, token.get_price(block_date).await?))
+    Ok((block_date, token.get_historical_price(block_date).await?))
 }
 
 fn send_transaction_until_expired(
@@ -1123,7 +1123,7 @@ async fn process_account_add(
     let current_price = token.get_current_price().await?;
     let price = match price {
         Some(price) => price,
-        None => token.get_price(when).await?,
+        None => token.get_historical_price(when).await?,
     };
 
     let mut lots = vec![];
@@ -1173,7 +1173,7 @@ async fn process_account_dispose(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let price = match price {
         Some(price) => price,
-        None => token.get_price(when).await?,
+        None => token.get_historical_price(when).await?,
     };
 
     let disposed_lots = db.record_disposal(
@@ -3447,7 +3447,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ("price", Some(arg_matches)) => {
             let when = naivedate_of(&value_t_or_exit!(arg_matches, "when", String)).unwrap();
             let token = MaybeToken::from(value_t!(arg_matches, "token", Token).ok());
-            let price = token.get_price(when).await?;
+            let price = token.get_historical_price(when).await?;
             if verbose {
                 println!("Historical price on {}: ${:.2}", when, price);
             } else {
