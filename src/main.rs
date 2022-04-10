@@ -24,6 +24,7 @@ use {
     solana_clap_utils::{self, input_parsers::*, input_validators::*},
     solana_client::{rpc_client::RpcClient, rpc_response::StakeActivationState},
     solana_sdk::{
+        clock::Slot,
         commitment_config::CommitmentConfig,
         message::Message,
         native_token::lamports_to_sol,
@@ -93,6 +94,23 @@ fn app_version() -> String {
         None => "devbuild".to_string(),
         Some(commit) => commit[..8].to_string(),
     })
+}
+
+async fn get_block_date_and_price(
+    rpc_client: &RpcClient,
+    slot: Slot,
+    token: MaybeToken,
+) -> Result<(NaiveDate, f64), Box<dyn std::error::Error>> {
+    let block_time = rpc_client.get_block_time(slot)?;
+    let local_timestamp = Local.timestamp(block_time, 0);
+
+    let block_date = NaiveDate::from_ymd(
+        local_timestamp.year(),
+        local_timestamp.month(),
+        local_timestamp.day(),
+    );
+
+    Ok((block_date, token.get_price(block_date).await?))
 }
 
 fn send_transaction_until_expired(
@@ -330,7 +348,8 @@ async fn process_sync_exchange(
             order_info.pair,
             token,
             format_order_side(order_info.side),
-            token.symbol(), order_status.amount,
+            token.symbol(),
+            order_status.amount,
             order_status.price,
             if order_status.filled_amount == 0. {
                 String::default()
@@ -1101,10 +1120,10 @@ async fn process_account_add(
 
     println!("Adding {} (token: {})", address, token);
 
-    let current_price = coin_gecko::get_current_price(token).await?;
+    let current_price = token.get_current_price().await?;
     let price = match price {
         Some(price) => price,
-        None => coin_gecko::get_price(when, token).await?,
+        None => token.get_price(when).await?,
     };
 
     let mut lots = vec![];
@@ -1154,7 +1173,7 @@ async fn process_account_dispose(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let price = match price {
         Some(price) => price,
-        None => coin_gecko::get_price(when, token).await?,
+        None => token.get_price(when).await?,
     };
 
     let disposed_lots = db.record_disposal(
@@ -1212,7 +1231,7 @@ async fn process_account_list(
             }
 
             if let std::collections::hash_map::Entry::Vacant(e) = held_tokens.entry(account.token) {
-                e.insert((coin_gecko::get_current_price(account.token).await?, 0));
+                e.insert((account.token.get_current_price().await?, 0));
             }
 
             let held_token = held_tokens.get_mut(&account.token).unwrap();
@@ -2112,7 +2131,7 @@ async fn process_account_sync(
     .filter(|account| !account.no_sync.unwrap_or_default())
     .collect::<Vec<_>>();
 
-    let current_sol_price = coin_gecko::get_current_price(MaybeToken::SOL()).await?;
+    let current_sol_price = MaybeToken::SOL().get_current_price().await?;
 
     let addresses: Vec<Pubkey> = accounts
         .iter()
@@ -2161,7 +2180,7 @@ async fn process_account_sync(
 
                 let slot = inflation_reward.effective_slot;
                 let (when, price) =
-                    coin_gecko::get_block_date_and_price(rpc_client, slot, account.token).await?;
+                    get_block_date_and_price(rpc_client, slot, account.token).await?;
 
                 let lot = Lot {
                     lot_number: db.next_lot_number(),
@@ -2210,9 +2229,8 @@ async fn process_account_sync(
             );
         } else if current_balance > account.last_update_balance + account.token.amount(0.005) {
             let slot = epoch_info.absolute_slot;
-            let current_token_price = coin_gecko::get_current_price(account.token).await?;
-            let (when, price) =
-                coin_gecko::get_block_date_and_price(rpc_client, slot, account.token).await?;
+            let current_token_price = account.token.get_current_price().await?;
+            let (when, price) = get_block_date_and_price(rpc_client, slot, account.token).await?;
             let amount = current_balance - account.last_update_balance;
 
             let lot = Lot {
@@ -3428,8 +3446,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     match app_matches.subcommand() {
         ("price", Some(arg_matches)) => {
             let when = naivedate_of(&value_t_or_exit!(arg_matches, "when", String)).unwrap();
-            let token = value_t!(arg_matches, "token", Token).ok();
-            let price = coin_gecko::get_price(when, token.into()).await?;
+            let token = MaybeToken::from(value_t!(arg_matches, "token", Token).ok());
+            let price = token.get_price(when).await?;
             if verbose {
                 println!("Historical price on {}: ${:.2}", when, price);
             } else {

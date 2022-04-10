@@ -1,4 +1,6 @@
 use {
+    crate::coin_gecko,
+    chrono::prelude::*,
     serde::{Deserialize, Serialize},
     solana_client::rpc_client::RpcClient,
     solana_sdk::{
@@ -65,6 +67,20 @@ impl Token {
     pub fn fiat_fungible(&self) -> bool {
         // Treat USDC as fully fungible for USD (following FTX's lead)
         *self == Self::USDC
+    }
+
+    pub async fn get_price(&self, when: NaiveDate) -> Result<f64, Box<dyn std::error::Error>> {
+        if self.fiat_fungible() {
+            return Ok(1.);
+        }
+        match self {
+            Token::USDC => coin_gecko::get_price(when, &MaybeToken(Some(*self))).await, // <-- Only used if Token::fiat_fungible() is changed to return `false` for USDC
+            unsupported_token => Err(format!(
+                "Coin Gecko price data not available for {}",
+                unsupported_token.name()
+            )
+            .into()),
+        }
     }
 }
 
@@ -145,6 +161,23 @@ impl MaybeToken {
             )
             .unwrap_or_default(),
         })
+    }
+
+    pub async fn get_price(&self, when: NaiveDate) -> Result<f64, Box<dyn std::error::Error>> {
+        match self.0 {
+            None => coin_gecko::get_price(when, self).await,
+            Some(token) => token.get_price(when).await,
+        }
+    }
+
+    pub async fn get_current_price(&self) -> Result<f64, Box<dyn std::error::Error>> {
+        let today = Local::now().date();
+        self.get_price(NaiveDate::from_ymd(
+            today.year(),
+            today.month(),
+            today.day(),
+        ))
+        .await
     }
 }
 
