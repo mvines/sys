@@ -2,7 +2,7 @@
 
 This program provides tracking from acquisition through disposal of SOL from staking, voting, and validator transaction fee/rent rewards.
 The intended audience for this program is:
-1. Solana Valiators that need to track voting and transaction fee/rent rewards
+1. Solana Validators that need to track voting and transaction fee/rent rewards
 2. Solana Stakers that need to track staking rewards
 
 This program does not attempt to be a general propose crypto trading tracker. It's assumed that once you sell your SOL for USD on an exchange of your choice, you'd switch to other existing solutions for further trading/transactions.
