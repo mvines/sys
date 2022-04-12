@@ -26,9 +26,7 @@ struct HistoryResponse {
 }
 
 pub async fn get_current_price(token: &MaybeToken) -> Result<f64, Box<dyn std::error::Error>> {
-    let today = Local::now().date();
-    let when = NaiveDate::from_ymd(today.year(), today.month(), today.day());
-    get_historical_price(when, token).await
+    get_historical_price(crate::today(), token).await
 }
 
 pub async fn get_historical_price(
