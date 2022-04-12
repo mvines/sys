@@ -52,12 +52,13 @@ fn get_deprecated_fee_calculator(
     rpc_client.get_fees().map(|fees| fees.fee_calculator)
 }
 
-fn is_long_term_cap_gain(acquisition: NaiveDate, disposal: Option<NaiveDate>) -> bool {
-    let disposal = disposal.unwrap_or_else(|| {
-        let today = Local::now().date();
-        NaiveDate::from_ymd(today.year(), today.month(), today.day())
-    });
+pub(crate) fn today() -> NaiveDate {
+    let today = Local::now().date();
+    NaiveDate::from_ymd(today.year(), today.month(), today.day())
+}
 
+fn is_long_term_cap_gain(acquisition: NaiveDate, disposal: Option<NaiveDate>) -> bool {
+    let disposal = disposal.unwrap_or_else(today);
     let hold_time = disposal - acquisition;
     hold_time >= chrono::Duration::days(356)
 }
@@ -1025,7 +1026,7 @@ async fn process_account_add(
     address: Pubkey,
     token: MaybeToken,
     description: String,
-    when: NaiveDate,
+    when: Option<NaiveDate>,
     price: Option<f64>,
     income: bool,
     signature: Option<Signature>,
@@ -1038,13 +1039,15 @@ async fn process_account_add(
 
             let slot = confirmed_transaction.slot;
             let when = match confirmed_transaction.block_time {
-                Some(block_time) => NaiveDateTime::from_timestamp_opt(block_time, 0)
-                    .ok_or_else(|| format!("Invalid block time for slot {}", slot))?
-                    .date(),
+                Some(block_time) => Some(
+                    NaiveDateTime::from_timestamp_opt(block_time, 0)
+                        .ok_or_else(|| format!("Invalid block time for slot {}", slot))?
+                        .date(),
+                ),
                 None => {
                     println!(
-                        "Block time not available for slot {}, using `--when` argument instead: {}",
-                        slot, when
+                        "Block time not available for slot {}, using `--when` argument instead",
+                        slot
                     );
                     when
                 }
@@ -1126,14 +1129,21 @@ async fn process_account_add(
     let current_price = token.get_current_price(rpc_client).await?;
     let price = match price {
         Some(price) => price,
-        None => token.get_historical_price(rpc_client, when).await?,
+        None => match when {
+            Some(when) => token.get_historical_price(rpc_client, when).await?,
+            None => token.get_current_price(rpc_client).await?,
+        },
     };
 
     let mut lots = vec![];
     if amount > 0 {
         let lot = Lot {
             lot_number: db.next_lot_number(),
-            acquisition: LotAcquistion { when, price, kind },
+            acquisition: LotAcquistion {
+                when: when.unwrap_or_else(today),
+                price,
+                kind,
+            },
             amount,
         };
         println_lot(
@@ -1173,12 +1183,15 @@ async fn process_account_dispose(
     token: MaybeToken,
     ui_amount: f64,
     description: String,
-    when: NaiveDate,
+    when: Option<NaiveDate>,
     price: Option<f64>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let price = match price {
         Some(price) => price,
-        None => token.get_historical_price(rpc_client, when).await?,
+        None => match when {
+            Some(when) => token.get_historical_price(rpc_client, when).await?,
+            None => token.get_current_price(rpc_client).await?,
+        },
     };
 
     let disposed_lots = db.record_disposal(
@@ -1186,7 +1199,7 @@ async fn process_account_dispose(
         token,
         token.amount(ui_amount),
         description,
-        when,
+        when.unwrap_or_else(today),
         price,
     )?;
     if !disposed_lots.is_empty() {
@@ -2580,10 +2593,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .long("when")
                                 .value_name("YY/MM/DD")
                                 .takes_value(true)
-                                .required(true)
-                                .default_value(&default_when)
                                 .validator(|value| naivedate_of(&value).map(|_| ()))
-                                .help("Date acquired (ignored if the --transaction argument is provided)"),
+                                .help("Date acquired (ignored if the --transaction argument is provided) [default: now]"),
                         )
                         .arg(
                             Arg::with_name("transaction")
@@ -2658,10 +2669,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .long("when")
                                 .value_name("YY/MM/DD")
                                 .takes_value(true)
-                                .required(true)
-                                .default_value(&default_when)
                                 .validator(|value| naivedate_of(&value).map(|_| ()))
-                                .help("Disposal date"),
+                                .help("Disposal date [default: now]"),
 )
                         .arg(
                             Arg::with_name("price")
@@ -3517,7 +3526,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             ("add", Some(arg_matches)) => {
                 let price = value_t!(arg_matches, "price", f64).ok();
                 let income = arg_matches.is_present("income");
-                let when = naivedate_of(&value_t_or_exit!(arg_matches, "when", String)).unwrap();
+                let when = value_t!(arg_matches, "when", String)
+                    .map(|s| naivedate_of(&s).unwrap())
+                    .ok();
                 let signature = value_t!(arg_matches, "transaction", Signature).ok();
                 let address = pubkey_of(arg_matches, "address").unwrap();
                 let token = value_t!(arg_matches, "token", Token).ok();
@@ -3548,7 +3559,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let description = value_t!(arg_matches, "description", String)
                     .ok()
                     .unwrap_or_default();
-                let when = naivedate_of(&value_t_or_exit!(arg_matches, "when", String)).unwrap();
+                let when = value_t!(arg_matches, "when", String)
+                    .map(|s| naivedate_of(&s).unwrap())
+                    .ok();
                 let price = value_t!(arg_matches, "price", f64).ok();
 
                 process_account_dispose(
