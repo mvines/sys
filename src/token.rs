@@ -70,6 +70,46 @@ impl Token {
         *self == Self::USDC
     }
 
+    pub fn liquidity_token(&self) -> Option<MaybeToken> {
+        match self {
+            Token::USDC => None,
+            Token::tuUSDC | Token::tuSOL => Some(crate::tulip::liquidity_token(self)),
+        }
+    }
+
+    pub async fn get_current_liquidity_token_rate(
+        &self,
+        rpc_client: &RpcClient,
+    ) -> Result<Decimal, Box<dyn std::error::Error>> {
+        match self {
+            Token::USDC => Ok(Decimal::from_usize(1).unwrap()),
+            Token::tuUSDC | Token::tuSOL => {
+                crate::tulip::get_current_liquidity_token_rate(rpc_client, self).await
+            }
+        }
+    }
+
+    pub fn balance(
+        &self,
+        rpc_client: &RpcClient,
+        address: &Pubkey,
+    ) -> Result<u64, Box<dyn std::error::Error>> {
+        Ok(u64::from_str(
+            &rpc_client
+                .get_token_account_balance(&self.ata(address))
+                .map_err(|_| {
+                    format!(
+                        "Could not get balance for account {}, token {}",
+                        address,
+                        self.name(),
+                    )
+                })?
+                .amount,
+        )
+        .unwrap_or_default())
+    }
+
+    #[async_recursion::async_recursion(?Send)]
     pub async fn get_current_price(
         &self,
         rpc_client: &RpcClient,
@@ -79,7 +119,7 @@ impl Token {
         }
         match self {
             Token::USDC => coin_gecko::get_current_price(&MaybeToken(Some(*self))).await,
-            Token::tuUSDC | Token::tuSOL => crate::tulip::get_current_price(rpc_client, self),
+            Token::tuUSDC | Token::tuSOL => crate::tulip::get_current_price(rpc_client, self).await,
         }
     }
 
@@ -126,10 +166,21 @@ impl MaybeToken {
         self.token().is_some()
     }
 
+    pub fn is_sol(&self) -> bool {
+        !self.is_token()
+    }
+
     pub fn ui_amount(&self, amount: u64) -> f64 {
         match self.0 {
             None => lamports_to_sol(amount),
             Some(token) => token.ui_amount(amount),
+        }
+    }
+
+    pub fn mint(&self) -> Pubkey {
+        match self.0 {
+            None => spl_token::native_mint::id(),
+            Some(token) => token.mint(),
         }
     }
 
@@ -147,6 +198,23 @@ impl MaybeToken {
         }
     }
 
+    pub fn liquidity_token(&self) -> Option<MaybeToken> {
+        match self.0 {
+            None => None,
+            Some(token) => token.liquidity_token(),
+        }
+    }
+
+    pub async fn get_current_liquidity_token_rate(
+        &self,
+        rpc_client: &RpcClient,
+    ) -> Result<Decimal, Box<dyn std::error::Error>> {
+        match self.0 {
+            None => Ok(Decimal::from_usize(1).unwrap()),
+            Some(token) => token.get_current_liquidity_token_rate(rpc_client).await,
+        }
+    }
+
     pub fn fiat_fungible(&self) -> bool {
         match self.0 {
             None => false,
@@ -159,26 +227,14 @@ impl MaybeToken {
         rpc_client: &RpcClient,
         address: &Pubkey,
     ) -> Result<u64, Box<dyn std::error::Error>> {
-        Ok(match self.0 {
-            None => rpc_client
+        match self.0 {
+            None => Ok(rpc_client
                 .get_account_with_commitment(address, rpc_client.commitment())?
                 .value
                 .map(|account| account.lamports)
-                .unwrap_or_default(),
-            Some(token) => u64::from_str(
-                &rpc_client
-                    .get_token_account_balance(&token.ata(address))
-                    .map_err(|_| {
-                        format!(
-                            "Could not get balance for account {}, token {}",
-                            address,
-                            token.name(),
-                        )
-                    })?
-                    .amount,
-            )
-            .unwrap_or_default(),
-        })
+                .unwrap_or_default()),
+            Some(token) => token.balance(rpc_client, address),
+        }
     }
 
     pub async fn get_current_price(
@@ -209,15 +265,23 @@ impl From<Option<Token>> for MaybeToken {
     }
 }
 
+impl From<Token> for MaybeToken {
+    fn from(token: Token) -> Self {
+        Self(Some(token))
+    }
+}
+
 impl std::fmt::Display for MaybeToken {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(
-            f,
-            "{}",
-            match self.0 {
-                None => "SOL",
-                Some(token) => token.name(),
-            }
-        )
+        match self.0 {
+            None => write!(f, "SOL"),
+            Some(token) => write!(f, "{}", token),
+        }
+    }
+}
+
+impl std::fmt::Display for Token {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "{}", self.name())
     }
 }

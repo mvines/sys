@@ -130,6 +130,22 @@ pub struct PendingTransfer {
 }
 
 #[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
+pub struct PendingSwap {
+    #[serde(with = "field_as_string")]
+    pub signature: Signature, // transaction signature of the swap
+    pub last_valid_block_height: u64,
+
+    #[serde(with = "field_as_string")]
+    pub address: Pubkey,
+
+    pub from_token: MaybeToken,
+    pub from_token_price: Decimal,
+
+    pub to_token: MaybeToken,
+    pub to_token_price: Decimal,
+}
+
+#[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
 pub struct OpenOrder {
     pub side: OrderSide,
     pub creation_time: DateTime<Utc>,
@@ -165,6 +181,11 @@ pub enum LotAcquistionKind {
     },
     NotAvailable, // Generic acquisition subject to income tax
     Fiat,         // Generic acquisition with post-tax fiat
+    Swap {
+        #[serde(with = "field_as_string")]
+        signature: Signature,
+        token: MaybeToken,
+    },
 }
 
 impl fmt::Display for LotAcquistionKind {
@@ -184,6 +205,9 @@ impl fmt::Display for LotAcquistionKind {
             }
             LotAcquistionKind::NotAvailable => {
                 write!(f, "other income")
+            }
+            LotAcquistionKind::Swap { token, signature } => {
+                write!(f, "Swap from {}, {}", token, signature)
             }
         }
     }
@@ -233,8 +257,9 @@ impl Lot {
             }
             // Assume these kinds of lots are acquired with post-tax funds
             LotAcquistionKind::Exchange { .. }
-            | LotAcquistionKind::Transaction { .. }
-            | LotAcquistionKind::Fiat => 0.,
+            | LotAcquistionKind::Fiat
+            | LotAcquistionKind::Swap { .. }
+            | LotAcquistionKind::Transaction { .. } => 0.,
         }
     }
     // Figure the current cap gain/loss for the Lot
@@ -257,6 +282,11 @@ pub enum LotDisposalKind {
     Other {
         description: String,
     },
+    Swap {
+        #[serde(with = "field_as_string")]
+        signature: Signature,
+        token: MaybeToken,
+    },
 }
 
 impl LotDisposalKind {
@@ -264,6 +294,7 @@ impl LotDisposalKind {
         match self {
             LotDisposalKind::Usd { fee, .. } => fee.as_ref(),
             LotDisposalKind::Other { .. } => None,
+            LotDisposalKind::Swap { .. } => None,
         }
     }
 }
@@ -288,6 +319,9 @@ impl fmt::Display for LotDisposalKind {
                 }
             ),
             LotDisposalKind::Other { description } => write!(f, "{}", description),
+            LotDisposalKind::Swap { token, signature } => {
+                write!(f, "Swap into {}, {}", token, signature)
+            }
         }
     }
 }
@@ -598,6 +632,138 @@ impl Db {
             })
             .collect()
     }
+
+    ///////////////////////////////////////////////
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn record_swap(
+        &mut self,
+        signature: Signature,
+        last_valid_block_height: u64,
+        address: Pubkey,
+        from_token: MaybeToken,
+        from_token_price: Decimal,
+        to_token: MaybeToken,
+        to_token_price: Decimal,
+    ) -> DbResult<()> {
+        if !self.db.lexists("swaps") {
+            self.db.lcreate("swaps")?;
+        }
+
+        let _ = self
+            .get_account(address, from_token)
+            .ok_or(DbError::AccountDoesNotExist(address, from_token))?;
+
+        let pendining_swap = PendingSwap {
+            signature,
+            last_valid_block_height,
+            address,
+            from_token,
+            from_token_price,
+            to_token,
+            to_token_price,
+        };
+        self.db.ladd("swaps", &pendining_swap).unwrap();
+        self.save()
+    }
+
+    fn complete_swap(
+        &mut self,
+        signature: Signature,
+        success: Option<(NaiveDate, u64, u64)>,
+    ) -> DbResult<()> {
+        let mut pending_swaps = self.pending_swaps();
+        let PendingSwap {
+            signature,
+            address,
+            from_token,
+            from_token_price,
+            to_token,
+            to_token_price,
+            ..
+        } = pending_swaps
+            .iter()
+            .find(|pd| pd.signature == signature)
+            .ok_or(DbError::PendingDepositDoesNotExist(signature))?
+            .clone();
+
+        pending_swaps.retain(|pd| pd.signature != signature);
+
+        self.db.lrem_list("swaps")?;
+        self.db.lcreate("swaps")?;
+        self.db.lextend("swaps", &pending_swaps).unwrap();
+
+        let mut from_account = self
+            .get_account(address, from_token)
+            .ok_or(DbError::AccountDoesNotExist(address, from_token))?;
+        let mut to_account = self
+            .get_account(address, to_token)
+            .ok_or(DbError::AccountDoesNotExist(address, to_token))?;
+
+        self.auto_save(false)?;
+        if let Some((when, from_amount, to_amount)) = success {
+            let lots = from_account.extract_lots(self, from_amount, None)?;
+            let mut disposed_lots = self.disposed_lots();
+            for lot in lots {
+                disposed_lots.push(DisposedLot {
+                    lot,
+                    when,
+                    price: None,
+                    decimal_price: Some(from_token_price),
+                    kind: LotDisposalKind::Swap {
+                        signature,
+                        token: to_token,
+                    },
+                    token: from_token,
+                });
+            }
+            self.db.set("disposed-lots", &disposed_lots).unwrap();
+
+            to_account.merge_or_add_lot(Lot {
+                lot_number: self.next_lot_number(),
+                acquisition: LotAcquistion {
+                    price: None,
+                    decimal_price: Some(to_token_price),
+                    when,
+                    kind: LotAcquistionKind::Swap {
+                        signature,
+                        token: from_token,
+                    },
+                },
+                amount: to_amount,
+            });
+            to_account.last_update_balance += to_amount;
+            self.update_account(from_account)?;
+            self.update_account(to_account)?;
+        }
+        self.auto_save(true)
+    }
+
+    pub fn cancel_swap(&mut self, signature: Signature) -> DbResult<()> {
+        self.complete_swap(signature, None)
+    }
+
+    pub fn confirm_swap(
+        &mut self,
+        signature: Signature,
+        when: NaiveDate,
+        from_amount: u64,
+        to_amount: u64,
+    ) -> DbResult<()> {
+        self.complete_swap(signature, Some((when, from_amount, to_amount)))
+    }
+
+    pub fn pending_swaps(&self) -> Vec<PendingSwap> {
+        if !self.db.lexists("swaps") {
+            return vec![];
+        }
+        self.db
+            .liter("swaps")
+            .filter_map(|item_iter| item_iter.get_item::<PendingSwap>())
+            .collect()
+    }
+
+    ///////////////////////////////////////////////
 
     #[allow(clippy::too_many_arguments)]
     pub fn record_withdrawal(

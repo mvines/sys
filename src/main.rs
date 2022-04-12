@@ -24,7 +24,9 @@ use {
     rust_decimal::prelude::*,
     separator::FixedPlaceSeparatable,
     solana_clap_utils::{self, input_parsers::*, input_validators::*},
-    solana_client::{rpc_client::RpcClient, rpc_response::StakeActivationState},
+    solana_client::{
+        rpc_client::RpcClient, rpc_config::RpcTransactionConfig, rpc_response::StakeActivationState,
+    },
     solana_sdk::{
         clock::Slot,
         commitment_config::CommitmentConfig,
@@ -937,6 +939,324 @@ async fn process_exchange_sell(
     Ok(())
 }
 
+async fn process_tulip_deposit<T: Signers>(
+    db: &mut Db,
+    rpc_client: &RpcClient,
+    collateral_token: Token,
+    liquidity_amount: Option<u64>,
+    address: Pubkey,
+    signers: T,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let liquidity_token = collateral_token
+        .liquidity_token()
+        .ok_or_else(|| format!("{} is not a collateral token", collateral_token))?;
+
+    let sol = MaybeToken::SOL();
+    let minimum_lamport_balance = sol.amount(0.01);
+    let from_account_lamports = sol.balance(rpc_client, &address)?;
+    if from_account_lamports < minimum_lamport_balance {
+        return Err(format!(
+            "From account (SOL), {}, has insufficient funds ({}{} required)",
+            address,
+            sol.symbol(),
+            sol.ui_amount(minimum_lamport_balance)
+        )
+        .into());
+    }
+
+    let liquidity_account_balance = liquidity_token.balance(rpc_client, &address)?;
+    let max_liquidity_amount = if liquidity_token.is_sol() {
+        liquidity_account_balance.saturating_sub(minimum_lamport_balance)
+    } else {
+        liquidity_account_balance
+    };
+    let liquidity_amount = liquidity_amount.unwrap_or(max_liquidity_amount);
+
+    if liquidity_amount > max_liquidity_amount {
+        return Err(format!(
+            "Deposit amount is too large: {} (max: {})",
+            liquidity_token.ui_amount(liquidity_amount),
+            liquidity_token.ui_amount(max_liquidity_amount)
+        )
+        .into());
+    }
+    if liquidity_amount == 0 {
+        return Err("Nothing to deposit".into());
+    }
+
+    let liquidity_token_price = liquidity_token.get_current_price(rpc_client).await?;
+    let collateral_token_price = collateral_token.get_current_price(rpc_client).await?;
+    let liquidity_token_ui_amount = liquidity_token.ui_amount(liquidity_amount);
+
+    println!("{}: {} -> {}", address, liquidity_token, collateral_token);
+    println!(
+        "Estimated deposit amount: {}{} (${})",
+        liquidity_token.symbol(),
+        liquidity_token.ui_amount(liquidity_amount),
+        liquidity_token_price * Decimal::from_f64(liquidity_token_ui_amount).unwrap()
+    );
+
+    let instructions = tulip::deposit(rpc_client, address, liquidity_token, liquidity_amount)?;
+
+    let (recent_blockhash, last_valid_block_height) =
+        rpc_client.get_latest_blockhash_with_commitment(rpc_client.commitment())?;
+
+    let mut message = Message::new(&instructions, Some(&address));
+    message.recent_blockhash = recent_blockhash;
+
+    let mut transaction = Transaction::new_unsigned(message);
+    let simulation_result = rpc_client.simulate_transaction(&transaction)?.value;
+    if simulation_result.err.is_some() {
+        return Err(format!("Simulation failure: {:?}", simulation_result).into());
+    }
+
+    transaction.try_sign(&signers, recent_blockhash)?;
+    let signature = transaction.signatures[0];
+    println!("Transaction signature: {}", signature);
+
+    if db.get_account(address, collateral_token.into()).is_none() {
+        let epoch = rpc_client.get_epoch_info()?.epoch;
+        db.add_account(TrackedAccount {
+            address,
+            token: collateral_token.into(),
+            description: String::new(),
+            last_update_epoch: epoch,
+            last_update_balance: 0,
+            lots: vec![],
+            no_sync: None,
+        })?;
+    }
+
+    db.record_swap(
+        signature,
+        last_valid_block_height,
+        address,
+        liquidity_token,
+        liquidity_token_price,
+        collateral_token.into(),
+        collateral_token_price,
+    )?;
+
+    if !send_transaction_until_expired(rpc_client, &transaction, last_valid_block_height) {
+        db.cancel_swap(signature).expect("cancel_swap");
+        return Err("Swap failed".into());
+    }
+    Ok(())
+}
+
+async fn process_tulip_withdraw<T: Signers>(
+    db: &mut Db,
+    rpc_client: &RpcClient,
+    collateral_token: Token,
+    liquidity_amount: Option<u64>,
+    address: Pubkey,
+    signers: T,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let liquidity_token = collateral_token
+        .liquidity_token()
+        .ok_or_else(|| format!("{} is not a collateral token", collateral_token))?;
+
+    let collateral_account_balance = collateral_token.balance(rpc_client, &address)?;
+
+    let collateral_amount = match liquidity_amount {
+        None => collateral_account_balance,
+        Some(liquidity_amount) => collateral_token.amount(
+            f64::try_from(
+                Decimal::from_f64(liquidity_token.ui_amount(liquidity_amount)).unwrap()
+                    / tulip::get_current_liquidity_token_rate(rpc_client, &collateral_token)
+                        .await?,
+            )
+            .unwrap(),
+        ),
+    };
+
+    if collateral_amount > collateral_account_balance {
+        return Err(format!(
+            "Withdraw amount is too large: {} (max: {})",
+            collateral_token.ui_amount(collateral_amount),
+            collateral_token.ui_amount(collateral_account_balance)
+        )
+        .into());
+    }
+    if collateral_amount == 0 {
+        return Err("Nothing to withdraw".into());
+    }
+
+    let liquidity_token_price = liquidity_token.get_current_price(rpc_client).await?;
+    let collateral_token_price = collateral_token.get_current_price(rpc_client).await?;
+    let collateral_token_ui_amount = collateral_token.ui_amount(collateral_amount);
+
+    println!("{}: {} -> {}", address, collateral_token, liquidity_token);
+    println!(
+        "Estimated withdraw amount: {}{} (${})",
+        collateral_token.symbol(),
+        collateral_token.ui_amount(collateral_amount),
+        collateral_token_price * Decimal::from_f64(collateral_token_ui_amount).unwrap()
+    );
+
+    let instructions = tulip::withdraw(rpc_client, address, collateral_token, collateral_amount)?;
+
+    let (recent_blockhash, last_valid_block_height) =
+        rpc_client.get_latest_blockhash_with_commitment(rpc_client.commitment())?;
+
+    let mut message = Message::new(&instructions, Some(&address));
+    message.recent_blockhash = recent_blockhash;
+
+    let mut transaction = Transaction::new_unsigned(message);
+    let simulation_result = rpc_client.simulate_transaction(&transaction)?.value;
+    if simulation_result.err.is_some() {
+        return Err(format!("Simulation failure: {:?}", simulation_result).into());
+    }
+
+    transaction.try_sign(&signers, recent_blockhash)?;
+    let signature = transaction.signatures[0];
+    println!("Transaction signature: {}", signature);
+
+    db.record_swap(
+        signature,
+        last_valid_block_height,
+        address,
+        collateral_token.into(),
+        collateral_token_price,
+        liquidity_token,
+        liquidity_token_price,
+    )?;
+
+    if !send_transaction_until_expired(rpc_client, &transaction, last_valid_block_height) {
+        db.cancel_swap(signature).expect("cancel_swap");
+        return Err("Swap failed".into());
+    }
+
+    Ok(())
+}
+
+async fn process_sync_swaps(
+    db: &mut Db,
+    rpc_client: &RpcClient,
+    notifier: &Notifier,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let block_height = rpc_client.get_epoch_info()?.block_height;
+
+    for PendingSwap {
+        signature,
+        last_valid_block_height,
+        address,
+        from_token,
+        to_token,
+        ..
+    } in db.pending_swaps()
+    {
+        let swap = format!("swap ({}: {} -> {})", address, from_token, to_token);
+
+        let status = rpc_client.get_signature_status_with_commitment_and_history(
+            &signature,
+            rpc_client.commitment(),
+            true,
+        )?;
+        match status {
+            Some(result) => {
+                if result.is_ok() {
+                    println!("Pending {} confirmed: {}", swap, signature);
+                    let result = rpc_client.get_transaction_with_config(
+                        &signature,
+                        RpcTransactionConfig {
+                            commitment: Some(rpc_client.commitment()),
+                            ..RpcTransactionConfig::default()
+                        },
+                    )?;
+
+                    let block_time = result
+                        .block_time
+                        .ok_or("Transaction block time not available")?;
+
+                    let when = NaiveDateTime::from_timestamp_opt(block_time, 0)
+                        .ok_or("Invalid transaction block time")?
+                        .date();
+
+                    let transaction_status_meta = result.transaction.meta.unwrap();
+
+                    let pre_token_balances = transaction_status_meta
+                        .pre_token_balances
+                        .unwrap_or_default();
+                    let post_token_balances = transaction_status_meta
+                        .post_token_balances
+                        .unwrap_or_default();
+
+                    let token_amount_diff = |token: &Pubkey| {
+                        let token = token.to_string();
+                        let pre = pre_token_balances
+                            .iter()
+                            .filter_map(|token_balance| {
+                                if token_balance.mint == token {
+                                    Some(
+                                        token_balance
+                                            .ui_token_amount
+                                            .amount
+                                            .parse::<u64>()
+                                            .expect("amount"),
+                                    )
+                                } else {
+                                    None
+                                }
+                            })
+                            .next()
+                            .unwrap();
+                        let post = post_token_balances
+                            .iter()
+                            .filter_map(|token_balance| {
+                                if token_balance.mint == token {
+                                    Some(
+                                        token_balance
+                                            .ui_token_amount
+                                            .amount
+                                            .parse::<u64>()
+                                            .expect("amount"),
+                                    )
+                                } else {
+                                    None
+                                }
+                            })
+                            .next()
+                            .unwrap();
+                        (post as i64 - pre as i64).abs() as u64
+                    };
+
+                    let from_amount = token_amount_diff(&from_token.mint());
+                    let to_amount = token_amount_diff(&to_token.mint());
+                    let msg = format!(
+                        "Swapped {}{} for {}{}",
+                        from_token.symbol(),
+                        from_token.ui_amount(from_amount),
+                        to_token.symbol(),
+                        to_token.ui_amount(to_amount),
+                    );
+                    db.confirm_swap(signature, when, from_amount, to_amount)?;
+                    notifier.send(&msg).await;
+                    println!("{}", msg);
+                } else {
+                    println!("Pending {} failed with {:?}: {}", swap, result, signature);
+                    db.cancel_swap(signature)?;
+                }
+            }
+            None => {
+                if block_height > last_valid_block_height {
+                    println!("Pending {} cancelled: {}", swap, signature);
+                    db.cancel_swap(signature)?;
+                } else {
+                    println!(
+                        "{} pending for at most {} blocks: {}",
+                        swap,
+                        last_valid_block_height.saturating_sub(block_height),
+                        signature
+                    );
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn println_lot(
     token: MaybeToken,
@@ -1135,7 +1455,7 @@ async fn process_account_add(
         Some(price) => Decimal::from_f64(price).unwrap(),
         None => match when {
             Some(when) => token.get_historical_price(rpc_client, when).await?,
-            None => token.get_current_price(rpc_client).await?,
+            None => current_price,
         },
     };
 
@@ -1257,17 +1577,29 @@ async fn process_account_list(
             let current_token_price = held_token.0;
             held_token.1 += account.last_update_balance;
 
-            println!(
-                "{} ({}): {}{} - {}",
+            let ui_amount = account.token.ui_amount(account.last_update_balance);
+
+            print!(
+                "{} ({}): {}{}",
                 account.address,
                 account.token,
                 account.token.symbol(),
-                account
-                    .token
-                    .ui_amount(account.last_update_balance)
-                    .separated_string_with_fixed_place(2),
-                account.description
+                ui_amount.separated_string_with_fixed_place(2),
             );
+            if let Some(liquidity_token) = account.token.liquidity_token() {
+                let rate = account
+                    .token
+                    .get_current_liquidity_token_rate(rpc_client)
+                    .await?;
+                print!(
+                    " [{}{}]",
+                    liquidity_token.symbol(),
+                    f64::try_from(Decimal::from_f64(ui_amount).unwrap() * rate)
+                        .unwrap()
+                        .separated_string_with_fixed_place(2)
+                );
+            }
+            println!(" - {}", account.description);
             account.assert_lot_balance();
 
             let open_orders = open_orders
@@ -2304,18 +2636,33 @@ async fn process_account_sync_pending_transfers(
         ..
     } in db.pending_transfers()
     {
-        if rpc_client.confirm_transaction(&signature)? {
-            println!("Pending transfer confirmed: {}", signature);
-            db.confirm_transfer(signature)?;
-        } else if block_height > last_valid_block_height {
-            println!("Pending transfer cancelled: {}", signature);
-            db.cancel_transfer(signature)?;
-        } else {
-            println!(
-                "Transfer pending for at most {} blocks: {}",
-                last_valid_block_height.saturating_sub(block_height),
-                signature
-            );
+        let status = rpc_client.get_signature_status_with_commitment_and_history(
+            &signature,
+            rpc_client.commitment(),
+            true,
+        )?;
+        match status {
+            Some(result) => {
+                if result.is_ok() {
+                    println!("Pending transfer confirmed: {}", signature);
+                    db.confirm_transfer(signature)?;
+                } else {
+                    println!("Pending transfer failed with {:?}: {}", result, signature);
+                    db.cancel_transfer(signature)?;
+                }
+            }
+            None => {
+                if block_height > last_valid_block_height {
+                    println!("Pending transfer cancelled: {}", signature);
+                    db.cancel_transfer(signature)?;
+                } else {
+                    println!(
+                        "Transfer pending for at most {} blocks: {}",
+                        last_valid_block_height.saturating_sub(block_height),
+                        signature
+                    );
+                }
+            }
         }
     }
     Ok(())
@@ -2557,7 +2904,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .help("Date to fetch the price for [default: current price]"),
                 )
         )
-        .subcommand(SubCommand::with_name("sync").about("Synchronize with all exchanges"))
+        .subcommand(SubCommand::with_name("sync").about("Synchronize with all exchanges and accounts"))
         .subcommand(
             SubCommand::with_name("account")
                 .about("Account management")
@@ -2960,6 +3307,69 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 )
                         ),
                 ),
+        )
+        .subcommand(
+            SubCommand::with_name("tulip")
+                .about("tulip.garden")
+                .setting(AppSettings::SubcommandRequiredElseHelp)
+                .setting(AppSettings::InferSubcommands)
+                .subcommand(
+                    SubCommand::with_name("deposit")
+                        .about("Deposit liquidity")
+                        .arg(
+                            Arg::with_name("token")
+                                .value_name("SPL Token")
+                                .takes_value(true)
+                                .required(true)
+                                .validator(is_valid_token)
+                                .help("Collateral token type"),
+                        )
+                        .arg(
+                            Arg::with_name("amount")
+                                .value_name("AMOUNT")
+                                .takes_value(true)
+                                .validator(is_amount_or_all)
+                                .required(true)
+                                .help("Amount of liquidity to deposit; accepts keyword ALL"),
+                        )
+                        .arg(
+                            Arg::with_name("from")
+                                .long("from")
+                                .value_name("FROM_ADDRESS")
+                                .takes_value(true)
+                                .required(true)
+                                .validator(is_valid_signer)
+                                .help("Source account of funds"),
+                        )
+                )
+                .subcommand(
+                    SubCommand::with_name("withdraw")
+                        .about("Withdraw liquidity")
+                        .arg(
+                            Arg::with_name("token")
+                                .value_name("SPL Token")
+                                .takes_value(true)
+                                .required(true)
+                                .validator(is_valid_token)
+                                .help("Collateral token type"),
+                        )
+                        .arg(
+                            Arg::with_name("to")
+                                .value_name("RECIPIENT_ADDRESS")
+                                .takes_value(true)
+                                .required(true)
+                                .validator(is_valid_signer)
+                                .help("Address to receive the withdrawal of funds"),
+                        )
+                        .arg(
+                            Arg::with_name("amount")
+                                .value_name("AMOUNT")
+                                .takes_value(true)
+                                .validator(is_amount_or_all)
+                                .required(true)
+                                .help("Amount of liquidity to withdraw; accepts keyword ALL"),
+                        )
+                )
         );
 
     for exchange in &exchanges {
@@ -3066,7 +3476,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .takes_value(true)
                                 .validator(is_amount_or_all)
                                 .required(true)
-                                .help("The amount to send, in SOL; accepts keyword ALL"),
+                                .help("The amount to deposit; accepts keyword ALL"),
                         )
                         .arg(
                             Arg::with_name("lot_numbers")
@@ -3481,6 +3891,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             if verbose {
                 println!("{}: ${:.2}", verbose_msg, price);
+
+                if let Some(liquidity_token) = token.liquidity_token() {
+                    let rate = token.get_current_liquidity_token_rate(&rpc_client).await?;
+                    println!(
+                        "Liquidity token: {} (rate: {}, inv: {})",
+                        liquidity_token,
+                        rate,
+                        Decimal::from_usize(1).unwrap() / rate
+                    );
+                }
             } else {
                 println!("{:.2}", price);
             }
@@ -3498,6 +3918,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 )
                 .await?
             }
+            process_sync_swaps(&mut db, &rpc_client, &notifier).await?;
+            process_account_sync(&mut db, &rpc_client, None, &notifier).await?;
         }
         ("account", Some(account_matches)) => match account_matches.subcommand() {
             ("lot", Some(lot_matches)) => match lot_matches.subcommand() {
@@ -3726,6 +4148,49 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             ("sync", Some(arg_matches)) => {
                 let address = pubkey_of(arg_matches, "address");
                 process_account_sync(&mut db, &rpc_client, address, &notifier).await?;
+            }
+            _ => unreachable!(),
+        },
+        ("tulip", Some(tulip_matches)) => match tulip_matches.subcommand() {
+            ("deposit", Some(arg_matches)) => {
+                let token = value_t_or_exit!(arg_matches, "token", Token);
+                let amount = match arg_matches.value_of("amount").unwrap() {
+                    "ALL" => None,
+                    amount => Some(token.amount(amount.parse().unwrap())),
+                };
+                let (signer, address) = signer_of(arg_matches, "from", &mut wallet_manager)
+                    .map_err(|err| {
+                        format!(
+                            "Authority not found, consider using the `--by` argument): {}",
+                            err
+                        )
+                    })?;
+                let address = address.expect("address");
+                let signer = signer.expect("signer");
+
+                process_tulip_deposit(&mut db, &rpc_client, token, amount, address, vec![signer])
+                    .await?;
+                process_sync_swaps(&mut db, &rpc_client, &notifier).await?;
+            }
+            ("withdraw", Some(arg_matches)) => {
+                let token = value_t_or_exit!(arg_matches, "token", Token);
+                let amount = match arg_matches.value_of("amount").unwrap() {
+                    "ALL" => None,
+                    amount => Some(token.amount(amount.parse().unwrap())),
+                };
+                let (signer, address) =
+                    signer_of(arg_matches, "to", &mut wallet_manager).map_err(|err| {
+                        format!(
+                            "Authority not found, consider using the `--by` argument): {}",
+                            err
+                        )
+                    })?;
+                let address = address.expect("address");
+                let signer = signer.expect("signer");
+
+                process_tulip_withdraw(&mut db, &rpc_client, token, amount, address, vec![signer])
+                    .await?;
+                process_sync_swaps(&mut db, &rpc_client, &notifier).await?;
             }
             _ => unreachable!(),
         },

@@ -231,7 +231,7 @@ dependencies = [
  "anchor-lang",
  "solana-program",
  "spl-associated-token-account",
- "spl-token",
+ "spl-token 3.2.0",
 ]
 
 [[package]]
@@ -293,6 +293,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "479db852db25d9dbf6204e6cb6253698f175c15726470f78af0d918e99d6156e"
 dependencies = [
  "event-listener",
+]
+
+[[package]]
+name = "async-recursion"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2cda8f4bcc10624c4e85bc66b3f452cca98cfa5ca002dc83a16aad2367641bea"
+dependencies = [
+ "proc-macro2 1.0.26",
+ "quote 1.0.9",
+ "syn 1.0.72",
 ]
 
 [[package]]
@@ -3069,7 +3080,7 @@ dependencies = [
  "solana-config-program",
  "solana-sdk",
  "solana-vote-program",
- "spl-token",
+ "spl-token 3.2.0",
  "thiserror",
  "zstd",
 ]
@@ -3669,7 +3680,7 @@ dependencies = [
  "solana-vote-program",
  "spl-associated-token-account",
  "spl-memo",
- "spl-token",
+ "spl-token 3.2.0",
  "thiserror",
 ]
 
@@ -3777,7 +3788,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "393e2240d521c3dd770806bff25c2c00d761ac962be106e14e22dd912007f428"
 dependencies = [
  "solana-program",
- "spl-token",
+ "spl-token 3.2.0",
 ]
 
 [[package]]
@@ -3801,6 +3812,35 @@ dependencies = [
  "num_enum",
  "solana-program",
  "thiserror",
+]
+
+[[package]]
+name = "spl-token"
+version = "3.3.0"
+source = "git+https://github.com/solana-labs/solana-program-library.git?rev=1d1c2b178b8cf2ed3e28006c27b2ba5b3d039d67#1d1c2b178b8cf2ed3e28006c27b2ba5b3d039d67"
+dependencies = [
+ "arrayref",
+ "bytemuck",
+ "num-derive",
+ "num-traits",
+ "num_enum",
+ "solana-program",
+ "thiserror",
+]
+
+[[package]]
+name = "spl-token-lending"
+version = "0.1.0"
+source = "git+https://github.com/solana-labs/solana-program-library.git?rev=1d1c2b178b8cf2ed3e28006c27b2ba5b3d039d67#1d1c2b178b8cf2ed3e28006c27b2ba5b3d039d67"
+dependencies = [
+ "arrayref",
+ "bytemuck",
+ "num-derive",
+ "num-traits",
+ "solana-program",
+ "spl-token 3.3.0",
+ "thiserror",
+ "uint 0.9.3",
 ]
 
 [[package]]
@@ -3911,6 +3951,7 @@ dependencies = [
 name = "sys"
 version = "0.1.0"
 dependencies = [
+ "async-recursion",
  "async-trait",
  "bincode",
  "chrono",
@@ -3939,7 +3980,8 @@ dependencies = [
  "solana-transaction-status",
  "solana-vote-program",
  "spl-associated-token-account",
- "spl-token",
+ "spl-token 3.2.0",
+ "spl-token-lending",
  "strum",
  "thiserror",
  "tokio",
@@ -4278,12 +4320,12 @@ dependencies = [
  "num-derive",
  "num-traits",
  "solana-sdk",
- "spl-token",
+ "spl-token 3.2.0",
  "static-pubkey",
  "thiserror",
  "tulip-arrform",
  "tulipv2-sdk-farms",
- "uint",
+ "uint 0.8.5",
 ]
 
 [[package]]
@@ -4374,6 +4416,18 @@ dependencies = [
  "byteorder",
  "crunchy",
  "rustc-hex",
+ "static_assertions",
+]
+
+[[package]]
+name = "uint"
+version = "0.9.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "12f03af7ccf01dd611cc450a0d10dbc9b745770d096473e2faf0ca6e2d66d1e0"
+dependencies = [
+ "byteorder",
+ "crunchy",
+ "hex",
  "static_assertions",
 ]
 

@@ -25,6 +25,7 @@ You can also run `./fetch-release.sh` to download the latest Linux and macOS bin
 * Historical SOL price information via CoinGecko
 * Data is contained in a local `sell-your-sol/` subdirectory that can be easily backed up, and is editable by hand if necessary
 * Excel export
+* Tulip USDC and SOL lending integration
 
 ## Examples
 _TODO..._
@@ -35,4 +36,3 @@ For now please explore the help system, `sys --help`. It aims to be self explana
 * No FMV discount is computed for locked stake rewards
 * Accounts under `sys` management should not be manipulated outside of `sys`.  For example `sys` will get confused if you split some stake using the `solana` command-line tool, and probably assert
 * You may have to write code to fix bugs or implement new features that are not required in my workflow
-
