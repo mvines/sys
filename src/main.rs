@@ -20,6 +20,7 @@ use {
     db::*,
     exchange::*,
     notifier::*,
+    rust_decimal::prelude::*,
     separator::FixedPlaceSeparatable,
     solana_clap_utils::{self, input_parsers::*, input_validators::*},
     solana_client::{rpc_client::RpcClient, rpc_response::StakeActivationState},
@@ -101,7 +102,7 @@ async fn get_block_date_and_price(
     rpc_client: &RpcClient,
     slot: Slot,
     token: MaybeToken,
-) -> Result<(NaiveDate, f64), Box<dyn std::error::Error>> {
+) -> Result<(NaiveDate, Decimal), Box<dyn std::error::Error>> {
     let block_time = rpc_client.get_block_time(slot)?;
     let local_timestamp = Local.timestamp(block_time, 0);
 
@@ -872,8 +873,8 @@ async fn process_exchange_sell(
     let order_lots = deposit_account.extract_lots(db, token.amount(amount), lot_numbers)?;
     if if_price_over_basis {
         if let Some(basis) = order_lots.iter().find_map(|lot| {
-            let basis = lot.acquisition.price;
-            if price < basis {
+            let basis = lot.acquisition.price();
+            if Decimal::from_f64(price).unwrap() < basis {
                 Some(basis)
             } else {
                 None
@@ -899,7 +900,7 @@ async fn process_exchange_sell(
         println_lot(
             deposit_account.token,
             lot,
-            price,
+            Decimal::from_f64(price).unwrap(),
             &mut 0.,
             &mut 0.,
             &mut false,
@@ -939,14 +940,16 @@ async fn process_exchange_sell(
 async fn println_lot(
     token: MaybeToken,
     lot: &Lot,
-    current_price: f64,
+    current_price: Decimal,
     total_income: &mut f64,
     total_cap_gain: &mut f64,
     long_term_cap_gain: &mut bool,
     total_current_value: &mut f64,
     notifier: Option<&Notifier>,
 ) {
-    let current_value = token.ui_amount(lot.amount) * current_price;
+    let current_value =
+        f64::try_from(Decimal::from_f64(token.ui_amount(lot.amount)).unwrap() * current_price)
+            .unwrap();
     let income = lot.income(token);
     let cap_gain = lot.cap_gain(token, current_price);
 
@@ -961,7 +964,7 @@ async fn println_lot(
         lot.acquisition.when,
         token.symbol(),
         token.ui_amount(lot.amount),
-        lot.acquisition.price.separated_string_with_fixed_place(2),
+        f64::try_from(lot.acquisition.price()).unwrap().separated_string_with_fixed_place(2),
         current_value.separated_string_with_fixed_place(2),
         income.separated_string_with_fixed_place(2),
         if *long_term_cap_gain {
@@ -988,7 +991,7 @@ fn format_disposed_lot(
 ) -> String {
     let cap_gain = disposed_lot
         .lot
-        .cap_gain(disposed_lot.token, disposed_lot.price);
+        .cap_gain(disposed_lot.token, disposed_lot.price());
     let income = disposed_lot.lot.income(disposed_lot.token);
 
     *long_term_cap_gain =
@@ -1004,10 +1007,10 @@ fn format_disposed_lot(
         disposed_lot.token,
         disposed_lot.token.symbol(),
         disposed_lot.token.ui_amount(disposed_lot.lot.amount),
-        disposed_lot.lot.acquisition.price.separated_string_with_fixed_place(2),
+        f64::try_from(disposed_lot.lot.acquisition.price()).unwrap().separated_string_with_fixed_place(2),
         income.separated_string_with_fixed_place(2),
         disposed_lot.when,
-        disposed_lot.price.separated_string_with_fixed_place(2),
+        f64::try_from(disposed_lot.price()).unwrap().separated_string_with_fixed_place(2),
         if *long_term_cap_gain {
             " long"
         } else {
@@ -1127,8 +1130,8 @@ async fn process_account_add(
     println!("Adding {} (token: {})", address, token);
 
     let current_price = token.get_current_price(rpc_client).await?;
-    let price = match price {
-        Some(price) => price,
+    let decimal_price = match price {
+        Some(price) => Decimal::from_f64(price).unwrap(),
         None => match when {
             Some(when) => token.get_historical_price(rpc_client, when).await?,
             None => token.get_current_price(rpc_client).await?,
@@ -1139,11 +1142,7 @@ async fn process_account_add(
     if amount > 0 {
         let lot = Lot {
             lot_number: db.next_lot_number(),
-            acquisition: LotAcquistion {
-                when: when.unwrap_or_else(today),
-                price,
-                kind,
-            },
+            acquisition: LotAcquistion::new(when.unwrap_or_else(today), decimal_price, kind),
             amount,
         };
         println_lot(
@@ -1187,7 +1186,7 @@ async fn process_account_dispose(
     price: Option<f64>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let price = match price {
-        Some(price) => price,
+        Some(price) => Decimal::from_f64(price).unwrap(),
         None => match when {
             Some(when) => token.get_historical_price(rpc_client, when).await?,
             None => token.get_current_price(rpc_client).await?,
@@ -1229,7 +1228,7 @@ async fn process_account_list(
     show_all_disposed_lots: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut annual_realized_gains = BTreeMap::<usize, [RealizedGain; 4]>::default();
-    let mut held_tokens = HashMap::<MaybeToken, (/*price*/ f64, /*amount*/ u64)>::default();
+    let mut held_tokens = HashMap::<MaybeToken, (/*price*/ Decimal, /*amount*/ u64)>::default();
 
     let accounts = db.get_accounts();
     if accounts.is_empty() {
@@ -1483,7 +1482,9 @@ async fn process_account_list(
                 held_token
                     .ui_amount(total_held_amount)
                     .separated_string_with_fixed_place(3),
-                current_token_price.separated_string_with_fixed_place(3),
+                f64::try_from(current_token_price)
+                    .unwrap()
+                    .separated_string_with_fixed_place(3),
                 held_token,
             );
         }
@@ -1577,14 +1578,14 @@ async fn process_account_xls(
                 disposed_lot.token.ui_amount(disposed_lot.lot.amount),
                 income,
                 disposed_lot.lot.acquisition.when.to_string(),
-                disposed_lot.lot.acquisition.price,
+                disposed_lot.lot.acquisition.price().to_string(),
                 disposed_lot.lot.acquisition.kind.to_string(),
                 disposed_lot
                     .lot
-                    .cap_gain(disposed_lot.token, disposed_lot.price),
+                    .cap_gain(disposed_lot.token, disposed_lot.price()),
                 if long_term_cap_gain { "Long" } else { "Short" },
                 disposed_lot.when.to_string(),
-                disposed_lot.price,
+                disposed_lot.price().to_string(),
                 disposed_lot
                     .kind
                     .fee()
@@ -1626,7 +1627,7 @@ async fn process_account_xls(
                     R::Number(account.token.ui_amount(lot.amount)),
                     R::Number(lot.income(account.token)),
                     R::Text(lot.acquisition.when.to_string()),
-                    R::Number(lot.acquisition.price),
+                    R::Text(lot.acquisition.price().to_string()),
                     R::Text(lot.acquisition.kind.to_string()),
                     R::Text(account.description.clone()),
                     R::Text(account.address.to_string()),
@@ -1651,7 +1652,7 @@ async fn process_account_xls(
                     R::Number(open_order.token.ui_amount(lot.amount)),
                     R::Number(lot.income(open_order.token)),
                     R::Text(lot.acquisition.when.to_string()),
-                    R::Number(lot.acquisition.price),
+                    R::Text(lot.acquisition.price().to_string()),
                     R::Text(lot.acquisition.kind.to_string()),
                     R::Text(format!(
                         "Open Order: {:?} {}",
@@ -2203,11 +2204,11 @@ async fn process_account_sync(
 
                 let lot = Lot {
                     lot_number: db.next_lot_number(),
-                    acquisition: LotAcquistion {
+                    acquisition: LotAcquistion::new(
                         when,
                         price,
-                        kind: LotAcquistionKind::EpochReward { epoch, slot },
-                    },
+                        LotAcquistionKind::EpochReward { epoch, slot },
+                    ),
                     amount: inflation_reward.amount,
                 };
 
@@ -2249,16 +2250,17 @@ async fn process_account_sync(
         } else if current_balance > account.last_update_balance + account.token.amount(0.005) {
             let slot = epoch_info.absolute_slot;
             let current_token_price = account.token.get_current_price(rpc_client).await?;
-            let (when, price) = get_block_date_and_price(rpc_client, slot, account.token).await?;
+            let (when, decimal_price) =
+                get_block_date_and_price(rpc_client, slot, account.token).await?;
             let amount = current_balance - account.last_update_balance;
 
             let lot = Lot {
                 lot_number: db.next_lot_number(),
-                acquisition: LotAcquistion {
+                acquisition: LotAcquistion::new(
                     when,
-                    price,
-                    kind: LotAcquistionKind::NotAvailable,
-                },
+                    decimal_price,
+                    LotAcquistionKind::NotAvailable,
+                ),
                 amount,
             };
 
