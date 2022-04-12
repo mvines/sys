@@ -1067,7 +1067,7 @@ async fn process_account_add(
 
             let account_index = transaction
                 .message
-                .account_keys
+                .static_account_keys()
                 .iter()
                 .position(|k| {
                     *k == match token.token() {
@@ -1165,6 +1165,7 @@ async fn process_account_add(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn process_account_dispose(
     db: &mut Db,
     rpc_client: &RpcClient,
