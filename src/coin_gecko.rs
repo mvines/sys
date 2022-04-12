@@ -1,6 +1,7 @@
 use {
     crate::token::{MaybeToken, Token},
     chrono::prelude::*,
+    rust_decimal::prelude::*,
     serde::{Deserialize, Serialize},
 };
 
@@ -25,14 +26,14 @@ struct HistoryResponse {
     market_data: Option<MarketData>,
 }
 
-pub async fn get_current_price(token: &MaybeToken) -> Result<f64, Box<dyn std::error::Error>> {
+pub async fn get_current_price(token: &MaybeToken) -> Result<Decimal, Box<dyn std::error::Error>> {
     get_historical_price(crate::today(), token).await
 }
 
 pub async fn get_historical_price(
     when: NaiveDate,
     token: &MaybeToken,
-) -> Result<f64, Box<dyn std::error::Error>> {
+) -> Result<Decimal, Box<dyn std::error::Error>> {
     let coin = match token.token() {
         None => "solana",
         Some(token) => match token {
@@ -61,5 +62,5 @@ pub async fn get_historical_price(
         .await?
         .market_data
         .ok_or_else(|| format!("Market data not available for {}", when).into())
-        .map(|market_data| market_data.current_price.usd)
+        .map(|market_data| Decimal::from_f64(market_data.current_price.usd).unwrap())
 }

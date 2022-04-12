@@ -1,6 +1,7 @@
 use {
     crate::coin_gecko,
     chrono::prelude::*,
+    rust_decimal::prelude::*,
     serde::{Deserialize, Serialize},
     solana_client::rpc_client::RpcClient,
     solana_sdk::{
@@ -72,9 +73,9 @@ impl Token {
     pub async fn get_current_price(
         &self,
         _rpc_client: &RpcClient,
-    ) -> Result<f64, Box<dyn std::error::Error>> {
+    ) -> Result<Decimal, Box<dyn std::error::Error>> {
         if self.fiat_fungible() {
-            return Ok(1.);
+            return Ok(Decimal::from_f64(1.).unwrap());
         }
         match self {
             Token::USDC => coin_gecko::get_current_price(&MaybeToken(Some(*self))).await,
@@ -90,9 +91,9 @@ impl Token {
         &self,
         _rpc_client: &RpcClient,
         when: NaiveDate,
-    ) -> Result<f64, Box<dyn std::error::Error>> {
+    ) -> Result<Decimal, Box<dyn std::error::Error>> {
         if self.fiat_fungible() {
-            return Ok(1.);
+            return Ok(Decimal::from_f64(1.).unwrap());
         }
         match self {
             Token::USDC => coin_gecko::get_historical_price(when, &MaybeToken(Some(*self))).await,
@@ -187,7 +188,7 @@ impl MaybeToken {
     pub async fn get_current_price(
         &self,
         rpc_client: &RpcClient,
-    ) -> Result<f64, Box<dyn std::error::Error>> {
+    ) -> Result<Decimal, Box<dyn std::error::Error>> {
         match self.0 {
             None => coin_gecko::get_current_price(self).await,
             Some(token) => token.get_current_price(rpc_client).await,
@@ -198,7 +199,7 @@ impl MaybeToken {
         &self,
         rpc_client: &RpcClient,
         when: NaiveDate,
-    ) -> Result<f64, Box<dyn std::error::Error>> {
+    ) -> Result<Decimal, Box<dyn std::error::Error>> {
         match self.0 {
             None => coin_gecko::get_historical_price(when, self).await,
             Some(token) => token.get_historical_price(rpc_client, when).await,

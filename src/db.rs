@@ -2,6 +2,7 @@ use {
     crate::{exchange::*, field_as_string, token::*},
     chrono::{prelude::*, NaiveDate},
     pickledb::{PickleDb, PickleDbDumpPolicy},
+    rust_decimal::prelude::*,
     serde::{Deserialize, Serialize},
     solana_sdk::{
         clock::{Epoch, Slot},
@@ -191,8 +192,25 @@ impl fmt::Display for LotAcquistionKind {
 #[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
 pub struct LotAcquistion {
     pub when: NaiveDate,
-    pub price: f64, // USD per SOL/token
+    price: f64,                     // USD per SOL/token
+    decimal_price: Option<Decimal>, // Prefer over `price` if Some(_)
     pub kind: LotAcquistionKind,
+}
+
+impl LotAcquistion {
+    pub fn new(when: NaiveDate, decimal_price: Decimal, kind: LotAcquistionKind) -> Self {
+        Self {
+            when,
+            price: f64::NAN,
+            decimal_price: Some(decimal_price),
+            kind,
+        }
+    }
+
+    pub fn price(&self) -> Decimal {
+        self.decimal_price
+            .unwrap_or_else(|| Decimal::from_f64(self.price).unwrap())
+    }
 }
 
 #[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
@@ -208,7 +226,10 @@ impl Lot {
         match self.acquisition.kind {
             // These lots were acquired pre-tax
             LotAcquistionKind::EpochReward { .. } | LotAcquistionKind::NotAvailable => {
-                self.acquisition.price * token.ui_amount(self.amount)
+                (self.acquisition.price()
+                    * Decimal::from_f64(token.ui_amount(self.amount)).unwrap())
+                .try_into()
+                .unwrap()
             }
             // Assume these kinds of lots are acquired with post-tax funds
             LotAcquistionKind::Exchange { .. }
@@ -217,8 +238,11 @@ impl Lot {
         }
     }
     // Figure the current cap gain/loss for the Lot
-    pub fn cap_gain(&self, token: MaybeToken, current_price: f64) -> f64 {
-        (current_price - self.acquisition.price) * token.ui_amount(self.amount)
+    pub fn cap_gain(&self, token: MaybeToken, current_price: Decimal) -> f64 {
+        ((current_price - self.acquisition.price())
+            * Decimal::from_f64(token.ui_amount(self.amount)).unwrap())
+        .try_into()
+        .unwrap()
     }
 }
 
@@ -272,10 +296,18 @@ impl fmt::Display for LotDisposalKind {
 pub struct DisposedLot {
     pub lot: Lot,
     pub when: NaiveDate,
-    pub price: f64, // USD per SOL/token
+    price: Option<f64>,             // USD per SOL/token
+    decimal_price: Option<Decimal>, // Prefer over `price` if Some(_)
     pub kind: LotDisposalKind,
     #[serde(default = "MaybeToken::SOL")]
     pub token: MaybeToken,
+}
+
+impl DisposedLot {
+    pub fn price(&self) -> Decimal {
+        self.decimal_price
+            .unwrap_or_else(|| Decimal::from_f64(self.price.unwrap_or_default()).unwrap())
+    }
 }
 
 #[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
@@ -604,6 +636,7 @@ impl Db {
                 lot_number: self.next_lot_number(),
                 acquisition: LotAcquistion {
                     price: 1.,
+                    decimal_price: None,
                     when,
                     kind: LotAcquistionKind::Fiat,
                 },
@@ -800,6 +833,7 @@ impl Db {
                         acquisition: LotAcquistion {
                             when,
                             price,
+                            decimal_price: None,
                             kind: LotAcquistionKind::Exchange {
                                 exchange,
                                 pair,
@@ -831,7 +865,8 @@ impl Db {
                         disposed_lots.push(DisposedLot {
                             lot,
                             when,
-                            price,
+                            price: Some(price),
+                            decimal_price: None,
                             kind: LotDisposalKind::Usd {
                                 exchange,
                                 pair: pair.clone(),
@@ -864,7 +899,7 @@ impl Db {
         amount: u64,
         description: String,
         when: NaiveDate,
-        price: f64,
+        decimal_price: Decimal,
     ) -> DbResult<Vec<DisposedLot>> {
         let mut from_account = self
             .get_account(from_address, token)
@@ -877,7 +912,8 @@ impl Db {
             disposed_lots.push(DisposedLot {
                 lot,
                 when,
-                price,
+                price: None,
+                decimal_price: Some(decimal_price),
                 kind: LotDisposalKind::Other {
                     description: description.clone(),
                 },
