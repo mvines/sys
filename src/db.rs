@@ -71,9 +71,15 @@ pub fn new<P: AsRef<Path>>(db_path: P) -> DbResult<Db> {
     };
 
     let credentials_db = if credentials_db_filename.exists() {
-        PickleDb::load_json(credentials_db_filename, PickleDbDumpPolicy::DumpUponRequestWithoutDrop)?
+        PickleDb::load_json(
+            credentials_db_filename,
+            PickleDbDumpPolicy::DumpUponRequestWithoutDrop,
+        )?
     } else {
-        PickleDb::new_json(credentials_db_filename, PickleDbDumpPolicy::DumpUponRequestWithoutDrop)
+        PickleDb::new_json(
+            credentials_db_filename,
+            PickleDbDumpPolicy::DumpUponRequestWithoutDrop,
+        )
     };
 
     Ok(Db {
