@@ -964,7 +964,11 @@ async fn process_tulip_deposit<T: Signers>(
         .into());
     }
 
-    let liquidity_account_balance = liquidity_token.balance(rpc_client, &address)?;
+    let liquidity_tracked_account = db
+        .get_account(address, liquidity_token)
+        .ok_or_else(|| format!("Unknown account {} ({})", address, liquidity_token))?;
+    let liquidity_account_balance = liquidity_tracked_account.last_update_balance;
+
     let max_liquidity_amount = if liquidity_token.is_sol() {
         liquidity_account_balance.saturating_sub(minimum_lamport_balance)
     } else {
@@ -974,7 +978,8 @@ async fn process_tulip_deposit<T: Signers>(
 
     if liquidity_amount > max_liquidity_amount {
         return Err(format!(
-            "Deposit amount is too large: {} (max: {})",
+            "Deposit amount is too large: {0}{1} (max: {0}{2})",
+            liquidity_token.symbol(),
             liquidity_token.ui_amount(liquidity_amount),
             liquidity_token.ui_amount(max_liquidity_amount)
         )
@@ -1056,7 +1061,10 @@ async fn process_tulip_withdraw<T: Signers>(
         .liquidity_token()
         .ok_or_else(|| format!("{} is not a collateral token", collateral_token))?;
 
-    let collateral_account_balance = collateral_token.balance(rpc_client, &address)?;
+    let collateral_tracked_account = db
+        .get_account(address, collateral_token.into())
+        .ok_or_else(|| format!("Unknown account {} ({})", address, collateral_token))?;
+    let collateral_account_balance = collateral_tracked_account.last_update_balance;
 
     let collateral_amount = match liquidity_amount {
         None => collateral_account_balance,
@@ -1072,7 +1080,8 @@ async fn process_tulip_withdraw<T: Signers>(
 
     if collateral_amount > collateral_account_balance {
         return Err(format!(
-            "Withdraw amount is too large: {} (max: {})",
+            "Withdraw amount is too large: {0}{1} (max: {0}{2})",
+            collateral_token.symbol(),
             collateral_token.ui_amount(collateral_amount),
             collateral_token.ui_amount(collateral_account_balance)
         )
