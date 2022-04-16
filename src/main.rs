@@ -246,7 +246,9 @@ async fn process_sync_exchange(
                     "{} {}{} withdrawal to {} successful ({})",
                     token,
                     token.symbol(),
-                    token.ui_amount(pending_withdrawal.amount),
+                    token
+                        .ui_amount(pending_withdrawal.amount)
+                        .separated_string_with_fixed_place(2),
                     wi.address,
                     tx_id,
                 );
@@ -1235,9 +1237,13 @@ async fn process_sync_swaps(
                     let msg = format!(
                         "Swapped {}{} for {}{}",
                         from_token.symbol(),
-                        from_token.ui_amount(from_amount),
+                        from_token
+                            .ui_amount(from_amount)
+                            .separated_string_with_fixed_place(2),
                         to_token.symbol(),
-                        to_token.ui_amount(to_amount),
+                        to_token
+                            .ui_amount(to_amount)
+                            .separated_string_with_fixed_place(2),
                     );
                     db.confirm_swap(signature, when, from_amount, to_amount)?;
                     notifier.send(&msg).await;
