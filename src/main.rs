@@ -1629,7 +1629,7 @@ async fn process_account_list(
 
             let open_orders = open_orders
                 .iter()
-                .filter(|oo| oo.deposit_address == account.address)
+                .filter(|oo| oo.deposit_address == account.address && oo.token == account.token)
                 .collect::<Vec<_>>();
 
             if !account.lots.is_empty() || !open_orders.is_empty() {
