@@ -1295,11 +1295,11 @@ async fn println_lot(
     *long_term_cap_gain = is_long_term_cap_gain(lot.acquisition.when, None);
 
     let msg = format!(
-        "{:>4}. {} | {}{:<17.9} at ${:<6} | current value: ${:<14} | income: ${:<11} | {} gain: ${:<14} | {}",
+        "{:>4}. {} | {}{:<16} at ${:<6} | current value: ${:<14} | income: ${:<11} | {} gain: ${:<14} | {}",
         lot.lot_number,
         lot.acquisition.when,
         token.symbol(),
-        token.ui_amount(lot.amount),
+        token.ui_amount(lot.amount).separated_string_with_fixed_place(6),
         f64::try_from(lot.acquisition.price()).unwrap().separated_string_with_fixed_place(2),
         current_value.separated_string_with_fixed_place(2),
         income.separated_string_with_fixed_place(2),
