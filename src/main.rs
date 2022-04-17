@@ -1566,7 +1566,17 @@ async fn process_account_list(
     let mut annual_realized_gains = BTreeMap::<usize, [RealizedGain; 4]>::default();
     let mut held_tokens = HashMap::<MaybeToken, (/*price*/ Decimal, /*amount*/ u64)>::default();
 
-    let accounts = db.get_accounts();
+    let mut accounts = db.get_accounts();
+    accounts.sort_by(|a, b| {
+        let mut result = a.last_update_balance.cmp(&b.last_update_balance);
+        if result == std::cmp::Ordering::Equal {
+            result = a.address.cmp(&b.address);
+        }
+        if result == std::cmp::Ordering::Equal {
+            result = a.description.cmp(&b.description);
+        }
+        result
+    });
     if accounts.is_empty() {
         println!("No accounts");
     } else {
