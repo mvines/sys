@@ -1834,7 +1834,7 @@ async fn process_account_list(
         println!("Current Holdings Summary");
         for (held_token, (current_token_price, total_held_amount)) in held_tokens {
             println!(
-                "  {: >4}:                {}{} (${} per {})",
+                "  {: >4}:                {}{} (${} per {}; ${})",
                 held_token.to_string(),
                 held_token.symbol(),
                 held_token
@@ -1844,6 +1844,12 @@ async fn process_account_list(
                     .unwrap()
                     .separated_string_with_fixed_place(3),
                 held_token,
+                f64::try_from(
+                    Decimal::from_f64(held_token.ui_amount(total_held_amount)).unwrap()
+                        * current_token_price
+                )
+                .unwrap()
+                .separated_string_with_fixed_place(2),
             );
         }
         println!(
