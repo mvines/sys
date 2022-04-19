@@ -1385,12 +1385,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "half"
-version = "1.7.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "62aca2aba2d62b4a7f5b33f3712cb1b0692779a56fb510499d5c0aa594daeaf3"
-
-[[package]]
 name = "hashbrown"
 version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2189,13 +2183,10 @@ checksum = "d4fd5641d01c8f18a23da7b6fe29298ff4b55afcccdf78973b24cf3175fee32e"
 [[package]]
 name = "pickledb"
 version = "0.4.1"
-source = "git+https://github.com/mvines/pickledb-rs?rev=af1bfdf5d400b68df9080b29f8b9e9ea57fe035c#af1bfdf5d400b68df9080b29f8b9e9ea57fe035c"
+source = "git+https://github.com/seladb/pickledb-rs.git?rev=4f7094d0a9569cfae181f38653306b6a0a196d72#4f7094d0a9569cfae181f38653306b6a0a196d72"
 dependencies = [
- "bincode",
  "serde",
- "serde_cbor",
  "serde_json",
- "serde_yaml",
 ]
 
 [[package]]
@@ -2841,16 +2832,6 @@ version = "0.11.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "16ae07dd2f88a366f15bd0632ba725227018c69a1c8550a927324f8eb8368bb9"
 dependencies = [
- "serde",
-]
-
-[[package]]
-name = "serde_cbor"
-version = "0.11.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e18acfa2f90e8b735b2836ab8d538de304cbb6729a7360729ea5a895d15a622"
-dependencies = [
- "half",
  "serde",
 ]
 

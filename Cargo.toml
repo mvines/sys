@@ -22,7 +22,7 @@ ftx = { git = "https://github.com/fabianboesiger/ftx", rev = "ce576c74f11c1795ee
 itertools = "0.10.0"
 separator = "0.4.1"
 #pickledb = "0.4"
-pickledb = { git = "https://github.com/mvines/pickledb-rs", rev = "af1bfdf5d400b68df9080b29f8b9e9ea57fe035c" }
+pickledb = { git = "https://github.com/seladb/pickledb-rs.git", rev = "4f7094d0a9569cfae181f38653306b6a0a196d72" }
 reqwest = "0.11"
 simple_excel_writer = "0.1.9"
 serde = { version = "1.0", features = ["derive"] }
