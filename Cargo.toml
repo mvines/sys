@@ -16,8 +16,8 @@ console = "0.14.1"
 rust_decimal = "1.23"
 rust_decimal_macros = "1.23"
 fd-lock = "3.0.0"
-ftx = { git = "https://github.com/fabianboesiger/ftx", rev = "ce576c74f11c1795eef8cd101735166cb77b7892" }
-#ftx = { git = "https://github.com/mvines/ftx", rev = "c9384af98cf34ee5e19bf6a34d8b1f5192b06b5a" }
+#ftx = { git = "https://github.com/fabianboesiger/ftx", rev = "ce576c74f11c1795eef8cd101735166cb77b7892" }
+ftx = { git = "https://github.com/mvines/ftx", rev = "eea60b98cc47052dc0e6c42efe861d8d7cf6fb7f" }
 #ftx = { path = "../ftx" }
 itertools = "0.10.0"
 separator = "0.4.1"
