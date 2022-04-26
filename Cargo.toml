@@ -21,8 +21,7 @@ ftx = { git = "https://github.com/mvines/ftx", rev = "eea60b98cc47052dc0e6c42efe
 #ftx = { path = "../ftx" }
 itertools = "0.10.0"
 separator = "0.4.1"
-#pickledb = "0.4"
-pickledb = { git = "https://github.com/seladb/pickledb-rs.git", rev = "4f7094d0a9569cfae181f38653306b6a0a196d72" }
+pickledb = { git = "https://github.com/seladb/pickledb-rs.git", rev = "0.5.0" }
 reqwest = "0.11"
 simple_excel_writer = "0.1.9"
 serde = { version = "1.0", features = ["derive"] }
