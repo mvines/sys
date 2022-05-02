@@ -287,14 +287,16 @@ pub enum LotDisposalKind {
         signature: Signature,
         token: MaybeToken,
     },
+    Fiat,
 }
 
 impl LotDisposalKind {
     pub fn fee(&self) -> Option<&(f64, String)> {
         match self {
             LotDisposalKind::Usd { fee, .. } => fee.as_ref(),
-            LotDisposalKind::Other { .. } => None,
-            LotDisposalKind::Swap { .. } => None,
+            LotDisposalKind::Other { .. }
+            | LotDisposalKind::Swap { .. }
+            | LotDisposalKind::Fiat { .. } => None,
         }
     }
 }
@@ -322,6 +324,7 @@ impl fmt::Display for LotDisposalKind {
             LotDisposalKind::Swap { token, signature } => {
                 write!(f, "Swap into {}, {}", token, signature)
             }
+            LotDisposalKind::Fiat => write!(f, "fiat"),
         }
     }
 }
@@ -586,7 +589,11 @@ impl Db {
         self.update_account(from_account) // `update_account` calls `save`...
     }
 
-    fn complete_deposit(&mut self, signature: Signature, success: bool) -> DbResult<()> {
+    fn complete_deposit(
+        &mut self,
+        signature: Signature,
+        success: Option<NaiveDate>,
+    ) -> DbResult<()> {
         let mut pending_deposits = self.pending_deposits(None);
 
         let PendingDeposit { transfer, .. } = pending_deposits
@@ -605,11 +612,11 @@ impl Db {
     }
 
     pub fn cancel_deposit(&mut self, signature: Signature) -> DbResult<()> {
-        self.complete_deposit(signature, false)
+        self.complete_deposit(signature, None)
     }
 
-    pub fn confirm_deposit(&mut self, signature: Signature) -> DbResult<()> {
-        self.complete_deposit(signature, true)
+    pub fn confirm_deposit(&mut self, signature: Signature, when: NaiveDate) -> DbResult<()> {
+        self.complete_deposit(signature, Some(when))
     }
 
     pub fn pending_deposits(&self, exchange: Option<Exchange>) -> Vec<PendingDeposit> {
@@ -1070,24 +1077,39 @@ impl Db {
         let mut from_account = self
             .get_account(from_address, token)
             .ok_or(DbError::AccountDoesNotExist(from_address, token))?;
-
-        let mut disposed_lots = self.disposed_lots();
-
         let lots = from_account.extract_lots(self, amount, None)?;
+        let disposed_lots = self.record_lots_disposal(
+            token,
+            lots,
+            LotDisposalKind::Other { description },
+            when,
+            decimal_price,
+        )?;
+        self.update_account(from_account)?; // `update_account` calls `save`...
+        Ok(disposed_lots)
+    }
+
+    // The caller must call `save()`...
+    fn record_lots_disposal(
+        &mut self,
+        token: MaybeToken,
+        lots: Vec<Lot>,
+        kind: LotDisposalKind,
+        when: NaiveDate,
+        decimal_price: Decimal,
+    ) -> DbResult<Vec<DisposedLot>> {
+        let mut disposed_lots = self.disposed_lots();
         for lot in lots {
             disposed_lots.push(DisposedLot {
                 lot,
                 when,
                 price: None,
                 decimal_price: Some(decimal_price),
-                kind: LotDisposalKind::Other {
-                    description: description.clone(),
-                },
-                token: from_account.token,
+                kind: kind.clone(),
+                token,
             });
         }
         self.db.set("disposed-lots", &disposed_lots)?;
-        self.update_account(from_account)?; // `update_account` calls `save`...
         Ok(disposed_lots)
     }
 
@@ -1349,7 +1371,7 @@ impl Db {
     fn complete_transfer_or_deposit(
         &mut self,
         pending_transfer: PendingTransfer,
-        success: bool,
+        success: Option<NaiveDate>,
         track_fiat_lots: bool,
     ) -> DbResult<()> {
         let PendingTransfer {
@@ -1367,22 +1389,39 @@ impl Db {
             .get_account(to_address, token)
             .ok_or(DbError::AccountDoesNotExist(to_address, token))?;
 
-        if success {
-            // If the token is fiat fungible, drop the lots on deposit into an exchange
-            if !token.fiat_fungible() || track_fiat_lots {
-                to_account.merge_lots(lots);
+        self.auto_save(false)?;
+
+        if let Some(when) = success {
+            match (token.fiat_fungible(), track_fiat_lots) {
+                (false, _) | (true, true) => {
+                    to_account.merge_lots(lots);
+                }
+                (true, false) => {
+                    let _ = self.record_lots_disposal(
+                        token,
+                        lots,
+                        LotDisposalKind::Other {
+                            description: "fiat".into(),
+                        },
+                        when,
+                        Decimal::from_f64(1.).unwrap(),
+                    );
+                }
             }
         } else {
             from_account.merge_lots(lots);
         }
 
-        self.auto_save(false)?;
         self.update_account(to_account)?;
         self.update_account(from_account)?;
         self.auto_save(true)
     }
 
-    fn complete_transfer(&mut self, signature: Signature, success: bool) -> DbResult<()> {
+    fn complete_transfer(
+        &mut self,
+        signature: Signature,
+        success: Option<NaiveDate>,
+    ) -> DbResult<()> {
         let mut pending_transfers = self.pending_transfers();
 
         let transfer = pending_transfers
@@ -1398,11 +1437,11 @@ impl Db {
     }
 
     pub fn cancel_transfer(&mut self, signature: Signature) -> DbResult<()> {
-        self.complete_transfer(signature, false)
+        self.complete_transfer(signature, None)
     }
 
-    pub fn confirm_transfer(&mut self, signature: Signature) -> DbResult<()> {
-        self.complete_transfer(signature, true)
+    pub fn confirm_transfer(&mut self, signature: Signature, when: NaiveDate) -> DbResult<()> {
+        self.complete_transfer(signature, Some(when))
     }
 
     pub fn pending_transfers(&self) -> Vec<PendingTransfer> {

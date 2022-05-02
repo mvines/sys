@@ -101,20 +101,38 @@ fn app_version() -> String {
     })
 }
 
+async fn get_block_date(
+    rpc_client: &RpcClient,
+    slot: Slot,
+) -> Result<NaiveDate, Box<dyn std::error::Error>> {
+    let block_time = rpc_client.get_block_time(slot)?;
+    let local_timestamp = Local.timestamp(block_time, 0);
+    Ok(NaiveDate::from_ymd(
+        local_timestamp.year(),
+        local_timestamp.month(),
+        local_timestamp.day(),
+    ))
+}
+
+async fn get_signature_date(
+    rpc_client: &RpcClient,
+    signature: Signature,
+) -> Result<NaiveDate, Box<dyn std::error::Error>> {
+    let statuses = rpc_client.get_signature_statuses_with_history(&[signature])?;
+    if let Some(Some(ts)) = statuses.value.get(0) {
+        let block_date = get_block_date(rpc_client, ts.slot).await?;
+        Ok(block_date)
+    } else {
+        Err(format!("Unknown signature: {}", signature).into())
+    }
+}
+
 async fn get_block_date_and_price(
     rpc_client: &RpcClient,
     slot: Slot,
     token: MaybeToken,
 ) -> Result<(NaiveDate, Decimal), Box<dyn std::error::Error>> {
-    let block_time = rpc_client.get_block_time(slot)?;
-    let local_timestamp = Local.timestamp(block_time, 0);
-
-    let block_date = NaiveDate::from_ymd(
-        local_timestamp.year(),
-        local_timestamp.month(),
-        local_timestamp.day(),
-    );
-
+    let block_date = get_block_date(rpc_client, slot).await?;
     Ok((
         block_date,
         token.get_historical_price(rpc_client, block_date).await?,
@@ -306,7 +324,9 @@ async fn process_sync_exchange(
                     notifier.send(&format!("{:?}: {}", exchange, msg)).await;
                 }
 
-                db.confirm_deposit(pending_deposit.transfer.signature)?;
+                let when =
+                    get_signature_date(rpc_client, pending_deposit.transfer.signature).await?;
+                db.confirm_deposit(pending_deposit.transfer.signature, when)?;
 
                 let msg = format!(
                     "{} {}{} deposit successful ({})",
@@ -2155,7 +2175,8 @@ async fn process_account_merge<T: Signers>(
         db.cancel_transfer(signature)?;
         return Err("Merge failed".into());
     }
-    db.confirm_transfer(signature)?;
+    let when = get_signature_date(rpc_client, signature).await?;
+    db.confirm_transfer(signature, when)?;
     db.remove_account(from_address, token)?;
     Ok(())
 }
@@ -2397,7 +2418,8 @@ async fn process_account_sweep<T: Signers>(
         return Err("Sweep failed".into());
     }
     println!("Confirming sweep: {}", signature);
-    db.confirm_transfer(signature)?;
+    let when = get_signature_date(rpc_client, signature).await?;
+    db.confirm_transfer(signature, when)?;
 
     notifier.send(&msg).await;
     println!("{}", msg);
@@ -2487,7 +2509,8 @@ async fn process_account_split<T: Signers>(
         return Err("Split failed".into());
     }
     println!("Split confirmed: {}", signature);
-    db.confirm_transfer(signature)?;
+    let when = get_signature_date(rpc_client, signature).await?;
+    db.confirm_transfer(signature, when)?;
     Ok(())
 }
 
@@ -2676,7 +2699,8 @@ async fn process_account_sync_pending_transfers(
             Some(result) => {
                 if result.is_ok() {
                     println!("Pending transfer confirmed: {}", signature);
-                    db.confirm_transfer(signature)?;
+                    let when = get_signature_date(rpc_client, signature).await?;
+                    db.confirm_transfer(signature, when)?;
                 } else {
                     println!("Pending transfer failed with {:?}: {}", result, signature);
                     db.cancel_transfer(signature)?;
@@ -2854,7 +2878,8 @@ async fn process_account_sync_sweep(
             db.cancel_transfer(signature)?;
             return Err("Merge failed".into());
         }
-        db.confirm_transfer(signature)?;
+        let when = get_signature_date(rpc_client, signature).await?;
+        db.confirm_transfer(signature, when)?;
         db.remove_transitory_sweep_stake_address(transitory_sweep_stake_address)?;
     }
     Ok(())
