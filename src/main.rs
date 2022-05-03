@@ -1335,6 +1335,7 @@ async fn println_lot(
     if let Some(notifier) = notifier {
         notifier.send(&msg).await;
     }
+
     println!("{}", msg);
 }
 
@@ -1582,6 +1583,8 @@ async fn process_account_list(
     rpc_client: &RpcClient,
     account_filter: Option<Pubkey>,
     show_all_disposed_lots: bool,
+    summary_only: bool,
+    notifier: &Notifier,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut annual_realized_gains = BTreeMap::<usize, [RealizedGain; 4]>::default();
     let mut held_tokens = HashMap::<MaybeToken, (/*price*/ Decimal, /*amount*/ u64)>::default();
@@ -1624,28 +1627,40 @@ async fn process_account_list(
 
             let ui_amount = account.token.ui_amount(account.last_update_balance);
 
-            print!(
-                "{} ({}): {}{}",
-                account.address,
-                account.token,
-                account.token.symbol(),
-                ui_amount.separated_string_with_fixed_place(2),
-            );
-            if let Some(liquidity_token) = account.token.liquidity_token() {
+            let fiat_amount = if let Some(liquidity_token) = account.token.liquidity_token() {
                 let rate = account
                     .token
                     .get_current_liquidity_token_rate(rpc_client)
                     .await?;
-                print!(
+                format!(
                     " [{}{}]",
                     liquidity_token.symbol(),
                     f64::try_from(Decimal::from_f64(ui_amount).unwrap() * rate)
                         .unwrap()
                         .separated_string_with_fixed_place(2)
-                );
+                )
+            } else {
+                String::new()
+            };
+
+            let msg = format!(
+                "{} ({}): {}{}{} - {}",
+                account.address,
+                account.token,
+                account.token.symbol(),
+                ui_amount.separated_string_with_fixed_place(2),
+                fiat_amount,
+                account.description
+            );
+            println!("{}", msg);
+            if account.last_update_balance > 0 {
+                notifier.send(&msg).await;
             }
-            println!(" - {}", account.description);
             account.assert_lot_balance();
+
+            if summary_only {
+                continue;
+            }
 
             let open_orders = open_orders
                 .iter()
@@ -1741,6 +1756,7 @@ async fn process_account_list(
                     account_unrealized_short_term_gain.separated_string_with_fixed_place(2),
                     account_unrealized_long_term_gain.separated_string_with_fixed_place(2),
                 );
+
                 total_unrealized_short_term_gain += account_unrealized_short_term_gain;
                 total_unrealized_long_term_gain += account_unrealized_long_term_gain;
                 total_income += account_income;
@@ -1751,7 +1767,7 @@ async fn process_account_list(
             println!();
         }
 
-        if account_filter.is_some() {
+        if account_filter.is_some() || summary_only {
             return Ok(());
         }
 
@@ -3103,6 +3119,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .takes_value(true)
                                 .validator(is_valid_pubkey)
                                 .help("Limit output to this address"),
+                        )
+                        .arg(
+                            Arg::with_name("summary")
+                                .long("summary")
+                                .takes_value(false)
+                                .help("Limit output to summary line"),
                         ),
                 )
                 .subcommand(
@@ -4059,8 +4081,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             ("ls", Some(arg_matches)) => {
                 let all = arg_matches.is_present("all");
+                let summary = arg_matches.is_present("summary");
                 let account_filter = pubkey_of(arg_matches, "account");
-                process_account_list(&db, &rpc_client, account_filter, all).await?;
+                process_account_list(&db, &rpc_client, account_filter, all, summary, &notifier)
+                    .await?;
             }
             ("xls", Some(arg_matches)) => {
                 let outfile = value_t_or_exit!(arg_matches, "outfile", String);
