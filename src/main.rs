@@ -1200,9 +1200,8 @@ async fn process_sync_swaps(
                         .block_time
                         .ok_or("Transaction block time not available")?;
 
-                    let when = NaiveDateTime::from_timestamp_opt(block_time, 0)
-                        .ok_or("Invalid transaction block time")?
-                        .date();
+                    let when = Local.timestamp(block_time, 0);
+                    let when = NaiveDate::from_ymd(when.year(), when.month(), when.day());
 
                     let transaction_status_meta = result.transaction.meta.unwrap();
 
