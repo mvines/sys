@@ -1625,7 +1625,9 @@ impl Db {
         let mut to_account = self
             .get_accounts()
             .into_iter()
-            .find(|tracked_account| tracked_account.address == to_address)
+            .find(|tracked_account| {
+                tracked_account.address == to_address && tracked_account.token == from_account.token
+            })
             .ok_or_else(|| {
                 DbError::LotMoveFailed(format!("Unknown destination account: {}", to_address))
             })?;
