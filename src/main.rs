@@ -2977,6 +2977,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .subcommand(SubCommand::with_name("sync").about("Synchronize with all exchanges and accounts"))
         .subcommand(
+            SubCommand::with_name("db")
+                .about("Database management")
+                .setting(AppSettings::SubcommandRequiredElseHelp)
+                .setting(AppSettings::InferSubcommands)
+                .subcommand(
+                    SubCommand::with_name("import")
+                        .about("Import another database")
+                        .arg(
+                            Arg::with_name("other_db_path")
+                                .value_name("PATH")
+                                .takes_value(true)
+                                .help("Path to the database to import"),
+                        )
+                )
+        )
+        .subcommand(
             SubCommand::with_name("account")
                 .about("Account management")
                 .setting(AppSettings::SubcommandRequiredElseHelp)
@@ -3998,6 +4014,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             process_sync_swaps(&mut db, &rpc_client, &notifier).await?;
             process_account_sync(&mut db, &rpc_client, None, &notifier).await?;
         }
+        ("db", Some(db_matches)) => match db_matches.subcommand() {
+            ("import", Some(arg_matches)) => {
+                let other_db_path = value_t_or_exit!(arg_matches, "other_db_path", PathBuf);
+
+                let mut other_db_fd_lock =
+                    fd_lock::RwLock::new(fs::File::open(&other_db_path).unwrap());
+                let _other_db_write_lock = loop {
+                    match other_db_fd_lock.try_write() {
+                        Ok(lock) => break lock,
+                        Err(err) => {
+                            eprintln!(
+                                "Unable to lock database directory: {}: {}",
+                                other_db_path.display(),
+                                err
+                            );
+                            std::thread::sleep(std::time::Duration::from_secs(1));
+                        }
+                    }
+                };
+
+                let other_db = db::new(&other_db_path).unwrap_or_else(|err| {
+                    eprintln!("Failed to open {}: {}", other_db_path.display(), err);
+                    exit(1)
+                });
+
+                println!("Importing {}", other_db_path.display());
+                db.import_db(other_db)?;
+            }
+            _ => unreachable!(),
+        },
         ("account", Some(account_matches)) => match account_matches.subcommand() {
             ("lot", Some(lot_matches)) => match lot_matches.subcommand() {
                 ("swap", Some(arg_matches)) => {

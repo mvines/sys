@@ -51,6 +51,9 @@ pub enum DbError {
 
     #[error("Lot delete failed: {0}")]
     LotDeleteFailed(String),
+
+    #[error("Import failed: {0}")]
+    ImportFailed(String),
 }
 
 pub type DbResult<T> = std::result::Result<T, DbError>;
@@ -640,8 +643,6 @@ impl Db {
             .collect()
     }
 
-    ///////////////////////////////////////////////
-
     #[allow(clippy::too_many_arguments)]
     pub fn record_swap(
         &mut self,
@@ -769,8 +770,6 @@ impl Db {
             .filter_map(|item_iter| item_iter.get_item::<PendingSwap>())
             .collect()
     }
-
-    ///////////////////////////////////////////////
 
     #[allow(clippy::too_many_arguments)]
     pub fn record_withdrawal(
@@ -1655,5 +1654,39 @@ impl Db {
         self.update_account(from_account)?;
 
         self.auto_save(true)
+    }
+
+    pub fn import_db(&mut self, other_db: Self) -> DbResult<()> {
+        if other_db.pending_deposits(None).len()
+            + other_db.pending_swaps().len()
+            + other_db.pending_withdrawals(None).len()
+            + other_db.pending_transfers().len()
+            + other_db.open_orders(None, None).len()
+            > 0
+        {
+            return Err(DbError::ImportFailed(
+                "Unable to import database with pending operations".into(),
+            ));
+        }
+
+        self.auto_save(false)?;
+        let other_accounts = other_db.get_accounts();
+        for mut other_account in other_accounts {
+            for lot in other_account.lots.iter_mut() {
+                lot.lot_number = self.next_lot_number();
+            }
+            self.add_account(other_account)?;
+        }
+
+        let mut disposed_lots = self.disposed_lots();
+        let other_disposed_lots = other_db.disposed_lots();
+        for mut other_disposed_lot in other_disposed_lots {
+            other_disposed_lot.lot.lot_number = self.next_lot_number();
+            disposed_lots.push(other_disposed_lot);
+        }
+        self.db.set("disposed-lots", &disposed_lots)?;
+
+        self.auto_save(true)?;
+        Ok(())
     }
 }
