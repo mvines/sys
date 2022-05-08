@@ -2401,7 +2401,11 @@ async fn process_account_sweep<T: Signers>(
         println!("Authority address: {}", from_authority_address);
     }
     println!("Destination address: {}", to_address);
-    println!("Sweep amount: {}{}", token.symbol(), token.ui_amount(sweep_amount));
+    println!(
+        "Sweep amount: {}{}",
+        token.symbol(),
+        token.ui_amount(sweep_amount)
+    );
 
     let msg = if let Some((
         transitory_stake_account,
