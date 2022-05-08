@@ -2236,6 +2236,7 @@ async fn process_account_sweep<T: Signers>(
     no_sweep_ok: bool,
     from_authority_address: Pubkey,
     signers: T,
+    to_address: Option<Pubkey>,
     notifier: &Notifier,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let token = MaybeToken::SOL();
@@ -2277,30 +2278,42 @@ async fn process_account_sweep<T: Signers>(
             })?
     };
 
-    let sweep_stake_account = db
-        .get_sweep_stake_account()
-        .ok_or("Sweep stake account not configured")?;
-    let sweep_stake_authority_keypair = read_keypair_file(&sweep_stake_account.stake_authority)
-        .map_err(|err| {
-            format!(
-                "Failed to read {}: {}",
-                sweep_stake_account.stake_authority.display(),
-                err
-            )
-        })?;
+    let mut num_transaction_signatures = 1; // from_address_authority
 
-    let (sweep_stake_authorized, sweep_stake_vote_account_address) =
-        rpc_client_utils::get_stake_authorized(rpc_client, sweep_stake_account.address)?;
+    let (to_address, via_transitory_stake) = if let Some(to_address) = to_address {
+        let _ = db
+            .get_account(to_address, token)
+            .ok_or_else(|| format!("Account {} ({}) does not exist", to_address, token))?;
+        (to_address, None)
+    } else {
+        let transitory_stake_account = Keypair::new();
 
-    if sweep_stake_authorized.staker != sweep_stake_authority_keypair.pubkey() {
-        return Err("Stake authority mismatch".into());
-    }
+        let sweep_stake_account = db
+            .get_sweep_stake_account()
+            .ok_or("Sweep stake account not configured")?;
+        let sweep_stake_authority_keypair = read_keypair_file(&sweep_stake_account.stake_authority)
+            .map_err(|err| {
+                format!(
+                    "Failed to read {}: {}",
+                    sweep_stake_account.stake_authority.display(),
+                    err
+                )
+            })?;
 
-    let num_transaction_signatures = 1 + // from_address_authority
-        1 + // transitory_stake_account
-        if from_authority_address == sweep_stake_authority_keypair.pubkey() {
-            0
-        } else { 1 };
+        num_transaction_signatures += 1; // transitory_stake_account
+        if from_authority_address != sweep_stake_authority_keypair.pubkey() {
+            num_transaction_signatures += 1;
+        }
+
+        (
+            transitory_stake_account.pubkey(),
+            Some((
+                transitory_stake_account,
+                sweep_stake_authority_keypair,
+                sweep_stake_account.address,
+            )),
+        )
+    };
 
     if authority_account.lamports
         < num_transaction_signatures * fee_calculator.lamports_per_signature
@@ -2311,8 +2324,6 @@ async fn process_account_sweep<T: Signers>(
         )
         .into());
     }
-
-    let transitory_stake_account = Keypair::new();
 
     let (mut instructions, sweep_amount) = if from_account.owner == system_program::id() {
         let lamports = if from_address == from_authority_address {
@@ -2328,7 +2339,7 @@ async fn process_account_sweep<T: Signers>(
         (
             vec![system_instruction::transfer(
                 &from_address,
-                &transitory_stake_account.pubkey(),
+                &to_address,
                 lamports,
             )],
             lamports,
@@ -2347,7 +2358,7 @@ async fn process_account_sweep<T: Signers>(
                 &from_address,
                 &from_authority_address,
                 lamports,
-                &transitory_stake_account.pubkey(),
+                &to_address,
             )],
             lamports,
         )
@@ -2360,7 +2371,7 @@ async fn process_account_sweep<T: Signers>(
             vec![solana_stake_program::stake_instruction::withdraw(
                 &from_address,
                 &from_authority_address,
-                &transitory_stake_account.pubkey(),
+                &to_address,
                 lamports,
                 None,
             )],
@@ -2389,32 +2400,60 @@ async fn process_account_sweep<T: Signers>(
     if from_address != from_authority_address {
         println!("Authority address: {}", from_authority_address);
     }
-    println!("Sweep amount: {}", token.ui_amount(sweep_amount));
-    println!(
-        "Transitory stake address: {}",
-        transitory_stake_account.pubkey()
-    );
+    println!("Destination address: {}", to_address);
+    println!("Sweep amount: {}{}", token.symbol(), token.ui_amount(sweep_amount));
 
-    instructions.append(&mut vec![
-        system_instruction::allocate(
-            &transitory_stake_account.pubkey(),
-            std::mem::size_of::<solana_stake_program::stake_state::StakeState>() as u64,
-        ),
-        system_instruction::assign(
-            &transitory_stake_account.pubkey(),
-            &solana_stake_program::id(),
-        ),
-        solana_stake_program::stake_instruction::initialize(
-            &transitory_stake_account.pubkey(),
-            &sweep_stake_authorized,
-            &solana_stake_program::stake_state::Lockup::default(),
-        ),
-        solana_stake_program::stake_instruction::delegate_stake(
-            &transitory_stake_account.pubkey(),
-            &sweep_stake_authority_keypair.pubkey(),
-            &sweep_stake_vote_account_address,
-        ),
-    ]);
+    let msg = if let Some((
+        transitory_stake_account,
+        sweep_stake_authority_keypair,
+        sweep_stake_address,
+    )) = via_transitory_stake.as_ref()
+    {
+        assert_eq!(to_address, transitory_stake_account.pubkey());
+
+        let (sweep_stake_authorized, sweep_stake_vote_account_address) =
+            rpc_client_utils::get_stake_authorized(rpc_client, *sweep_stake_address)?;
+
+        if sweep_stake_authorized.staker != sweep_stake_authority_keypair.pubkey() {
+            return Err("Stake authority mismatch".into());
+        }
+
+        instructions.append(&mut vec![
+            system_instruction::allocate(
+                &transitory_stake_account.pubkey(),
+                std::mem::size_of::<solana_stake_program::stake_state::StakeState>() as u64,
+            ),
+            system_instruction::assign(
+                &transitory_stake_account.pubkey(),
+                &solana_stake_program::id(),
+            ),
+            solana_stake_program::stake_instruction::initialize(
+                &transitory_stake_account.pubkey(),
+                &sweep_stake_authorized,
+                &solana_stake_program::stake_state::Lockup::default(),
+            ),
+            solana_stake_program::stake_instruction::delegate_stake(
+                &transitory_stake_account.pubkey(),
+                &sweep_stake_authority_keypair.pubkey(),
+                &sweep_stake_vote_account_address,
+            ),
+        ]);
+        format!(
+            "Sweeping {}{} from {} into {} (via {})",
+            token.symbol(),
+            token.ui_amount(sweep_amount),
+            from_address,
+            sweep_stake_address,
+            to_address
+        )
+    } else {
+        format!(
+            "Sweeping {} from {} into {}",
+            token.ui_amount(sweep_amount),
+            from_address,
+            to_address
+        )
+    };
 
     let mut message = Message::new(&instructions, Some(&from_authority_address));
     message.recent_blockhash = recent_blockhash;
@@ -2429,38 +2468,39 @@ async fn process_account_sweep<T: Signers>(
         return Err(format!("Simulation failure: {:?}", simulation_result).into());
     }
 
-    let msg = format!(
-        "Sweeping {} from {} into {} (via {})",
-        token.ui_amount(sweep_amount),
-        from_address,
-        sweep_stake_account.address,
-        transitory_stake_account.pubkey(),
-    );
-
     transaction.partial_sign(&signers, recent_blockhash);
-    transaction.try_sign(
-        &[&transitory_stake_account, &sweep_stake_authority_keypair],
-        recent_blockhash,
-    )?;
+    if let Some((transitory_stake_account, sweep_stake_authority_keypair, ..)) =
+        via_transitory_stake.as_ref()
+    {
+        transaction.try_sign(
+            //&[&transitory_stake_account, &sweep_stake_authority_keypair],
+            &[transitory_stake_account, sweep_stake_authority_keypair],
+            recent_blockhash,
+        )?;
+    }
 
     let signature = transaction.signatures[0];
     println!("Transaction signature: {}", signature);
 
     let epoch = rpc_client.get_epoch_info()?.epoch;
-    db.add_transitory_sweep_stake_address(transitory_stake_account.pubkey(), epoch)?;
+    if let Some((transitory_stake_account, ..)) = via_transitory_stake.as_ref() {
+        db.add_transitory_sweep_stake_address(transitory_stake_account.pubkey(), epoch)?;
+    }
     db.record_transfer(
         signature,
         last_valid_block_height,
         from_address,
         Some(sweep_amount),
-        transitory_stake_account.pubkey(),
+        to_address,
         token,
         None,
     )?;
 
     if !send_transaction_until_expired(rpc_client, &transaction, last_valid_block_height) {
         db.cancel_transfer(signature)?;
-        db.remove_transitory_sweep_stake_address(transitory_stake_account.pubkey())?;
+        if let Some((transitory_stake_account, ..)) = via_transitory_stake.as_ref() {
+            db.remove_transitory_sweep_stake_address(transitory_stake_account.pubkey())?;
+        }
         return Err("Sweep failed".into());
     }
     println!("Confirming sweep: {}", signature);
@@ -3005,7 +3045,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .takes_value(true)
                         .required(false)
                         .validator(|value| naivedate_of(&value).map(|_| ()))
-                        .help("Date to fetch the price for [default: current price]"),
+                        .help("Date to fetch the price for [default: current spot price]"),
                 )
         )
         .subcommand(SubCommand::with_name("sync").about("Synchronize with all exchanges and accounts"))
@@ -3285,6 +3325,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .required(true)
                                 .validator(is_valid_signer)
                                 .help("Source account authority keypair"),
+                        )
+                        .arg(
+                            Arg::with_name("to")
+                                .long("to")
+                                .value_name("ADDRESS")
+                                .takes_value(true)
+                                .validator(is_valid_pubkey)
+                                .help("Sweep destination address [default: sweep stake account]")
                         )
                         .arg(
                             Arg::with_name("no_sweep_ok")
@@ -4252,6 +4300,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let retain_amount =
                     MaybeToken::SOL().amount(value_t!(arg_matches, "retain", f64).unwrap_or(0.));
                 let no_sweep_ok = arg_matches.is_present("no_sweep_ok");
+                let to_address = pubkey_of(arg_matches, "to");
 
                 process_account_sweep(
                     &mut db,
@@ -4261,6 +4310,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     no_sweep_ok,
                     from_authority_address,
                     vec![from_authority_signer],
+                    to_address,
                     &notifier,
                 )
                 .await?;
