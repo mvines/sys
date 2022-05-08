@@ -926,6 +926,7 @@ async fn process_exchange_sell(
             deposit_account.token,
             lot,
             Decimal::from_f64(price).unwrap(),
+            None,
             &mut 0.,
             &mut 0.,
             &mut false,
@@ -1291,11 +1292,38 @@ async fn process_sync_swaps(
     Ok(())
 }
 
+struct LiquidityTokenInfo {
+    liquidity_token: MaybeToken,
+    current_liquidity_token_rate: Decimal,
+}
+
+fn liquidity_token_ui_amount(
+    ui_amount: f64,
+    liquidity_token_info: Option<&LiquidityTokenInfo>,
+) -> String {
+    if let Some(LiquidityTokenInfo {
+        liquidity_token,
+        current_liquidity_token_rate,
+    }) = liquidity_token_info
+    {
+        format!(
+            " [{}{}]",
+            liquidity_token.symbol(),
+            f64::try_from(Decimal::from_f64(ui_amount).unwrap() * current_liquidity_token_rate)
+                .unwrap()
+                .separated_string_with_fixed_place(2)
+        )
+    } else {
+        String::new()
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn println_lot(
     token: MaybeToken,
     lot: &Lot,
     current_price: Decimal,
+    liquidity_token_info: Option<&LiquidityTokenInfo>,
     total_income: &mut f64,
     total_cap_gain: &mut f64,
     long_term_cap_gain: &mut bool,
@@ -1313,12 +1341,14 @@ async fn println_lot(
     *total_current_value += current_value;
     *long_term_cap_gain = is_long_term_cap_gain(lot.acquisition.when, None);
 
+    let ui_amount = token.ui_amount(lot.amount);
     let msg = format!(
-        "{:>4}. {} | {}{:<16} at ${:<6} | current value: ${:<14} | income: ${:<11} | {} gain: ${:<14} | {}",
+        "{:>4}. {} | {}{:<16}{} at ${:<6} | current value: ${:<14} | income: ${:<11} | {} gain: ${:<14} | {}",
         lot.lot_number,
         lot.acquisition.when,
         token.symbol(),
-        token.ui_amount(lot.amount).separated_string_with_fixed_place(6),
+        ui_amount.separated_string_with_fixed_place(6),
+        liquidity_token_ui_amount(ui_amount, liquidity_token_info),
         f64::try_from(lot.acquisition.price()).unwrap().separated_string_with_fixed_place(2),
         current_value.separated_string_with_fixed_place(2),
         income.separated_string_with_fixed_place(2),
@@ -1505,6 +1535,7 @@ async fn process_account_add(
             token,
             &lot,
             current_price,
+            None,
             &mut 0.,
             &mut 0.,
             &mut false,
@@ -1626,21 +1657,19 @@ async fn process_account_list(
 
             let ui_amount = account.token.ui_amount(account.last_update_balance);
 
-            let fiat_amount = if let Some(liquidity_token) = account.token.liquidity_token() {
-                let rate = account
-                    .token
-                    .get_current_liquidity_token_rate(rpc_client)
-                    .await?;
-                format!(
-                    " [{}{}]",
-                    liquidity_token.symbol(),
-                    f64::try_from(Decimal::from_f64(ui_amount).unwrap() * rate)
-                        .unwrap()
-                        .separated_string_with_fixed_place(2)
-                )
-            } else {
-                String::new()
-            };
+            let liquidity_token_info =
+                if let Some(liquidity_token) = account.token.liquidity_token() {
+                    let current_liquidity_token_rate = account
+                        .token
+                        .get_current_liquidity_token_rate(rpc_client)
+                        .await?;
+                    Some(LiquidityTokenInfo {
+                        liquidity_token,
+                        current_liquidity_token_rate,
+                    })
+                } else {
+                    None
+                };
 
             let msg = format!(
                 "{} ({}): {}{}{} - {}",
@@ -1648,7 +1677,7 @@ async fn process_account_list(
                 account.token,
                 account.token.symbol(),
                 ui_amount.separated_string_with_fixed_place(2),
-                fiat_amount,
+                liquidity_token_ui_amount(ui_amount, liquidity_token_info.as_ref()),
                 account.description
             );
             println!("{}", msg);
@@ -1682,6 +1711,7 @@ async fn process_account_list(
                         account.token,
                         lot,
                         current_token_price,
+                        liquidity_token_info.as_ref(),
                         &mut account_income,
                         &mut account_unrealized_gain,
                         &mut long_term_cap_gain,
@@ -1727,6 +1757,7 @@ async fn process_account_list(
                             account.token,
                             lot,
                             current_token_price,
+                            liquidity_token_info.as_ref(),
                             &mut account_income,
                             &mut account_unrealized_gain,
                             &mut long_term_cap_gain,
@@ -2622,6 +2653,7 @@ async fn process_account_sync(
                     account.token,
                     &lot,
                     current_sol_price,
+                    None,
                     &mut 0.,
                     &mut 0.,
                     &mut false,
@@ -2677,6 +2709,7 @@ async fn process_account_sync(
                 account.token,
                 &lot,
                 current_token_price,
+                None,
                 &mut 0.,
                 &mut 0.,
                 &mut false,

@@ -3,6 +3,7 @@ use {
     chrono::{prelude::*, NaiveDate},
     pickledb::{PickleDb, PickleDbDumpPolicy},
     rust_decimal::prelude::*,
+    separator::FixedPlaceSeparatable,
     serde::{Deserialize, Serialize},
     solana_sdk::{
         clock::{Epoch, Slot},
@@ -188,6 +189,7 @@ pub enum LotAcquistionKind {
         #[serde(with = "field_as_string")]
         signature: Signature,
         token: MaybeToken,
+        amount: Option<u64>,
     },
 }
 
@@ -209,8 +211,24 @@ impl fmt::Display for LotAcquistionKind {
             LotAcquistionKind::NotAvailable => {
                 write!(f, "other income")
             }
-            LotAcquistionKind::Swap { token, signature } => {
-                write!(f, "Swap from {}, {}", token, signature)
+            LotAcquistionKind::Swap {
+                token,
+                amount,
+                signature,
+            } => {
+                if let Some(amount) = amount {
+                    write!(
+                        f,
+                        "Swap from {}{}, {}",
+                        token.symbol(),
+                        token
+                            .ui_amount(*amount)
+                            .separated_string_with_fixed_place(2),
+                        signature
+                    )
+                } else {
+                    write!(f, "Swap from {}, {}", token, signature)
+                }
             }
         }
     }
@@ -289,6 +307,7 @@ pub enum LotDisposalKind {
         #[serde(with = "field_as_string")]
         signature: Signature,
         token: MaybeToken,
+        amount: Option<u64>,
     },
     Fiat,
 }
@@ -324,8 +343,24 @@ impl fmt::Display for LotDisposalKind {
                 }
             ),
             LotDisposalKind::Other { description } => write!(f, "{}", description),
-            LotDisposalKind::Swap { token, signature } => {
-                write!(f, "Swap into {}, {}", token, signature)
+            LotDisposalKind::Swap {
+                token,
+                amount,
+                signature,
+            } => {
+                if let Some(amount) = amount {
+                    write!(
+                        f,
+                        "Swap to {}{}, {}",
+                        token.symbol(),
+                        token
+                            .ui_amount(*amount)
+                            .separated_string_with_fixed_place(2),
+                        signature
+                    )
+                } else {
+                    write!(f, "Swap to {}, {}", token, signature)
+                }
             }
             LotDisposalKind::Fiat => write!(f, "fiat"),
         }
@@ -721,6 +756,7 @@ impl Db {
                     kind: LotDisposalKind::Swap {
                         signature,
                         token: to_token,
+                        amount: Some(to_amount),
                     },
                     token: from_token,
                 });
@@ -736,6 +772,7 @@ impl Db {
                     kind: LotAcquistionKind::Swap {
                         signature,
                         token: from_token,
+                        amount: Some(from_amount),
                     },
                 },
                 amount: to_amount,
