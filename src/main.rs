@@ -1046,7 +1046,7 @@ async fn process_tulip_deposit<T: Signers>(
         db.add_account(TrackedAccount {
             address,
             token: collateral_token.into(),
-            description: String::new(),
+            description: liquidity_tracked_account.description,
             last_update_epoch: epoch,
             last_update_balance: 0,
             lots: vec![],
