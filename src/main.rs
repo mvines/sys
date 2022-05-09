@@ -40,7 +40,7 @@ use {
     },
     solana_transaction_status::UiTransactionEncoding,
     std::{
-        collections::{BTreeMap, HashMap, HashSet},
+        collections::{BTreeMap, HashSet},
         fs,
         path::PathBuf,
         process::exit,
@@ -1617,7 +1617,7 @@ async fn process_account_list(
     notifier: &Notifier,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut annual_realized_gains = BTreeMap::<usize, [RealizedGain; 4]>::default();
-    let mut held_tokens = HashMap::<MaybeToken, (/*price*/ Decimal, /*amount*/ u64)>::default();
+    let mut held_tokens = BTreeMap::<MaybeToken, (/*price*/ Decimal, /*amount*/ u64)>::default();
 
     let mut accounts = db.get_accounts();
     accounts.sort_by(|a, b| {
@@ -1647,7 +1647,8 @@ async fn process_account_list(
                 }
             }
 
-            if let std::collections::hash_map::Entry::Vacant(e) = held_tokens.entry(account.token) {
+            if let std::collections::btree_map::Entry::Vacant(e) = held_tokens.entry(account.token)
+            {
                 e.insert((account.token.get_current_price(rpc_client).await?, 0));
             }
 

@@ -14,7 +14,18 @@ use {
 };
 
 #[derive(
-    Debug, PartialEq, Eq, Hash, Copy, Clone, Serialize, Deserialize, EnumString, IntoStaticStr,
+    Debug,
+    PartialEq,
+    Eq,
+    Hash,
+    Copy,
+    Clone,
+    Serialize,
+    Deserialize,
+    EnumString,
+    IntoStaticStr,
+    PartialOrd,
+    Ord,
 )]
 #[allow(clippy::upper_case_acronyms)]
 #[allow(non_camel_case_types)]
@@ -148,7 +159,7 @@ pub fn is_valid_token(value: String) -> Result<(), String> {
         .map_err(|_| format!("Invalid token {}", value))
 }
 
-#[derive(Debug, PartialEq, Eq, Hash, Copy, Clone, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Hash, Copy, Clone, Serialize, Deserialize, Ord, PartialOrd)]
 #[repr(transparent)]
 pub struct MaybeToken(Option<Token>);
 
