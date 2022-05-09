@@ -747,7 +747,12 @@ impl Db {
         if let Some((when, from_amount, to_amount)) = success {
             let lots = from_account.extract_lots(self, from_amount, None)?;
             let mut disposed_lots = self.disposed_lots();
+
+            let to_amount_over_from_amount = to_amount as f64 / from_amount as f64;
             for lot in lots {
+                let lot_from_amount = lot.amount as f64;
+                let lot_to_amount = lot_from_amount * to_amount_over_from_amount;
+
                 disposed_lots.push(DisposedLot {
                     lot,
                     when,
@@ -756,7 +761,7 @@ impl Db {
                     kind: LotDisposalKind::Swap {
                         signature,
                         token: to_token,
-                        amount: Some(to_amount),
+                        amount: Some(lot_to_amount as u64),
                     },
                     token: from_token,
                 });
