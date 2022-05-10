@@ -1051,7 +1051,7 @@ async fn process_tulip_deposit<T: Signers>(
             last_update_epoch: epoch,
             last_update_balance: 0,
             lots: vec![],
-            no_sync: None,
+            no_sync: Some(true),
         })?;
     }
 
