@@ -22,10 +22,10 @@ You can also run `./fetch-release.sh` to download the latest Linux and macOS bin
 * Validator identity rewards are also automatically tracked at the epoch level, but not directly attributed to each individual block that rewards are credited
 * Lot management for all tracked accounts, through the disposal of SOL via an exchange sell order
 * A _sweep stake account_ system, whereby vote account rewards can be automatically sweeped into a stake account and staked as quickly as possible
-* Historical SOL price information via CoinGecko
+* Historical and spot price via CoinGecko
 * Data is contained in a local `sell-your-sol/` subdirectory that can be easily backed up, and is editable by hand if necessary
 * Excel export
-* Tulip USDC and SOL lending integration
+* Tulip USDC, SOL and mSOL lending integration
 
 ## Examples
 _TODO..._

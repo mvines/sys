@@ -32,6 +32,7 @@ impl From<&Token> for TulipLending {
         match token {
             Token::tuUSDC | Token::USDC => TulipLending::usdc(),
             Token::tuSOL => TulipLending::sol(),
+            Token::mSOL | Token::tumSOL => TulipLending::msol(),
         }
     }
 }
@@ -67,6 +68,18 @@ impl TulipLending {
             lending_market: pubkey!("D1cqtVThyebK9KXKGXrCEuiqaNf5L4UfM1vHgCqiJxym"),
             liquidity_token: MaybeToken::SOL(),
             collateral_token: Token::tuSOL,
+        }
+    }
+
+    fn msol() -> Self {
+        Self {
+            reserve: pubkey!("5LKgrsUF72MityTntAHWLcXivBGxnxapikFArtKUULwX"),
+            reserve_liquidity_oracle: pubkey!("7FQME1uNK5VVV3f6p3BRPAgMTzaAy2zSMKAvmEyqjQjQ"),
+            reserve_liquidity_supply: pubkey!("GppNJmvMn2YRSU6gpqJEkUgic76iFjDU17145q8WF27n"),
+            reserve_collateral_mint: pubkey!("8cn7JcYVjDZesLa3RTt3NXne4WcDw9PdUneQWuByehwW"),
+            lending_market: pubkey!("D1cqtVThyebK9KXKGXrCEuiqaNf5L4UfM1vHgCqiJxym"),
+            liquidity_token: Token::mSOL.into(),
+            collateral_token: Token::tumSOL,
         }
     }
 

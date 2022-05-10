@@ -26,45 +26,12 @@ struct HistoryResponse {
     market_data: Option<MarketData>,
 }
 
-pub async fn get_current_price(token: &MaybeToken) -> Result<Decimal, Box<dyn std::error::Error>> {
-    let coin = match token.token() {
-        None => "solana",
-        Some(unsupported_token) => {
-            return Err(format!(
-                "Coin Gecko price data not available for {}",
-                unsupported_token.name()
-            )
-            .into())
-        }
-    };
-
-    let url = format!(
-        "https://api.coingecko.com/api/v3/simple/price?ids={}&vs_currencies=usd",
-        coin
-    );
-
-    #[derive(Debug, Serialize, Deserialize)]
-    struct Coins {
-        solana: Option<CurrencyList>,
-    }
-
-    reqwest::get(url)
-        .await?
-        .json::<Coins>()
-        .await?
-        .solana
-        .ok_or_else(|| format!("Simple price data not available for {}", coin).into())
-        .map(|price| Decimal::from_f64(price.usd).unwrap())
-}
-
-pub async fn get_historical_price(
-    when: NaiveDate,
-    token: &MaybeToken,
-) -> Result<Decimal, Box<dyn std::error::Error>> {
+fn token_to_coin(token: &MaybeToken) -> Result<&'static str, Box<dyn std::error::Error>> {
     let coin = match token.token() {
         None => "solana",
         Some(token) => match token {
             Token::USDC => "usd-coin",
+            Token::mSOL => "msol",
             unsupported_token => {
                 return Err(format!(
                     "Coin Gecko price data not available for {}",
@@ -74,6 +41,36 @@ pub async fn get_historical_price(
             }
         },
     };
+    Ok(coin)
+}
+
+pub async fn get_current_price(token: &MaybeToken) -> Result<Decimal, Box<dyn std::error::Error>> {
+    let coin = token_to_coin(token)?;
+    let url = format!(
+        "https://api.coingecko.com/api/v3/simple/price?ids={}&vs_currencies=usd",
+        coin
+    );
+
+    #[derive(Debug, Serialize, Deserialize)]
+    struct Coins {
+        solana: Option<CurrencyList>,
+        msol: Option<CurrencyList>,
+    }
+
+    let coins = reqwest::get(url).await?.json::<Coins>().await?;
+
+    coins
+        .solana
+        .or(coins.msol)
+        .ok_or_else(|| format!("Simple price data not available for {}", coin).into())
+        .map(|price| Decimal::from_f64(price.usd).unwrap())
+}
+
+pub async fn get_historical_price(
+    when: NaiveDate,
+    token: &MaybeToken,
+) -> Result<Decimal, Box<dyn std::error::Error>> {
+    let coin = token_to_coin(token)?;
 
     let url = format!(
         "https://api.coingecko.com/api/v3/coins/{}/history?date={}-{}-{}&localization=false",

@@ -33,6 +33,8 @@ pub enum Token {
     USDC,
     tuUSDC,
     tuSOL,
+    mSOL,
+    tumSOL,
 }
 
 impl Token {
@@ -41,6 +43,8 @@ impl Token {
             Token::USDC => pubkey!("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"),
             Token::tuUSDC => pubkey!("Amig8TisuLpzun8XyGfC5HJHHGUQEscjLgoTWsCCKihg"),
             Token::tuSOL => pubkey!("H4Q3hDbuMUw8Bu72Ph8oV2xMQ7BFNbekpfQZKS2xF7jW"),
+            Token::mSOL => pubkey!("mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So"),
+            Token::tumSOL => pubkey!("8cn7JcYVjDZesLa3RTt3NXne4WcDw9PdUneQWuByehwW"),
         }
     }
 
@@ -53,14 +57,15 @@ impl Token {
             Token::USDC => "($)",
             Token::tuUSDC => "🌷($)",
             Token::tuSOL => "🌷◎",
+            Token::mSOL => "m◎",
+            Token::tumSOL => "🌷m◎",
         }
     }
 
     pub fn decimals(&self) -> u8 {
         match self {
-            Token::USDC => 6,
-            Token::tuUSDC => 6,
-            Token::tuSOL => 9,
+            Token::USDC | Token::tuUSDC => 6,
+            Token::tuSOL | Token::mSOL | Token::tumSOL => 9,
         }
     }
 
@@ -83,8 +88,10 @@ impl Token {
 
     pub fn liquidity_token(&self) -> Option<MaybeToken> {
         match self {
-            Token::USDC => None,
-            Token::tuUSDC | Token::tuSOL => Some(crate::tulip::liquidity_token(self)),
+            Token::USDC | Token::mSOL => None,
+            Token::tuUSDC | Token::tuSOL | Token::tumSOL => {
+                Some(crate::tulip::liquidity_token(self))
+            }
         }
     }
 
@@ -93,8 +100,8 @@ impl Token {
         rpc_client: &RpcClient,
     ) -> Result<Decimal, Box<dyn std::error::Error>> {
         match self {
-            Token::USDC => Ok(Decimal::from_usize(1).unwrap()),
-            Token::tuUSDC | Token::tuSOL => {
+            Token::USDC | Token::mSOL => unreachable!(), //Ok(Decimal::from_usize(1).unwrap()),
+            Token::tuUSDC | Token::tuSOL | Token::tumSOL => {
                 crate::tulip::get_current_liquidity_token_rate(rpc_client, self).await
             }
         }
@@ -129,8 +136,12 @@ impl Token {
             return Ok(Decimal::from_f64(1.).unwrap());
         }
         match self {
-            Token::USDC => coin_gecko::get_current_price(&MaybeToken(Some(*self))).await,
-            Token::tuUSDC | Token::tuSOL => crate::tulip::get_current_price(rpc_client, self).await,
+            Token::USDC | Token::mSOL => {
+                coin_gecko::get_current_price(&MaybeToken(Some(*self))).await
+            }
+            Token::tuUSDC | Token::tuSOL | Token::tumSOL => {
+                crate::tulip::get_current_price(rpc_client, self).await
+            }
         }
     }
 
