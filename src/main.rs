@@ -1298,24 +1298,41 @@ struct LiquidityTokenInfo {
 }
 
 fn liquidity_token_ui_amount(
+    acquisition_liquidity_ui_amount: Option<f64>,
     ui_amount: f64,
     liquidity_token_info: Option<&LiquidityTokenInfo>,
-) -> String {
-    if let Some(LiquidityTokenInfo {
-        liquidity_token,
-        current_liquidity_token_rate,
-    }) = liquidity_token_info
-    {
-        format!(
-            " [{}{}]",
-            liquidity_token.symbol(),
-            f64::try_from(Decimal::from_f64(ui_amount).unwrap() * current_liquidity_token_rate)
-                .unwrap()
-                .separated_string_with_fixed_place(2)
+) -> (String, String) {
+    liquidity_token_info
+        .map(
+            |LiquidityTokenInfo {
+                 liquidity_token,
+                 current_liquidity_token_rate,
+             }| {
+                let liquidity_ui_amount = f64::try_from(
+                    Decimal::from_f64(ui_amount).unwrap() * current_liquidity_token_rate,
+                )
+                .unwrap();
+
+                (
+                    format!(
+                        " [{}{}]",
+                        liquidity_token.symbol(),
+                        liquidity_ui_amount.separated_string_with_fixed_place(2)
+                    ),
+                    acquisition_liquidity_ui_amount
+                        .map(|acquisition_liquidity_ui_amount| {
+                            format!(
+                                "[{}{}]",
+                                liquidity_token.symbol(),
+                                (liquidity_ui_amount - acquisition_liquidity_ui_amount)
+                                    .separated_string_with_fixed_place(2)
+                            )
+                        })
+                        .unwrap_or_default(),
+                )
+            },
         )
-    } else {
-        String::new()
-    }
+        .unwrap_or_default()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1336,21 +1353,41 @@ async fn println_lot(
     let income = lot.income(token);
     let cap_gain = lot.cap_gain(token, current_price);
 
+    let mut acquisition_liquidity_ui_amount = None;
+    if let Some(LiquidityTokenInfo {
+        liquidity_token, ..
+    }) = liquidity_token_info
+    {
+        if let LotAcquistionKind::Swap { token, amount, .. } = lot.acquisition.kind {
+            if !token.fiat_fungible() && token == *liquidity_token {
+                if let Some(amount) = amount {
+                    acquisition_liquidity_ui_amount = Some(token.ui_amount(amount));
+                }
+            }
+        }
+    }
+
     *total_income += income;
     *total_cap_gain += cap_gain;
     *total_current_value += current_value;
     *long_term_cap_gain = is_long_term_cap_gain(lot.acquisition.when, None);
 
     let ui_amount = token.ui_amount(lot.amount);
+    let (liquidity_ui_amount, liquidity_token_cap_gain) = liquidity_token_ui_amount(
+        acquisition_liquidity_ui_amount,
+        ui_amount,
+        liquidity_token_info,
+    );
+
     let msg = format!(
-        "{:>4}. {} | {}{:<16}{} at ${:<6} | current value: ${:<14} | income: ${:<11} | {} gain: ${:<14} | {}",
+        "{:>4}. {} | {}{:<16} at ${:<6} | current value: ${:<14}{} | income: ${:<11} | {} gain: ${:<14}{} | {}",
         lot.lot_number,
         lot.acquisition.when,
         token.symbol(),
         ui_amount.separated_string_with_fixed_place(6),
-        liquidity_token_ui_amount(ui_amount, liquidity_token_info),
         f64::try_from(lot.acquisition.price()).unwrap().separated_string_with_fixed_place(2),
         current_value.separated_string_with_fixed_place(2),
+        liquidity_ui_amount,
         income.separated_string_with_fixed_place(2),
         if *long_term_cap_gain {
             " long"
@@ -1358,6 +1395,7 @@ async fn println_lot(
             "short"
         },
         cap_gain.separated_string_with_fixed_place(2),
+        liquidity_token_cap_gain,
         lot.acquisition.kind,
     );
 
@@ -1672,13 +1710,15 @@ async fn process_account_list(
                     None
                 };
 
+            let (liquidity_ui_amount, _) =
+                liquidity_token_ui_amount(None, ui_amount, liquidity_token_info.as_ref());
             let msg = format!(
                 "{} ({}): {}{}{} - {}",
                 account.address,
                 account.token,
                 account.token.symbol(),
                 ui_amount.separated_string_with_fixed_place(2),
-                liquidity_token_ui_amount(ui_amount, liquidity_token_info.as_ref()),
+                liquidity_ui_amount,
                 account.description
             );
             println!("{}", msg);
