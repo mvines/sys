@@ -1725,6 +1725,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "jup-ag"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aa30639a9737e8ed522ebc9e2b6fa33f96869bb50f8e94abe4d24aa1c3d1ed63"
+dependencies = [
+ "base64 0.13.0",
+ "bincode",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "solana-sdk",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
 name = "keccak"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3941,6 +3957,7 @@ dependencies = [
  "fd-lock",
  "ftx",
  "itertools",
+ "jup-ag",
  "pickledb",
  "reqwest",
  "rust_decimal",
