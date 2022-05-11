@@ -21,6 +21,7 @@ use {
     console::{style, Style},
     db::*,
     exchange::*,
+    itertools::Itertools,
     notifier::*,
     rust_decimal::prelude::*,
     separator::FixedPlaceSeparatable,
@@ -963,6 +964,170 @@ async fn process_exchange_sell(
     )?;
     println!("{}", msg);
     notifier.send(&format!("{:?}: {}", exchange, msg)).await;
+    Ok(())
+}
+
+fn println_jup_quote(from_token: Token, to_token: Token, quote: &jup_ag::Quote) {
+    let route = quote
+        .market_infos
+        .iter()
+        .map(|market_info| market_info.label.clone())
+        .join(", ");
+    println!(
+        "{}{} for {}{} (max slippage {}{}) via {}",
+        from_token.symbol(),
+        from_token.ui_amount(quote.in_amount),
+        to_token.symbol(),
+        to_token.ui_amount(quote.out_amount),
+        to_token.symbol(),
+        to_token.ui_amount(quote.out_amount_with_slippage),
+        route,
+    );
+}
+
+async fn process_jup_quote(
+    from_token: Token,
+    to_token: Token,
+    ui_amount: f64,
+    slippage: f64,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let quotes = jup_ag::quote(
+        from_token.mint(),
+        to_token.mint(),
+        from_token.amount(ui_amount),
+        false,
+        Some(slippage),
+        None,
+    )
+    .await?
+    .data;
+
+    for quote in quotes {
+        println_jup_quote(from_token, to_token, &quote);
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn process_jup_swap<T: Signers>(
+    db: &mut Db,
+    rpc_client: &RpcClient,
+    address: Pubkey,
+    from_token: Token,
+    to_token: Token,
+    ui_amount: f64,
+    slippage: f64,
+    signers: T,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let from_account = db
+        .get_account(address, from_token.into())
+        .ok_or_else(|| format!("{} account does not exist for {}", from_token, address))?;
+
+    let amount = from_token.amount(ui_amount);
+
+    if from_account.last_update_balance < amount {
+        return Err(format!(
+            "Insufficient {} balance in {}. Tracked balance is {}",
+            from_token,
+            address,
+            from_token.ui_amount(from_account.last_update_balance)
+        )
+        .into());
+    }
+
+    let _to_account = db
+        .get_account(address, to_token.into())
+        .ok_or_else(|| format!("{} account does not exist for {}", to_token, address))?;
+
+    println!("Fetching best {}->{} quote...", from_token, to_token);
+    let from_token_price = from_token.get_current_price(rpc_client).await?;
+    let to_token_price = to_token.get_current_price(rpc_client).await?;
+
+    let quotes = jup_ag::quote(
+        from_token.mint(),
+        to_token.mint(),
+        amount,
+        false,
+        Some(slippage),
+        None,
+    )
+    .await?
+    .data;
+
+    let quote = quotes
+        .get(0)
+        .ok_or_else(|| format!("No quotes found for {} to {}", from_token, to_token))?;
+    println_jup_quote(from_token, to_token, quote);
+
+    println!("Generating swap transaction...");
+    let swap_transactions = jup_ag::swap_with_config(
+        quote.clone(),
+        address,
+        jup_ag::SwapConfig {
+            wrap_unwrap_sol: Some(false),
+            ..jup_ag::SwapConfig::default()
+        },
+    )
+    .await?;
+    if swap_transactions.cleanup.is_some() {
+        return Err("swap cleanup transaction not supported".into());
+    }
+    if let Some(mut transaction) = swap_transactions.setup {
+        let (recent_blockhash, last_valid_block_height) =
+            rpc_client.get_latest_blockhash_with_commitment(rpc_client.commitment())?;
+        transaction.message.recent_blockhash = recent_blockhash;
+
+        let simulation_result = rpc_client.simulate_transaction(&transaction)?.value;
+        if simulation_result.err.is_some() {
+            return Err(format!(
+                "Setup transaction simulation failure: {:?}",
+                simulation_result
+            )
+            .into());
+        }
+
+        transaction.try_sign(&signers, recent_blockhash)?;
+        let signature = transaction.signatures[0];
+        println!("Setup transaction signature: {}", signature);
+
+        if !send_transaction_until_expired(rpc_client, &transaction, last_valid_block_height) {
+            return Err("Setup transaction failed".into());
+        }
+    }
+
+    let mut transaction = swap_transactions.swap;
+
+    let (recent_blockhash, last_valid_block_height) =
+        rpc_client.get_latest_blockhash_with_commitment(rpc_client.commitment())?;
+    transaction.message.recent_blockhash = recent_blockhash;
+
+    let simulation_result = rpc_client.simulate_transaction(&transaction)?.value;
+    if simulation_result.err.is_some() {
+        return Err(format!(
+            "Swap transaction simulation failure: {:?}",
+            simulation_result
+        )
+        .into());
+    }
+
+    transaction.try_sign(&signers, recent_blockhash)?;
+    let signature = transaction.signatures[0];
+    println!("Transaction signature: {}", signature);
+
+    db.record_swap(
+        signature,
+        last_valid_block_height,
+        address,
+        from_token.into(),
+        from_token_price,
+        to_token.into(),
+        to_token_price,
+    )?;
+
+    if !send_transaction_until_expired(rpc_client, &transaction, last_valid_block_height) {
+        db.cancel_swap(signature)?;
+        return Err("Swap failed".into());
+    }
     Ok(())
 }
 
@@ -2808,10 +2973,28 @@ async fn process_account_wrap<T: Signers>(
     let (recent_blockhash, last_valid_block_height) =
         rpc_client.get_latest_blockhash_with_commitment(rpc_client.commitment())?;
 
-    let instructions = [
+    let mut instructions = vec![];
+
+    // TODO: replace the following block with
+    // `spl_associated_token_account::instruction::create_associated_token_account_idempotent()`
+    // when it ships to mainnet
+    if rpc_client
+        .get_account_with_commitment(&wsol_address, rpc_client.commitment())?
+        .value
+        .is_none()
+    {
+        instructions.push(
+            spl_associated_token_account::create_associated_token_account(
+                &authority_address,
+                &address,
+                &wsol.mint(),
+            ),
+        );
+    }
+    instructions.extend([
         system_instruction::transfer(&address, &wsol_address, amount),
         spl_token::instruction::sync_native(&spl_token::id(), &wsol_address).unwrap(),
-    ];
+    ]);
 
     let message = Message::new(&instructions, Some(&authority_address));
 
@@ -3354,7 +3537,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .takes_value(true)
                                 .validator(|value| naivedate_of(&value).map(|_| ()))
                                 .help("Disposal date [default: now]"),
-)
+                        )
                         .arg(
                             Arg::with_name("price")
                                 .short("p")
@@ -3728,6 +3911,97 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 )
                         ),
                 ),
+        )
+        .subcommand(
+            SubCommand::with_name("jup")
+                .about("jup.ag")
+                .setting(AppSettings::SubcommandRequiredElseHelp)
+                .setting(AppSettings::InferSubcommands)
+                .subcommand(
+                    SubCommand::with_name("quote")
+                        .about("Get swap quotes")
+                        .arg(
+                            Arg::with_name("from_token")
+                                .value_name("SOURCE TOKEN")
+                                .takes_value(true)
+                                .required(true)
+                                .validator(is_valid_token)
+                                .default_value("wSOL")
+                                .help("Source token"),
+                        )
+                        .arg(
+                            Arg::with_name("to_token")
+                                .value_name("DESTINATION TOKEN")
+                                .takes_value(true)
+                                .required(true)
+                                .validator(is_valid_token)
+                                .default_value("USDC")
+                                .help("Destination token"),
+                        )
+                        .arg(
+                            Arg::with_name("amount")
+                                .value_name("AMOUNT")
+                                .takes_value(true)
+                                .validator(is_amount)
+                                .required(true)
+                                .default_value("1")
+                                .help("Amount of the source token to swap"),
+                        )
+                        .arg(
+                            Arg::with_name("slippage")
+                                .long("slippage")
+                                .value_name("PERCENT")
+                                .takes_value(true)
+                                .validator(is_parsable::<f64>)
+                                .default_value("1")
+                                .help("Maximum slippage percent"),
+                        ),
+                )
+                .subcommand(
+                    SubCommand::with_name("swap")
+                        .about("Swap tokens")
+                        .arg(
+                            Arg::with_name("address")
+                                .value_name("KEYPAIR")
+                                .takes_value(true)
+                                .required(true)
+                                .validator(is_valid_signer)
+                                .help("Address of the account holding the tokens to swap")
+                        )
+                        .arg(
+                            Arg::with_name("from_token")
+                                .value_name("SOURCE TOKEN")
+                                .takes_value(true)
+                                .required(true)
+                                .validator(is_valid_token)
+                                .help("Source token"),
+                        )
+                        .arg(
+                            Arg::with_name("to_token")
+                                .value_name("DESTINATION TOKEN")
+                                .takes_value(true)
+                                .required(true)
+                                .validator(is_valid_token)
+                                .help("Destination token"),
+                        )
+                        .arg(
+                            Arg::with_name("amount")
+                                .value_name("SOURCE TOKEN AMOUNT")
+                                .takes_value(true)
+                                .validator(is_amount)
+                                .required(true)
+                                .help("Amount of tokens to swap"),
+                        )
+                        .arg(
+                            Arg::with_name("slippage")
+                                .long("slippage")
+                                .value_name("PERCENT")
+                                .takes_value(true)
+                                .validator(is_parsable::<f64>)
+                                .default_value("1")
+                                .help("Maximum slippage percent"),
+                        )
+                )
         )
         .subcommand(
             SubCommand::with_name("tulip")
@@ -4687,6 +4961,40 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     vec![authority_signer],
                 )
                 .await?;
+            }
+            _ => unreachable!(),
+        },
+        ("jup", Some(jup_matches)) => match jup_matches.subcommand() {
+            ("quote", Some(arg_matches)) => {
+                let from_token = value_t_or_exit!(arg_matches, "from_token", Token);
+                let to_token = value_t_or_exit!(arg_matches, "to_token", Token);
+                let ui_amount = value_t_or_exit!(arg_matches, "amount", f64);
+                let slippage = value_t_or_exit!(arg_matches, "slippage", f64);
+
+                process_jup_quote(from_token, to_token, ui_amount, slippage).await?;
+            }
+            ("swap", Some(arg_matches)) => {
+                let (signer, address) = signer_of(arg_matches, "address", &mut wallet_manager)?;
+                let from_token = value_t_or_exit!(arg_matches, "from_token", Token);
+                let to_token = value_t_or_exit!(arg_matches, "to_token", Token);
+                let ui_amount = value_t_or_exit!(arg_matches, "amount", f64);
+                let slippage = value_t_or_exit!(arg_matches, "slippage", f64);
+
+                let signer = signer.expect("signer");
+                let address = address.expect("address");
+
+                process_jup_swap(
+                    &mut db,
+                    &rpc_client,
+                    address,
+                    from_token,
+                    to_token,
+                    ui_amount,
+                    slippage,
+                    vec![signer],
+                )
+                .await?;
+                process_sync_swaps(&mut db, &rpc_client, &notifier).await?;
             }
             _ => unreachable!(),
         },
