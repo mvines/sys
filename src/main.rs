@@ -4,13 +4,14 @@ mod db;
 mod exchange;
 mod field_as_string;
 mod ftx_exchange;
+mod get_transaction_balance_change;
 mod notifier;
 mod rpc_client_utils;
 mod token;
 mod tulip;
 
 use {
-    crate::token::*,
+    crate::{get_transaction_balance_change::*, token::*},
     chrono::prelude::*,
     chrono_humanize::HumanTime,
     clap::{
@@ -38,7 +39,6 @@ use {
         system_instruction, system_program,
         transaction::Transaction,
     },
-    solana_transaction_status::UiTransactionEncoding,
     std::{
         collections::{BTreeMap, HashSet},
         fs,
@@ -1461,66 +1461,25 @@ async fn process_account_add(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (when, amount, last_update_epoch, kind) = match signature {
         Some(signature) => {
-            let confirmed_transaction =
-                rpc_client.get_transaction(&signature, UiTransactionEncoding::Base64)?;
-
-            let slot = confirmed_transaction.slot;
-            let when = match confirmed_transaction.block_time {
-                Some(block_time) => Some(
-                    NaiveDateTime::from_timestamp_opt(block_time, 0)
-                        .ok_or_else(|| format!("Invalid block time for slot {}", slot))?
-                        .date(),
-                ),
-                None => {
-                    println!(
-                        "Block time not available for slot {}, using `--when` argument instead",
-                        slot
-                    );
-                    when
-                }
+            let (address, address_is_token) = match token.token() {
+                Some(token) => (token.ata(&address), true),
+                None => (address, false),
             };
 
-            let meta = confirmed_transaction
-                .transaction
-                .meta
-                .ok_or("Transaction metadata not available")?;
+            let GetTransactionAddrssBalanceChange {
+                post_amount,
+                slot,
+                when: block_time,
+                ..
+            } = get_transaction_balance_change(rpc_client, &signature, &address, address_is_token)?;
 
-            if meta.err.is_some() {
-                return Err("Transaction was not successful".into());
-            }
-
-            let transaction = confirmed_transaction
-                .transaction
-                .transaction
-                .decode()
-                .ok_or("Unable to decode transaction")?;
-
-            let account_index = transaction
-                .message
-                .static_account_keys()
-                .iter()
-                .position(|k| {
-                    *k == match token.token() {
-                        None => address,
-                        Some(token) => token.ata(&address),
-                    }
-                })
-                .ok_or_else(|| format!("{} not found in the transaction {}", address, signature))?;
-
-            let amount = match token.token() {
-                None => meta.post_balances[account_index],
-                Some(_) => u64::from_str(
-                    &meta
-                        .post_token_balances
-                        .unwrap()
-                        .iter()
-                        .find(|ptb| ptb.account_index as usize == account_index)
-                        .unwrap()
-                        .ui_token_amount
-                        .amount,
-                )
-                .unwrap_or_default(),
-            };
+            let when = block_time.map(|dt| dt.date()).or_else(|| {
+                println!(
+                    "Block time not available for slot {}, using `--when` argument instead",
+                    slot
+                );
+                when
+            });
 
             let epoch_schdule = rpc_client.get_epoch_schedule()?;
             let last_update_epoch = epoch_schdule
@@ -1530,7 +1489,7 @@ async fn process_account_add(
 
             (
                 when,
-                amount,
+                post_amount,
                 last_update_epoch,
                 LotAcquistionKind::Transaction { slot, signature },
             )
