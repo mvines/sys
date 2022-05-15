@@ -124,11 +124,10 @@ pub struct PendingTransfer {
 
     #[serde(with = "field_as_string")]
     pub from_address: Pubkey,
+    pub from_token: MaybeToken,
     #[serde(with = "field_as_string")]
     pub to_address: Pubkey,
-
-    #[serde(default = "MaybeToken::SOL")]
-    pub token: MaybeToken,
+    pub to_token: MaybeToken,
 
     pub lots: Vec<Lot>,
 }
@@ -617,8 +616,9 @@ impl Db {
                 signature,
                 last_valid_block_height,
                 from_address,
+                from_token: token,
                 to_address: deposit_address,
-                token,
+                to_token: token,
                 lots: from_account.extract_lots(self, amount, lot_numbers)?,
             },
         };
@@ -1377,27 +1377,31 @@ impl Db {
         &mut self,
         signature: Signature,
         last_valid_block_height: u64,
-        from_address: Pubkey,
         amount: Option<u64>, // None = all
+        from_address: Pubkey,
+        from_token: MaybeToken,
         to_address: Pubkey,
-        token: MaybeToken,
+        to_token: MaybeToken,
         lot_numbers: Option<HashSet<usize>>,
     ) -> DbResult<()> {
+        assert_eq!(from_token.mint(), to_token.mint());
+
         let mut pending_transfers = self.pending_transfers();
 
         let mut from_account = self
-            .get_account(from_address, token)
-            .ok_or(DbError::AccountDoesNotExist(from_address, token))?;
+            .get_account(from_address, from_token)
+            .ok_or(DbError::AccountDoesNotExist(from_address, from_token))?;
         let _to_account = self
-            .get_account(to_address, token)
-            .ok_or(DbError::AccountDoesNotExist(to_address, token))?;
+            .get_account(to_address, to_token)
+            .ok_or(DbError::AccountDoesNotExist(to_address, to_token))?;
 
         pending_transfers.push(PendingTransfer {
             signature,
             last_valid_block_height,
             from_address,
+            from_token,
             to_address,
-            token,
+            to_token,
             lots: from_account.extract_lots(
                 self,
                 amount.unwrap_or(from_account.last_update_balance),
@@ -1417,29 +1421,32 @@ impl Db {
     ) -> DbResult<()> {
         let PendingTransfer {
             from_address,
+            from_token,
             to_address,
+            to_token,
             lots,
-            token,
             ..
         } = pending_transfer;
 
         let mut from_account = self
-            .get_account(from_address, token)
-            .ok_or(DbError::AccountDoesNotExist(from_address, token))?;
+            .get_account(from_address, from_token)
+            .ok_or(DbError::AccountDoesNotExist(from_address, from_token))?;
         let mut to_account = self
-            .get_account(to_address, token)
-            .ok_or(DbError::AccountDoesNotExist(to_address, token))?;
+            .get_account(to_address, to_token)
+            .ok_or(DbError::AccountDoesNotExist(to_address, to_token))?;
 
         self.auto_save(false)?;
 
         if let Some(when) = success {
-            match (token.fiat_fungible(), track_fiat_lots) {
+            assert_eq!(from_token.fiat_fungible(), to_token.fiat_fungible());
+
+            match (from_token.fiat_fungible(), track_fiat_lots) {
                 (false, _) | (true, true) => {
                     to_account.merge_lots(lots);
                 }
                 (true, false) => {
                     let _ = self.record_lots_disposal(
-                        token,
+                        from_token,
                         lots,
                         LotDisposalKind::Other {
                             description: "fiat".into(),

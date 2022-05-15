@@ -46,7 +46,7 @@ impl Token {
             Token::tuSOL => pubkey!("H4Q3hDbuMUw8Bu72Ph8oV2xMQ7BFNbekpfQZKS2xF7jW"),
             Token::mSOL => pubkey!("mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So"),
             Token::tumSOL => pubkey!("8cn7JcYVjDZesLa3RTt3NXne4WcDw9PdUneQWuByehwW"),
-            Token::wSOL => pubkey!("So11111111111111111111111111111111111111112"),
+            Token::wSOL => spl_token::native_mint::id(),
         }
     }
 
@@ -61,7 +61,7 @@ impl Token {
             Token::tuSOL => "🌷◎",
             Token::mSOL => "m◎",
             Token::tumSOL => "🌷m◎",
-            Token::wSOL => "w◎",
+            Token::wSOL => "(◎)",
         }
     }
 

@@ -296,7 +296,11 @@ async fn process_sync_exchange(
             )?
             .value;
 
-        let token = pending_deposit.transfer.token;
+        assert_eq!(
+            pending_deposit.transfer.from_token,
+            pending_deposit.transfer.to_token
+        );
+        let token = pending_deposit.transfer.to_token;
 
         if let Some(deposit_info) = recent_deposits.iter().find(|deposit_info| {
             deposit_info.tx_id == pending_deposit.transfer.signature.to_string()
@@ -2210,8 +2214,9 @@ async fn process_account_merge<T: Signers>(
     db.record_transfer(
         signature,
         last_valid_block_height,
-        from_address,
         None,
+        from_address,
+        token,
         into_address,
         token,
         None,
@@ -2493,8 +2498,9 @@ async fn process_account_sweep<T: Signers>(
     db.record_transfer(
         signature,
         last_valid_block_height,
-        from_address,
         Some(sweep_amount),
+        from_address,
+        token,
         to_address,
         token,
         None,
@@ -2586,8 +2592,9 @@ async fn process_account_split<T: Signers>(
     db.record_transfer(
         signature,
         last_valid_block_height,
-        from_address,
         Some(amount),
+        from_address,
+        token,
         into_keypair.pubkey(),
         token,
         lot_numbers,
@@ -2771,6 +2778,161 @@ async fn process_account_sync(
     Ok(())
 }
 
+async fn process_account_wrap<T: Signers>(
+    db: &mut Db,
+    rpc_client: &RpcClient,
+    address: Pubkey,
+    amount: u64,
+    lot_numbers: Option<HashSet<usize>>,
+    authority_address: Pubkey,
+    signers: T,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let sol = MaybeToken::SOL();
+    let wsol = Token::wSOL;
+    let wsol_address = wsol.ata(&address);
+
+    let _from_account = db
+        .get_account(address, sol)
+        .ok_or_else(|| format!("SOL account does not exist for {}", address))?;
+
+    let _to_account = db
+        .get_account(address, wsol.into())
+        .ok_or_else(|| format!("Wrapped SOL account does not exist for {}", address))?;
+
+    let (recent_blockhash, last_valid_block_height) =
+        rpc_client.get_latest_blockhash_with_commitment(rpc_client.commitment())?;
+
+    let instructions = [
+        system_instruction::transfer(&address, &wsol_address, amount),
+        spl_token::instruction::sync_native(&spl_token::id(), &wsol_address).unwrap(),
+    ];
+
+    let message = Message::new(&instructions, Some(&authority_address));
+
+    let mut transaction = Transaction::new_unsigned(message);
+    transaction.message.recent_blockhash = recent_blockhash;
+    let simulation_result = rpc_client.simulate_transaction(&transaction)?.value;
+    if simulation_result.err.is_some() {
+        return Err(format!("Simulation failure: {:?}", simulation_result).into());
+    }
+
+    println!("Wrapping {} for {}", wsol.ui_amount(amount), address);
+
+    transaction.try_sign(&signers, recent_blockhash)?;
+
+    let signature = transaction.signatures[0];
+    println!("Transaction signature: {}", signature);
+
+    db.record_transfer(
+        signature,
+        last_valid_block_height,
+        Some(amount),
+        address,
+        sol,
+        address,
+        wsol.into(),
+        lot_numbers,
+    )?;
+
+    if !send_transaction_until_expired(rpc_client, &transaction, last_valid_block_height) {
+        db.cancel_transfer(signature)?;
+        return Err("Wrap failed".into());
+    }
+    println!("Wrap confirmed: {}", signature);
+    let when = get_signature_date(rpc_client, signature).await?;
+    db.confirm_transfer(signature, when)?;
+
+    Ok(())
+}
+
+async fn process_account_unwrap<T: Signers>(
+    db: &mut Db,
+    rpc_client: &RpcClient,
+    address: Pubkey,
+    amount: u64,
+    lot_numbers: Option<HashSet<usize>>,
+    authority_address: Pubkey,
+    signers: T,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let sol = MaybeToken::SOL();
+    let wsol = Token::wSOL;
+
+    let _from_account = db
+        .get_account(address, wsol.into())
+        .ok_or_else(|| format!("Wrapped SOL account does not exist for {}", address))?;
+
+    let _to_account = db
+        .get_account(address, sol)
+        .ok_or_else(|| format!("SOL account does not exist for {}", address))?;
+
+    let (recent_blockhash, last_valid_block_height) =
+        rpc_client.get_latest_blockhash_with_commitment(rpc_client.commitment())?;
+
+    let ephemeral_token_account = Keypair::new();
+
+    let instructions = [
+        spl_associated_token_account::create_associated_token_account(
+            &authority_address,
+            &ephemeral_token_account.pubkey(),
+            &wsol.mint(),
+        ),
+        spl_token::instruction::transfer(
+            &spl_token::id(),
+            &wsol.ata(&address),
+            &wsol.ata(&ephemeral_token_account.pubkey()),
+            &authority_address,
+            &[],
+            amount,
+        )
+        .unwrap(),
+        spl_token::instruction::close_account(
+            &spl_token::id(),
+            &wsol.ata(&ephemeral_token_account.pubkey()),
+            &address,
+            &ephemeral_token_account.pubkey(),
+            &[],
+        )
+        .unwrap(),
+    ];
+
+    let message = Message::new(&instructions, Some(&authority_address));
+
+    let mut transaction = Transaction::new_unsigned(message);
+    transaction.message.recent_blockhash = recent_blockhash;
+    let simulation_result = rpc_client.simulate_transaction(&transaction)?.value;
+    if simulation_result.err.is_some() {
+        return Err(format!("Simulation failure: {:?}", simulation_result).into());
+    }
+
+    println!("Unwrapping {} for {}", wsol.ui_amount(amount), address);
+
+    transaction.partial_sign(&signers, recent_blockhash);
+    transaction.try_sign(&[&ephemeral_token_account], recent_blockhash)?;
+
+    let signature = transaction.signatures[0];
+    println!("Transaction signature: {}", signature);
+
+    db.record_transfer(
+        signature,
+        last_valid_block_height,
+        Some(amount),
+        address,
+        wsol.into(),
+        address,
+        sol,
+        lot_numbers,
+    )?;
+
+    if !send_transaction_until_expired(rpc_client, &transaction, last_valid_block_height) {
+        db.cancel_transfer(signature)?;
+        return Err("Wrap failed".into());
+    }
+    println!("Unwrap confirmed: {}", signature);
+    let when = get_signature_date(rpc_client, signature).await?;
+    db.confirm_transfer(signature, when)?;
+
+    Ok(())
+}
 async fn process_account_sync_pending_transfers(
     db: &mut Db,
     rpc_client: &RpcClient,
@@ -2889,8 +3051,8 @@ async fn process_account_sync_sweep(
                         let signature = Signature::default();
                         db.record_transfer(
                             signature,
-                            transitory_sweep_stake_address,
                             None,
+                            transitory_sweep_stake_address,
                             sweep_stake_account_info.address,
                             None,
                         )?;
@@ -2959,8 +3121,9 @@ async fn process_account_sync_sweep(
         db.record_transfer(
             signature,
             last_valid_block_height,
-            transitory_sweep_stake_address,
             None,
+            transitory_sweep_stake_address,
+            token,
             sweep_stake_account_info.address,
             token,
             None,
@@ -3418,6 +3581,80 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .validator(is_valid_pubkey)
                                 .help("Account to synchronize"),
                         ),
+                )
+                .subcommand(
+                    SubCommand::with_name("wrap")
+                        .about("Wrap SOL into wSOL")
+                        .arg(
+                            Arg::with_name("address")
+                                .value_name("ADDRESS")
+                                .takes_value(true)
+                                .required(true)
+                                .validator(is_valid_pubkey)
+                                .help("Address of the account to wrap")
+                        )
+                        .arg(
+                            Arg::with_name("amount")
+                                .value_name("AMOUNT")
+                                .takes_value(true)
+                                .validator(is_amount)
+                                .required(true)
+                                .help("The amount to wrap, in SOL"),
+                        )
+                        .arg(
+                            Arg::with_name("by")
+                                .long("by")
+                                .value_name("KEYPAIR")
+                                .takes_value(true)
+                                .validator(is_valid_signer)
+                                .help("Optional authority for the wrap"),
+                        )
+                        .arg(
+                            Arg::with_name("lot_numbers")
+                                .long("lot")
+                                .value_name("LOT NUMBER")
+                                .takes_value(true)
+                                .multiple(true)
+                                .validator(is_parsable::<usize>)
+                                .help("Lot to fund the wrap from [default: first in, first out]"),
+                        )
+                )
+                .subcommand(
+                    SubCommand::with_name("unwrap")
+                        .about("Unwrap SOL from wSOL")
+                        .arg(
+                            Arg::with_name("address")
+                                .value_name("ADDRESS")
+                                .takes_value(true)
+                                .required(true)
+                                .validator(is_valid_pubkey)
+                                .help("Address of the account to unwrap")
+                        )
+                        .arg(
+                            Arg::with_name("amount")
+                                .value_name("AMOUNT")
+                                .takes_value(true)
+                                .validator(is_amount)
+                                .required(true)
+                                .help("The amount to unwrap, in SOL"),
+                        )
+                        .arg(
+                            Arg::with_name("by")
+                                .long("by")
+                                .value_name("KEYPAIR")
+                                .takes_value(true)
+                                .validator(is_valid_signer)
+                                .help("Optional authority for the unwrap"),
+                        )
+                        .arg(
+                            Arg::with_name("lot_numbers")
+                                .long("lot")
+                                .value_name("LOT NUMBER")
+                                .takes_value(true)
+                                .multiple(true)
+                                .validator(is_parsable::<usize>)
+                                .help("Lot to fund the unwrap from [default: first in, first out]"),
+                        )
                 )
                 .subcommand(
                     SubCommand::with_name("lot")
@@ -4361,6 +4598,70 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let address = pubkey_of(arg_matches, "address");
                 process_account_sync(&mut db, &rpc_client, address, &notifier).await?;
             }
+            ("wrap", Some(arg_matches)) => {
+                let address = pubkey_of(arg_matches, "address").unwrap();
+                let amount = MaybeToken::SOL().amount(value_t_or_exit!(arg_matches, "amount", f64));
+                let lot_numbers = values_t!(arg_matches, "lot_numbers", usize)
+                    .ok()
+                    .map(|x| x.into_iter().collect());
+
+                let (authority_signer, authority_address) = if arg_matches.is_present("by") {
+                    signer_of(arg_matches, "by", &mut wallet_manager)?
+                } else {
+                    signer_of(arg_matches, "address", &mut wallet_manager).map_err(|err| {
+                        format!(
+                            "Authority not found, consider using the `--by` argument): {}",
+                            err
+                        )
+                    })?
+                };
+
+                let authority_address = authority_address.expect("authority_address");
+                let authority_signer = authority_signer.expect("authority_signer");
+
+                process_account_wrap(
+                    &mut db,
+                    &rpc_client,
+                    address,
+                    amount,
+                    lot_numbers,
+                    authority_address,
+                    vec![authority_signer],
+                )
+                .await?;
+            }
+            ("unwrap", Some(arg_matches)) => {
+                let address = pubkey_of(arg_matches, "address").unwrap();
+                let amount = MaybeToken::SOL().amount(value_t_or_exit!(arg_matches, "amount", f64));
+                let lot_numbers = values_t!(arg_matches, "lot_numbers", usize)
+                    .ok()
+                    .map(|x| x.into_iter().collect());
+
+                let (authority_signer, authority_address) = if arg_matches.is_present("by") {
+                    signer_of(arg_matches, "by", &mut wallet_manager)?
+                } else {
+                    signer_of(arg_matches, "address", &mut wallet_manager).map_err(|err| {
+                        format!(
+                            "Authority not found, consider using the `--by` argument): {}",
+                            err
+                        )
+                    })?
+                };
+
+                let authority_address = authority_address.expect("authority_address");
+                let authority_signer = authority_signer.expect("authority_signer");
+
+                process_account_unwrap(
+                    &mut db,
+                    &rpc_client,
+                    address,
+                    amount,
+                    lot_numbers,
+                    authority_address,
+                    vec![authority_signer],
+                )
+                .await?;
+            }
             _ => unreachable!(),
         },
         ("tulip", Some(tulip_matches)) => match tulip_matches.subcommand() {
@@ -4435,7 +4736,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     } else {
                         for pending_deposit in pending_deposits {
-                            let token = pending_deposit.transfer.token;
+                            let token = pending_deposit.transfer.to_token;
+                            assert_eq!(
+                                pending_deposit.transfer.from_token,
+                                pending_deposit.transfer.to_token
+                            );
+
                             println!(
                                 "{} deposit pending: {}{} (signature: {})",
                                 token,
