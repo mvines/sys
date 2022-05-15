@@ -31,7 +31,7 @@ impl From<&Token> for TulipLending {
     fn from(token: &Token) -> Self {
         match token {
             Token::tuUSDC | Token::USDC => TulipLending::usdc(),
-            Token::tuSOL => TulipLending::sol(),
+            Token::tuSOL | Token::wSOL => TulipLending::sol(),
             Token::mSOL | Token::tumSOL => TulipLending::msol(),
         }
     }

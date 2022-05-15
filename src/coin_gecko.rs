@@ -32,6 +32,7 @@ fn token_to_coin(token: &MaybeToken) -> Result<&'static str, Box<dyn std::error:
         Some(token) => match token {
             Token::USDC => "usd-coin",
             Token::mSOL => "msol",
+            Token::wSOL => "solana",
             unsupported_token => {
                 return Err(format!(
                     "Coin Gecko price data not available for {}",
