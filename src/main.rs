@@ -969,15 +969,12 @@ async fn process_exchange_sell(
 async fn process_tulip_deposit<T: Signers>(
     db: &mut Db,
     rpc_client: &RpcClient,
+    liquidity_token: MaybeToken,
     collateral_token: Token,
     liquidity_amount: Option<u64>,
     address: Pubkey,
     signers: T,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let liquidity_token = collateral_token
-        .liquidity_token()
-        .ok_or_else(|| format!("{} is not a collateral token", collateral_token))?;
-
     let sol = MaybeToken::SOL();
     let minimum_lamport_balance = sol.amount(0.01);
     let from_account_lamports = sol.balance(rpc_client, &address)?;
@@ -1028,7 +1025,13 @@ async fn process_tulip_deposit<T: Signers>(
         liquidity_token_price * Decimal::from_f64(liquidity_token_ui_amount).unwrap()
     );
 
-    let instructions = tulip::deposit(rpc_client, address, liquidity_token, liquidity_amount)?;
+    let instructions = tulip::deposit(
+        rpc_client,
+        address,
+        liquidity_token,
+        collateral_token,
+        liquidity_amount,
+    )?;
 
     let (recent_blockhash, last_valid_block_height) =
         rpc_client.get_latest_blockhash_with_commitment(rpc_client.commitment())?;
@@ -1079,15 +1082,12 @@ async fn process_tulip_deposit<T: Signers>(
 async fn process_tulip_withdraw<T: Signers>(
     db: &mut Db,
     rpc_client: &RpcClient,
+    liquidity_token: MaybeToken,
     collateral_token: Token,
     liquidity_amount: Option<u64>,
     address: Pubkey,
     signers: T,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let liquidity_token = collateral_token
-        .liquidity_token()
-        .ok_or_else(|| format!("{} is not a collateral token", collateral_token))?;
-
     let collateral_tracked_account = db
         .get_account(address, collateral_token.into())
         .ok_or_else(|| format!("Unknown account {} ({})", address, collateral_token))?;
@@ -1130,7 +1130,13 @@ async fn process_tulip_withdraw<T: Signers>(
         collateral_token_price * Decimal::from_f64(collateral_token_ui_amount).unwrap()
     );
 
-    let instructions = tulip::withdraw(rpc_client, address, collateral_token, collateral_amount)?;
+    let instructions = tulip::withdraw(
+        rpc_client,
+        address,
+        liquidity_token,
+        collateral_token,
+        collateral_amount,
+    )?;
 
     let (recent_blockhash, last_valid_block_height) =
         rpc_client.get_latest_blockhash_with_commitment(rpc_client.commitment())?;
@@ -3732,20 +3738,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     SubCommand::with_name("deposit")
                         .about("Deposit liquidity")
                         .arg(
-                            Arg::with_name("token")
-                                .value_name("SPL Token")
+                            Arg::with_name("collateral_token")
+                                .value_name("COLLATERAL_TOKEN")
                                 .takes_value(true)
                                 .required(true)
                                 .validator(is_valid_token)
-                                .help("Collateral token type"),
+                                .possible_values(&["tuSOL", "tumSOL", "tuUSDC"])
+                                .help("Collateral token"),
                         )
                         .arg(
                             Arg::with_name("amount")
-                                .value_name("AMOUNT")
+                                .value_name("LIQUIDITY_AMOUNT")
                                 .takes_value(true)
                                 .validator(is_amount_or_all)
                                 .required(true)
-                                .help("Amount of liquidity to deposit; accepts keyword ALL"),
+                                .help("Amount of liquidity tokens to deposit; accepts keyword ALL"),
+                        )
+                        .arg(
+                            Arg::with_name("liquidity_token")
+                                .value_name("LIQUIDITY_TOKEN")
+                                .takes_value(true)
+                                .validator(is_valid_token)
+                                .help("Override the liquidity token for the given collateral token. \
+                                       Typically used to specify `wSOL` instead of `SOL` \
+                                       [default: deduced from the collateral token]"),
                         )
                         .arg(
                             Arg::with_name("from")
@@ -3761,12 +3777,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     SubCommand::with_name("withdraw")
                         .about("Withdraw liquidity")
                         .arg(
-                            Arg::with_name("token")
-                                .value_name("SPL Token")
+                            Arg::with_name("collateral_token")
+                                .value_name("COLLATERAL_TOKEN")
                                 .takes_value(true)
                                 .required(true)
                                 .validator(is_valid_token)
-                                .help("Collateral token type"),
+                                .possible_values(&["tuSOL", "tumSOL", "tuUSDC"])
+                                .help("Collateral token"),
                         )
                         .arg(
                             Arg::with_name("to")
@@ -3778,11 +3795,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         )
                         .arg(
                             Arg::with_name("amount")
-                                .value_name("AMOUNT")
+                                .value_name("LIQUIDITY_AMOUNT")
                                 .takes_value(true)
                                 .validator(is_amount_or_all)
                                 .required(true)
-                                .help("Amount of liquidity to withdraw; accepts keyword ALL"),
+                                .help("Amount of liquidity tokens to withdraw; accepts keyword ALL"),
+                        )
+                        .arg(
+                            Arg::with_name("liquidity_token")
+                                .value_name("LIQUIDITY_TOKEN")
+                                .takes_value(true)
+                                .validator(is_valid_token)
+                                .help("Override the liquidity token for the given collateral token. \
+                                       Typically used to specify `wSOL` instead of `SOL` \
+                                       [default: deduced from the collateral token]"),
                         )
                 )
         );
@@ -4666,11 +4692,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
         ("tulip", Some(tulip_matches)) => match tulip_matches.subcommand() {
             ("deposit", Some(arg_matches)) => {
-                let token = value_t_or_exit!(arg_matches, "token", Token);
-                let amount = match arg_matches.value_of("amount").unwrap() {
+                let collateral_token = value_t_or_exit!(arg_matches, "collateral_token", Token);
+                let liquidity_token = value_t!(arg_matches, "liquidity_token", Token)
+                    .map(|t| t.into())
+                    .or_else(|_| {
+                        collateral_token.liquidity_token().ok_or_else(|| {
+                            format!("{} is not a collateral token", collateral_token)
+                        })
+                    })?;
+                let liquidity_amount = match arg_matches.value_of("amount").unwrap() {
                     "ALL" => None,
-                    amount => Some(token.amount(amount.parse().unwrap())),
+                    amount => Some(liquidity_token.amount(amount.parse().unwrap())),
                 };
+
                 let (signer, address) = signer_of(arg_matches, "from", &mut wallet_manager)
                     .map_err(|err| {
                         format!(
@@ -4681,15 +4715,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let address = address.expect("address");
                 let signer = signer.expect("signer");
 
-                process_tulip_deposit(&mut db, &rpc_client, token, amount, address, vec![signer])
-                    .await?;
+                process_tulip_deposit(
+                    &mut db,
+                    &rpc_client,
+                    liquidity_token,
+                    collateral_token,
+                    liquidity_amount,
+                    address,
+                    vec![signer],
+                )
+                .await?;
                 process_sync_swaps(&mut db, &rpc_client, &notifier).await?;
             }
             ("withdraw", Some(arg_matches)) => {
-                let token = value_t_or_exit!(arg_matches, "token", Token);
-                let amount = match arg_matches.value_of("amount").unwrap() {
+                let collateral_token = value_t_or_exit!(arg_matches, "collateral_token", Token);
+                let liquidity_token = collateral_token
+                    .liquidity_token()
+                    .ok_or_else(|| format!("{} is not a collateral token", collateral_token))?;
+                let liquidity_amount = match arg_matches.value_of("amount").unwrap() {
                     "ALL" => None,
-                    amount => Some(token.amount(amount.parse().unwrap())),
+                    amount => Some(liquidity_token.amount(amount.parse().unwrap())),
                 };
                 let (signer, address) =
                     signer_of(arg_matches, "to", &mut wallet_manager).map_err(|err| {
@@ -4701,8 +4746,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let address = address.expect("address");
                 let signer = signer.expect("signer");
 
-                process_tulip_withdraw(&mut db, &rpc_client, token, amount, address, vec![signer])
-                    .await?;
+                process_tulip_withdraw(
+                    &mut db,
+                    &rpc_client,
+                    liquidity_token,
+                    collateral_token,
+                    liquidity_amount,
+                    address,
+                    vec![signer],
+                )
+                .await?;
                 process_sync_swaps(&mut db, &rpc_client, &notifier).await?;
             }
             _ => unreachable!(),

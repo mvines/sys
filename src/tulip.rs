@@ -169,13 +169,15 @@ pub async fn get_current_price(
 pub fn deposit(
     rpc_client: &RpcClient,
     address: Pubkey,
-    token: MaybeToken,
+    liquidity_token: MaybeToken,
+    collateral_token: Token,
     liquidity_amount: u64,
 ) -> Result<Vec<Instruction>, Box<dyn std::error::Error>> {
     do_lending(
         rpc_client,
         &address,
-        token,
+        liquidity_token,
+        collateral_token,
         liquidity_amount,
         |tulip_lending, liquidity_ata_address, collateral_ata_address| {
             deposit_reserve_liquidity(
@@ -196,13 +198,15 @@ pub fn deposit(
 pub fn withdraw(
     rpc_client: &RpcClient,
     address: Pubkey,
-    token: Token,
+    liquidity_token: MaybeToken,
+    collateral_token: Token,
     collateral_amount: u64,
 ) -> Result<Vec<Instruction>, Box<dyn std::error::Error>> {
     do_lending(
         rpc_client,
         &address,
-        token.into(),
+        liquidity_token,
+        collateral_token,
         0,
         |tulip_lending, liquidity_ata_address, collateral_ata_address| {
             redeem_reserve_collateral(
@@ -223,18 +227,32 @@ pub fn withdraw(
 fn do_lending<F>(
     rpc_client: &RpcClient,
     address: &Pubkey,
-    token: MaybeToken,
+    liquidity_token: MaybeToken,
+    collateral_token: Token,
     liquidity_amount: u64,
     f: F,
 ) -> Result<Vec<Instruction>, Box<dyn std::error::Error>>
 where
     F: FnOnce(&TulipLending, Pubkey, Pubkey) -> Instruction,
 {
-    let tulip_lending = TulipLending::from(&token);
+    let tulip_lending = TulipLending::from(&collateral_token);
+    if tulip_lending.liquidity_token.mint() != liquidity_token.mint() {
+        return Err(format!(
+            "Invalid liquidity token: {} (expected mint: {})",
+            liquidity_token,
+            tulip_lending.liquidity_token.mint()
+        )
+        .into());
+    }
+    assert_eq!(
+        tulip_lending.collateral_token.mint(),
+        collateral_token.mint()
+    );
+
     let collateral_ata_address = tulip_lending.collateral_ata_address(rpc_client, address)?;
 
     let (liquidity_ata_address, setup_instructions, shutdown_instructions) =
-        if tulip_lending.liquidity_token.token().is_none() {
+        if liquidity_token.token().is_none() {
             let space = spl_token::state::Account::LEN;
             let minimum_balance_for_rent_exemption =
                 rpc_client.get_minimum_balance_for_rent_exemption(space)?;
@@ -275,7 +293,7 @@ where
             )
         } else {
             (
-                TulipLending::get_ata(rpc_client, address, &tulip_lending.liquidity_token.mint())
+                TulipLending::get_ata(rpc_client, address, &liquidity_token.mint())
                     .map_err(|err| format!("Liquidity token may not exist: {}", err))?,
                 vec![],
                 vec![],
