@@ -1498,7 +1498,7 @@ fn liquidity_token_ui_amount(
                         liquidity_ui_amount.separated_string_with_fixed_place(2),
                         match current_apr {
                             Some(current_apr) if include_apr =>
-                                format!(", {:.2}% APY", current_apr),
+                                format!(", {:.2}% APR", current_apr),
                             _ => String::new(),
                         }
                     ),
