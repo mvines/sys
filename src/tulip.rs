@@ -154,7 +154,7 @@ pub async fn get_current_liquidity_token_rate(
         .unwrap())
 }
 
-pub async fn get_current_lending_apy(
+pub async fn get_current_lending_apr(
     rpc_client: &RpcClient,
     token: &MaybeToken,
 ) -> Result<f64, Box<dyn std::error::Error>> {
@@ -166,12 +166,12 @@ pub async fn get_current_lending_apy(
 
     let reserve = Reserve::unpack(&reserve_account.data)?;
 
-    let apy = reserve
+    let apr = reserve
         .liquidity
         .utilization_rate()?
         .try_mul(reserve.current_borrow_rate()?)?;
 
-    Ok(100. * apy.to_string().parse::<f64>()?)
+    Ok(100. * apr.to_string().parse::<f64>()?)
 }
 
 pub async fn get_current_price(

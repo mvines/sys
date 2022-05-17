@@ -1470,21 +1470,21 @@ async fn process_sync_swaps(
 struct LiquidityTokenInfo {
     liquidity_token: MaybeToken,
     current_liquidity_token_rate: Decimal,
-    current_apy: Option<f64>,
+    current_apr: Option<f64>,
 }
 
 fn liquidity_token_ui_amount(
     acquisition_liquidity_ui_amount: Option<f64>,
     ui_amount: f64,
     liquidity_token_info: Option<&LiquidityTokenInfo>,
-    include_apy: bool,
+    include_apr: bool,
 ) -> (String, String) {
     liquidity_token_info
         .map(
             |LiquidityTokenInfo {
                  liquidity_token,
                  current_liquidity_token_rate,
-                 current_apy,
+                 current_apr,
              }| {
                 let liquidity_ui_amount = f64::try_from(
                     Decimal::from_f64(ui_amount).unwrap() * current_liquidity_token_rate,
@@ -1496,9 +1496,9 @@ fn liquidity_token_ui_amount(
                         " [{}{}{}]",
                         liquidity_token.symbol(),
                         liquidity_ui_amount.separated_string_with_fixed_place(2),
-                        match current_apy {
-                            Some(current_apy) if include_apy =>
-                                format!(", {:.2}% APY", current_apy),
+                        match current_apr {
+                            Some(current_apr) if include_apr =>
+                                format!(", {:.2}% APY", current_apr),
                             _ => String::new(),
                         }
                     ),
@@ -1848,7 +1848,7 @@ async fn process_account_list(
                     Some(LiquidityTokenInfo {
                         liquidity_token,
                         current_liquidity_token_rate,
-                        current_apy: tulip::get_current_lending_apy(rpc_client, &account.token)
+                        current_apr: tulip::get_current_lending_apr(rpc_client, &account.token)
                             .await
                             .ok(),
                     })
