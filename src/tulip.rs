@@ -11,7 +11,7 @@ use {
         system_instruction::create_account_with_seed,
     },
     spl_token_lending::instruction::*,
-    tulipv2_sdk_common::lending::reserve::Reserve,
+    tulipv2_sdk_common::{lending::reserve::Reserve, math::common::TryMul},
 };
 
 const TULIP_PROGRAM_ID: Pubkey = pubkey!("4bcFeLv4nydFrsZqV5CgwCVrPhkQKsXtzfy2KyMz7ozM");
@@ -152,6 +152,26 @@ pub async fn get_current_liquidity_token_rate(
                 .unwrap(),
         )
         .unwrap())
+}
+
+pub async fn get_current_lending_apy(
+    rpc_client: &RpcClient,
+    token: &MaybeToken,
+) -> Result<f64, Box<dyn std::error::Error>> {
+    let tulip_lending = TulipLending::from(token);
+    let reserve_account = rpc_client
+        .get_account_with_commitment(&tulip_lending.reserve, rpc_client.commitment())?
+        .value
+        .expect("reserve_account");
+
+    let reserve = Reserve::unpack(&reserve_account.data)?;
+
+    let apy = reserve
+        .liquidity
+        .utilization_rate()?
+        .try_mul(reserve.current_borrow_rate()?)?;
+
+    Ok(100. * apy.to_string().parse::<f64>()?)
 }
 
 pub async fn get_current_price(

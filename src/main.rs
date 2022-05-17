@@ -1470,18 +1470,21 @@ async fn process_sync_swaps(
 struct LiquidityTokenInfo {
     liquidity_token: MaybeToken,
     current_liquidity_token_rate: Decimal,
+    current_apy: Option<f64>,
 }
 
 fn liquidity_token_ui_amount(
     acquisition_liquidity_ui_amount: Option<f64>,
     ui_amount: f64,
     liquidity_token_info: Option<&LiquidityTokenInfo>,
+    include_apy: bool,
 ) -> (String, String) {
     liquidity_token_info
         .map(
             |LiquidityTokenInfo {
                  liquidity_token,
                  current_liquidity_token_rate,
+                 current_apy,
              }| {
                 let liquidity_ui_amount = f64::try_from(
                     Decimal::from_f64(ui_amount).unwrap() * current_liquidity_token_rate,
@@ -1490,9 +1493,14 @@ fn liquidity_token_ui_amount(
 
                 (
                     format!(
-                        " [{}{}]",
+                        " [{}{}{}]",
                         liquidity_token.symbol(),
-                        liquidity_ui_amount.separated_string_with_fixed_place(2)
+                        liquidity_ui_amount.separated_string_with_fixed_place(2),
+                        match current_apy {
+                            Some(current_apy) if include_apy =>
+                                format!(", {:.2}% APY", current_apy),
+                            _ => String::new(),
+                        }
                     ),
                     acquisition_liquidity_ui_amount
                         .map(|acquisition_liquidity_ui_amount| {
@@ -1552,6 +1560,7 @@ async fn println_lot(
         acquisition_liquidity_ui_amount,
         ui_amount,
         liquidity_token_info,
+        false,
     );
 
     let msg = format!(
@@ -1839,13 +1848,16 @@ async fn process_account_list(
                     Some(LiquidityTokenInfo {
                         liquidity_token,
                         current_liquidity_token_rate,
+                        current_apy: tulip::get_current_lending_apy(rpc_client, &account.token)
+                            .await
+                            .ok(),
                     })
                 } else {
                     None
                 };
 
             let (liquidity_ui_amount, _) =
-                liquidity_token_ui_amount(None, ui_amount, liquidity_token_info.as_ref());
+                liquidity_token_ui_amount(None, ui_amount, liquidity_token_info.as_ref(), true);
             let msg = format!(
                 "{} ({}): {}{}{} - {}",
                 account.address,
