@@ -32,6 +32,7 @@ fn token_to_coin(token: &MaybeToken) -> Result<&'static str, Box<dyn std::error:
         Some(token) => match token {
             Token::USDC => "usd-coin",
             Token::mSOL => "msol",
+            Token::stSOL => "lido-staked-sol",
             Token::wSOL => "solana",
             unsupported_token => {
                 return Err(format!(
@@ -56,6 +57,8 @@ pub async fn get_current_price(token: &MaybeToken) -> Result<Decimal, Box<dyn st
     struct Coins {
         solana: Option<CurrencyList>,
         msol: Option<CurrencyList>,
+        #[serde(rename = "lido-staked-sol")]
+        stsol: Option<CurrencyList>,
     }
 
     let coins = reqwest::get(url).await?.json::<Coins>().await?;
@@ -63,6 +66,7 @@ pub async fn get_current_price(token: &MaybeToken) -> Result<Decimal, Box<dyn st
     coins
         .solana
         .or(coins.msol)
+        .or(coins.stsol)
         .ok_or_else(|| format!("Simple price data not available for {}", coin).into())
         .map(|price| Decimal::from_f64(price.usd).unwrap())
 }

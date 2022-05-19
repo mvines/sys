@@ -4035,7 +4035,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .takes_value(true)
                                 .required(true)
                                 .validator(is_valid_token)
-                                .possible_values(&["tuSOL", "tumSOL", "tuUSDC"])
+                                .possible_values(&["tuSOL", "tumSOL", "tustSOL", "tuUSDC"])
                                 .help("Collateral token"),
                         )
                         .arg(
@@ -4074,7 +4074,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .takes_value(true)
                                 .required(true)
                                 .validator(is_valid_token)
-                                .possible_values(&["tuSOL", "tumSOL", "tuUSDC"])
+                                .possible_values(&["tuSOL", "tumSOL", "tustSOL", "tuUSDC"])
                                 .help("Collateral token"),
                         )
                         .arg(

@@ -22,8 +22,8 @@ You can also run `./fetch-release.sh` to download the latest Linux and macOS bin
   * Fetch market info, SOL balance and sell order status
   * Deposit from a vote, stake or system account
   * Initiate and cancel basic limit orders
-* Tulip USDC, SOL and mSOL lending integration
-* Jupiter Aggregator token swaps
+* Tulip USDC, SOL, mSOL and stSOL lending integration
+* Jupiter Aggregator token swaps between supported tokens
 * Automatic epoch reward tracking for vote and stake accounts
 * Validator identity rewards are also automatically tracked at the epoch level, but not directly attributed to each individual block that rewards are credited
 * Lot management for all tracked accounts, with income and long/short capital gain/loss tracking suitable for tax prep purposes
@@ -33,9 +33,12 @@ You can also run `./fetch-release.sh` to download the latest Linux and macOS bin
 * Excel export
 
 ## Examples
-_TODO..._
+Explore the help system instead:
+```
+$ sys --help
+```
 
-For now please explore the help system, `sys --help`. It aims to be self explanatory.
+It aims to be self explanatory. If not feel free to ask, or better yet send a PR to improve the situation
 
 ## Limitations
 * No FMV discount is computed for locked stake rewards

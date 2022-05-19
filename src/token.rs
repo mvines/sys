@@ -32,9 +32,11 @@ use {
 pub enum Token {
     USDC,
     tuUSDC,
-    tuSOL,
     mSOL,
+    stSOL,
+    tuSOL,
     tumSOL,
+    tustSOL,
     wSOL,
 }
 
@@ -43,9 +45,11 @@ impl Token {
         match self {
             Token::USDC => pubkey!("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"),
             Token::tuUSDC => pubkey!("Amig8TisuLpzun8XyGfC5HJHHGUQEscjLgoTWsCCKihg"),
-            Token::tuSOL => pubkey!("H4Q3hDbuMUw8Bu72Ph8oV2xMQ7BFNbekpfQZKS2xF7jW"),
             Token::mSOL => pubkey!("mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So"),
+            Token::stSOL => pubkey!("7dHbWXmci3dT8UFYWYZweBLXgycu7Y3iL6trKn1Y7ARj"),
+            Token::tuSOL => pubkey!("H4Q3hDbuMUw8Bu72Ph8oV2xMQ7BFNbekpfQZKS2xF7jW"),
             Token::tumSOL => pubkey!("8cn7JcYVjDZesLa3RTt3NXne4WcDw9PdUneQWuByehwW"),
+            Token::tustSOL => pubkey!("27CaAiuFW3EwLcTCaiBnexqm5pxht845AHgSuq36byKX"),
             Token::wSOL => spl_token::native_mint::id(),
         }
     }
@@ -58,9 +62,11 @@ impl Token {
         match self {
             Token::USDC => "($)",
             Token::tuUSDC => "🌷($)",
-            Token::tuSOL => "🌷◎",
             Token::mSOL => "m◎",
+            Token::stSOL => "st◎",
+            Token::tuSOL => "🌷◎",
             Token::tumSOL => "🌷m◎",
+            Token::tustSOL => "🌷st◎",
             Token::wSOL => "(◎)",
         }
     }
@@ -68,7 +74,12 @@ impl Token {
     pub fn decimals(&self) -> u8 {
         match self {
             Token::USDC | Token::tuUSDC => 6,
-            Token::tuSOL | Token::mSOL | Token::tumSOL | Token::wSOL => 9,
+            Token::stSOL
+            | Token::tuSOL
+            | Token::mSOL
+            | Token::tumSOL
+            | Token::tustSOL
+            | Token::wSOL => 9,
         }
     }
 
@@ -91,8 +102,8 @@ impl Token {
 
     pub fn liquidity_token(&self) -> Option<MaybeToken> {
         match self {
-            Token::USDC | Token::mSOL | Token::wSOL => None,
-            Token::tuUSDC | Token::tuSOL | Token::tumSOL => {
+            Token::USDC | Token::mSOL | Token::stSOL | Token::wSOL => None,
+            Token::tuUSDC | Token::tuSOL | Token::tumSOL | Token::tustSOL => {
                 Some(crate::tulip::liquidity_token(self))
             }
         }
@@ -103,8 +114,8 @@ impl Token {
         rpc_client: &RpcClient,
     ) -> Result<Decimal, Box<dyn std::error::Error>> {
         match self {
-            Token::USDC | Token::mSOL | Token::wSOL => unreachable!(), //Ok(Decimal::from_usize(1).unwrap()),
-            Token::tuUSDC | Token::tuSOL | Token::tumSOL => {
+            Token::USDC | Token::mSOL | Token::stSOL | Token::wSOL => unreachable!(),
+            Token::tuUSDC | Token::tuSOL | Token::tumSOL | Token::tustSOL => {
                 crate::tulip::get_current_liquidity_token_rate(rpc_client, self).await
             }
         }
@@ -139,10 +150,10 @@ impl Token {
             return Ok(Decimal::from_f64(1.).unwrap());
         }
         match self {
-            Token::USDC | Token::mSOL | Token::wSOL => {
+            Token::USDC | Token::mSOL | Token::stSOL | Token::wSOL => {
                 coin_gecko::get_current_price(&MaybeToken(Some(*self))).await
             }
-            Token::tuUSDC | Token::tuSOL | Token::tumSOL => {
+            Token::tuUSDC | Token::tuSOL | Token::tumSOL | Token::tustSOL => {
                 crate::tulip::get_current_price(rpc_client, self).await
             }
         }
