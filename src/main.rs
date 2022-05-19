@@ -1388,12 +1388,16 @@ async fn process_sync_swaps(
                         .post_token_balances
                         .unwrap_or_default();
 
-                    let token_amount_diff = |token: &Pubkey| {
-                        let token = token.to_string();
+                    let token_amount_diff = |owner: Pubkey, mint: Pubkey| {
+                        let owner = owner.to_string();
+                        let mint = mint.to_string();
+
                         let pre = pre_token_balances
                             .iter()
                             .filter_map(|token_balance| {
-                                if token_balance.mint == token {
+                                if token_balance.owner.as_ref() == Some(&owner)
+                                    && token_balance.mint == mint
+                                {
                                     Some(
                                         token_balance
                                             .ui_token_amount
@@ -1406,11 +1410,13 @@ async fn process_sync_swaps(
                                 }
                             })
                             .next()
-                            .unwrap();
+                            .expect("pre_token_balance");
                         let post = post_token_balances
                             .iter()
                             .filter_map(|token_balance| {
-                                if token_balance.mint == token {
+                                if token_balance.owner.as_ref() == Some(&owner)
+                                    && token_balance.mint == mint
+                                {
                                     Some(
                                         token_balance
                                             .ui_token_amount
@@ -1423,12 +1429,12 @@ async fn process_sync_swaps(
                                 }
                             })
                             .next()
-                            .unwrap();
+                            .expect("post_token_balance");
                         (post as i64 - pre as i64).abs() as u64
                     };
 
-                    let from_amount = token_amount_diff(&from_token.mint());
-                    let to_amount = token_amount_diff(&to_token.mint());
+                    let from_amount = token_amount_diff(address, from_token.mint());
+                    let to_amount = token_amount_diff(address, to_token.mint());
                     let msg = format!(
                         "Swapped {}{} for {}{}",
                         from_token.symbol(),
