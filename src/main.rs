@@ -1874,7 +1874,7 @@ async fn process_account_list(
                 account.description
             );
             println!("{}", msg);
-            if account.last_update_balance > 0 {
+            if ui_amount > 0.01 {
                 notifier.send(&msg).await;
             }
             account.assert_lot_balance();
