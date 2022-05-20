@@ -15,6 +15,7 @@ use {
         fmt, fs,
         path::{Path, PathBuf},
     },
+    strum::{EnumString, IntoStaticStr},
     thiserror::Error,
 };
 
@@ -257,6 +258,27 @@ impl LotAcquistion {
     }
 }
 
+#[derive(Debug, PartialEq, Clone, EnumString, IntoStaticStr)]
+pub enum LotSelectionMethod {
+    #[strum(serialize = "fifo")]
+    FirstInFirstOut,
+    #[strum(serialize = "lifo")]
+    LastInFirstOut,
+    #[strum(serialize = "lowest-basis")]
+    LowestBasis,
+    #[strum(serialize = "highest-basis")]
+    HighestBasis,
+}
+
+pub const POSSIBLE_LOT_SELECTION_METHOD_VALUES: &[&str] =
+    &["fifo", "lifo", "lowest-basis", "highest-basis"];
+
+impl Default for LotSelectionMethod {
+    fn default() -> Self {
+        Self::FirstInFirstOut
+    }
+}
+
 #[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
 pub struct Lot {
     pub lot_number: usize,
@@ -399,12 +421,33 @@ pub struct TrackedAccount {
 
 fn split_lots(
     db: &mut Db,
-    lots: Vec<Lot>,
+    mut lots: Vec<Lot>,
     amount: u64,
+    lot_selection_method: LotSelectionMethod,
     lot_numbers: Option<HashSet<usize>>,
 ) -> (Vec<Lot>, Vec<Lot>) {
     let mut extracted_lots = vec![];
     let mut remaining_lots = vec![];
+
+    match lot_selection_method {
+        LotSelectionMethod::FirstInFirstOut => {
+            lots.sort_by(|a, b| a.acquisition.when.cmp(&b.acquisition.when));
+            if !lots.is_empty() {
+                // Assume the oldest lot is the rent-reserve. Extract it as the last resort
+                let first_lot = lots.remove(0);
+                lots.push(first_lot);
+            }
+        }
+        LotSelectionMethod::LastInFirstOut => {
+            lots.sort_by(|a, b| b.acquisition.when.cmp(&a.acquisition.when))
+        }
+        LotSelectionMethod::LowestBasis => {
+            lots.sort_by(|a, b| a.acquisition.price().cmp(&b.acquisition.price()))
+        }
+        LotSelectionMethod::HighestBasis => {
+            lots.sort_by(|a, b| b.acquisition.price().cmp(&a.acquisition.price()))
+        }
+    }
 
     let mut amount_remaining = amount;
     for mut lot in lots {
@@ -467,6 +510,7 @@ impl TrackedAccount {
         &mut self,
         db: &mut Db,
         amount: u64,
+        lot_selection_method: LotSelectionMethod,
         lot_numbers: Option<HashSet<usize>>,
     ) -> DbResult<Vec<Lot>> {
         self.assert_lot_balance();
@@ -479,13 +523,8 @@ impl TrackedAccount {
             return Err(DbError::AccountHasInsufficientBalance(self.address));
         }
 
-        if !lots.is_empty() {
-            // Assume the oldest lot is the rent-reserve. Extract it as the last resort
-            let first_lot = lots.remove(0);
-            lots.push(first_lot);
-        }
-
-        let (extracted_lots, remaining_lots) = split_lots(db, lots, amount, lot_numbers);
+        let (extracted_lots, remaining_lots) =
+            split_lots(db, lots, amount, lot_selection_method, lot_numbers);
 
         self.lots = remaining_lots;
         self.last_update_balance -= amount;
@@ -599,6 +638,7 @@ impl Db {
         exchange: Exchange,
         deposit_address: Pubkey,
         token: MaybeToken,
+        lot_selection_method: LotSelectionMethod,
         lot_numbers: Option<HashSet<usize>>,
     ) -> DbResult<()> {
         if !self.db.lexists("deposits") {
@@ -619,7 +659,7 @@ impl Db {
                 from_token: token,
                 to_address: deposit_address,
                 to_token: token,
-                lots: from_account.extract_lots(self, amount, lot_numbers)?,
+                lots: from_account.extract_lots(self, amount, lot_selection_method, lot_numbers)?,
             },
         };
         self.db.ladd("deposits", &deposit).unwrap();
@@ -745,7 +785,8 @@ impl Db {
 
         self.auto_save(false)?;
         if let Some((when, from_amount, to_amount)) = success {
-            let lots = from_account.extract_lots(self, from_amount, None)?;
+            let lot_selection_method = LotSelectionMethod::default();
+            let lots = from_account.extract_lots(self, from_amount, lot_selection_method, None)?;
             let mut disposed_lots = self.disposed_lots();
 
             let to_amount_over_from_amount = to_amount as f64 / from_amount as f64;
@@ -822,6 +863,7 @@ impl Db {
         amount: u64,
         from_address: Pubkey,
         to_address: Pubkey,
+        lot_selection_method: LotSelectionMethod,
         lot_numbers: Option<HashSet<usize>>,
     ) -> DbResult<()> {
         if !self.db.lexists("withdrawals") {
@@ -857,7 +899,7 @@ impl Db {
                 amount,
             }]
         } else {
-            from_account.extract_lots(self, amount, lot_numbers)?
+            from_account.extract_lots(self, amount, lot_selection_method, lot_numbers)?
         };
 
         let withdrawal = PendingWithdrawal {
@@ -1064,7 +1106,13 @@ impl Db {
                 assert_eq!(lot_balance, amount, "Order lot balance mismatch");
                 assert!(filled_amount <= amount);
 
-                let (filled_lots, cancelled_lots) = split_lots(self, lots, filled_amount, None);
+                let (filled_lots, cancelled_lots) = split_lots(
+                    self,
+                    lots,
+                    filled_amount,
+                    LotSelectionMethod::default(),
+                    None,
+                );
 
                 if !filled_lots.is_empty() {
                     let mut disposed_lots = self.disposed_lots();
@@ -1106,6 +1154,7 @@ impl Db {
         self.auto_save(true)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn record_disposal(
         &mut self,
         from_address: Pubkey,
@@ -1114,11 +1163,12 @@ impl Db {
         description: String,
         when: NaiveDate,
         decimal_price: Decimal,
+        lot_selection_method: LotSelectionMethod,
     ) -> DbResult<Vec<DisposedLot>> {
         let mut from_account = self
             .get_account(from_address, token)
             .ok_or(DbError::AccountDoesNotExist(from_address, token))?;
-        let lots = from_account.extract_lots(self, amount, None)?;
+        let lots = from_account.extract_lots(self, amount, lot_selection_method, None)?;
         let disposed_lots = self.record_lots_disposal(
             token,
             lots,
@@ -1382,6 +1432,7 @@ impl Db {
         from_token: MaybeToken,
         to_address: Pubkey,
         to_token: MaybeToken,
+        lot_selection_method: LotSelectionMethod,
         lot_numbers: Option<HashSet<usize>>,
     ) -> DbResult<()> {
         assert_eq!(from_token.mint(), to_token.mint());
@@ -1405,6 +1456,7 @@ impl Db {
             lots: from_account.extract_lots(
                 self,
                 amount.unwrap_or(from_account.last_update_balance),
+                lot_selection_method,
                 lot_numbers,
             )?,
         });

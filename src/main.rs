@@ -16,7 +16,7 @@ use {
     chrono_humanize::HumanTime,
     clap::{
         crate_description, crate_name, value_t, value_t_or_exit, values_t, App, AppSettings, Arg,
-        SubCommand,
+        ArgMatches, SubCommand,
     },
     console::{style, Style},
     db::*,
@@ -445,6 +445,7 @@ async fn process_exchange_deposit<T: Signers>(
     if_exchange_balance_less_than: Option<u64>,
     authority_address: Pubkey,
     signers: T,
+    lot_selection_method: LotSelectionMethod,
     lot_numbers: Option<HashSet<usize>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(if_exchange_balance_less_than) = if_exchange_balance_less_than {
@@ -648,6 +649,7 @@ async fn process_exchange_deposit<T: Signers>(
         exchange,
         deposit_address,
         token,
+        lot_selection_method,
         lot_numbers,
     )?;
     if !send_transaction_until_expired(rpc_client, &transaction, last_valid_block_height) {
@@ -666,6 +668,7 @@ async fn process_exchange_withdraw(
     deposit_address: Pubkey,
     amount: Option<u64>,
     to_address: Pubkey,
+    lot_selection_method: LotSelectionMethod,
     lot_numbers: Option<HashSet<usize>>,
     withdrawal_password: Option<String>,
     withdrawal_code: Option<String>,
@@ -696,6 +699,7 @@ async fn process_exchange_withdraw(
         amount,
         deposit_address,
         to_address,
+        lot_selection_method,
         lot_numbers,
     )?;
     Ok(())
@@ -839,6 +843,7 @@ async fn process_exchange_sell(
     if_price_over: Option<f64>,
     if_price_over_basis: bool,
     price_floor: Option<f64>,
+    lot_selection_method: LotSelectionMethod,
     lot_numbers: Option<HashSet<usize>>,
     notifier: &Notifier,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -900,7 +905,12 @@ async fn process_exchange_sell(
         }
     }
 
-    let order_lots = deposit_account.extract_lots(db, token.amount(amount), lot_numbers)?;
+    let order_lots = deposit_account.extract_lots(
+        db,
+        token.amount(amount),
+        lot_selection_method,
+        lot_numbers,
+    )?;
     if if_price_over_basis {
         if let Some(basis) = order_lots.iter().find_map(|lot| {
             let basis = lot.acquisition.price();
@@ -1767,6 +1777,7 @@ async fn process_account_dispose(
         },
     };
 
+    let lot_selection_method = LotSelectionMethod::default();
     let disposed_lots = db.record_disposal(
         address,
         token,
@@ -1774,6 +1785,7 @@ async fn process_account_dispose(
         description,
         when.unwrap_or_else(today),
         price,
+        lot_selection_method,
     )?;
     if !disposed_lots.is_empty() {
         println!("Disposed Lots:");
@@ -2408,6 +2420,7 @@ async fn process_account_merge<T: Signers>(
         token,
         into_address,
         token,
+        LotSelectionMethod::default(),
         None,
     )?;
 
@@ -2692,6 +2705,7 @@ async fn process_account_sweep<T: Signers>(
         token,
         to_address,
         token,
+        LotSelectionMethod::default(),
         None,
     )?;
 
@@ -2718,6 +2732,7 @@ async fn process_account_split<T: Signers>(
     from_address: Pubkey,
     amount: u64,
     description: String,
+    lot_selection_method: LotSelectionMethod,
     lot_numbers: Option<HashSet<usize>>,
     authority_address: Pubkey,
     signers: T,
@@ -2786,6 +2801,7 @@ async fn process_account_split<T: Signers>(
         token,
         into_keypair.pubkey(),
         token,
+        lot_selection_method,
         lot_numbers,
     )?;
 
@@ -2967,11 +2983,13 @@ async fn process_account_sync(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn process_account_wrap<T: Signers>(
     db: &mut Db,
     rpc_client: &RpcClient,
     address: Pubkey,
     amount: u64,
+    lot_selection_method: LotSelectionMethod,
     lot_numbers: Option<HashSet<usize>>,
     authority_address: Pubkey,
     signers: T,
@@ -3038,6 +3056,7 @@ async fn process_account_wrap<T: Signers>(
         sol,
         address,
         wsol.into(),
+        lot_selection_method,
         lot_numbers,
     )?;
 
@@ -3052,11 +3071,13 @@ async fn process_account_wrap<T: Signers>(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn process_account_unwrap<T: Signers>(
     db: &mut Db,
     rpc_client: &RpcClient,
     address: Pubkey,
     amount: u64,
+    lot_selection_method: LotSelectionMethod,
     lot_numbers: Option<HashSet<usize>>,
     authority_address: Pubkey,
     signers: T,
@@ -3083,13 +3104,15 @@ async fn process_account_unwrap<T: Signers>(
             &ephemeral_token_account.pubkey(),
             &wsol.mint(),
         ),
-        spl_token::instruction::transfer(
+        spl_token::instruction::transfer_checked(
             &spl_token::id(),
-            &wsol.ata(&address),
+            &dbg!(wsol.ata(&address)),
+            &wsol.mint(),
             &wsol.ata(&ephemeral_token_account.pubkey()),
             &authority_address,
             &[],
             amount,
+            wsol.decimals(),
         )
         .unwrap(),
         spl_token::instruction::close_account(
@@ -3127,6 +3150,7 @@ async fn process_account_unwrap<T: Signers>(
         wsol.into(),
         address,
         sol,
+        lot_selection_method,
         lot_numbers,
     )?;
 
@@ -3333,6 +3357,7 @@ async fn process_account_sync_sweep(
             token,
             sweep_stake_account_info.address,
             token,
+            LotSelectionMethod::default(),
             None,
         )?;
 
@@ -3353,6 +3378,33 @@ fn is_valid_token_or_sol(value: String) -> Result<(), String> {
     } else {
         is_valid_token(value)
     }
+}
+
+fn lot_numbers_of(matches: &ArgMatches<'_>, name: &str) -> Option<HashSet<usize>> {
+    values_t!(matches, name, usize)
+        .ok()
+        .map(|x| x.into_iter().collect())
+}
+
+fn lot_numbers_arg<'a, 'b>() -> Arg<'a, 'b> {
+    Arg::with_name("lot_numbers")
+        .long("lot")
+        .value_name("LOT NUMBER")
+        .takes_value(true)
+        .multiple(true)
+        .validator(is_parsable::<usize>)
+        .help("Lot to fund the wrap from")
+}
+
+fn lot_selection_arg<'a, 'b>() -> Arg<'a, 'b> {
+    Arg::with_name("lot_selection")
+        .long("lot-selection")
+        .value_name("METHOD")
+        .takes_value(true)
+        .validator(is_parsable::<LotSelectionMethod>)
+        .default_value(POSSIBLE_LOT_SELECTION_METHOD_VALUES[0])
+        .possible_values(POSSIBLE_LOT_SELECTION_METHOD_VALUES)
+        .help("Lot selection method")
 }
 
 #[tokio::main]
@@ -3767,15 +3819,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .validator(is_keypair)
                                 .help("Optional keypair of the split destination [default: randomly generated]"),
                         )
-                        .arg(
-                            Arg::with_name("lot_numbers")
-                                .long("lot")
-                                .value_name("LOT NUMBER")
-                                .takes_value(true)
-                                .multiple(true)
-                                .validator(is_parsable::<usize>)
-                                .help("Lot to fund the split from [default: first in, first out]"),
-                        )
+                        .arg(lot_selection_arg())
+                        .arg(lot_numbers_arg())
                 )
                 .subcommand(
                     SubCommand::with_name("sync")
@@ -3816,15 +3861,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .validator(is_valid_signer)
                                 .help("Optional authority for the wrap"),
                         )
-                        .arg(
-                            Arg::with_name("lot_numbers")
-                                .long("lot")
-                                .value_name("LOT NUMBER")
-                                .takes_value(true)
-                                .multiple(true)
-                                .validator(is_parsable::<usize>)
-                                .help("Lot to fund the wrap from [default: first in, first out]"),
-                        )
+                        .arg(lot_selection_arg())
+                        .arg(lot_numbers_arg())
                 )
                 .subcommand(
                     SubCommand::with_name("unwrap")
@@ -3853,15 +3891,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .validator(is_valid_signer)
                                 .help("Optional authority for the unwrap"),
                         )
-                        .arg(
-                            Arg::with_name("lot_numbers")
-                                .long("lot")
-                                .value_name("LOT NUMBER")
-                                .takes_value(true)
-                                .multiple(true)
-                                .validator(is_parsable::<usize>)
-                                .help("Lot to fund the unwrap from [default: first in, first out]"),
-                        )
+                        .arg(lot_selection_arg())
+                        .arg(lot_numbers_arg())
                 )
                 .subcommand(
                     SubCommand::with_name("lot")
@@ -4211,17 +4242,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .required(true)
                                 .help("The amount to deposit; accepts keyword ALL"),
                         )
-                        .arg(
-                            Arg::with_name("lot_numbers")
-                                .long("lot")
-                                .value_name("LOT NUMBER")
-                                .takes_value(true)
-                                .multiple(true)
-                                .validator(is_parsable::<usize>)
-                                .help(
-                                    "Lot to fund the deposit from [default: first in, first out]",
-                                ),
-                        )
+                        .arg(lot_selection_arg())
+                        .arg(lot_numbers_arg())
                         .arg(
                             Arg::with_name("from")
                                 .long("from")
@@ -4289,17 +4311,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .required(true)
                                 .help("The amount to withdraw; accepts keyword ALL"),
                         )
-                        .arg(
-                            Arg::with_name("lot_numbers")
-                                .long("lot")
-                                .value_name("LOT NUMBER")
-                                .takes_value(true)
-                                .multiple(true)
-                                .validator(is_parsable::<usize>)
-                                .help(
-                                    "Lot to fund the withdrawal from [default: first in, first out]",
-                                ),
-                        )
+                        .arg(lot_selection_arg())
+                        .arg(lot_numbers_arg())
                         .arg(
                             Arg::with_name("code")
                                 .long("code")
@@ -4412,15 +4425,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .validator(is_parsable::<f64>)
                                 .help("Place a limit order at this amount over the current ask"),
                         )
-                        .arg(
-                            Arg::with_name("lot_numbers")
-                                .long("lot")
-                                .value_name("LOT NUMBER")
-                                .takes_value(true)
-                                .multiple(true)
-                                .validator(is_parsable::<usize>)
-                                .help("Lots to sell from [default: first in, first out]"),
-                        )
+                        .arg(lot_selection_arg())
+                        .arg(lot_numbers_arg())
                         .arg(
                             Arg::with_name("pair")
                                 .long("pair")
@@ -4880,9 +4886,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let description = value_t!(arg_matches, "description", String)
                     .ok()
                     .unwrap_or_else(|| format!("Split at {}", Local::now()));
-                let lot_numbers = values_t!(arg_matches, "lot_numbers", usize)
-                    .ok()
-                    .map(|x| x.into_iter().collect());
+                let lot_numbers = lot_numbers_of(arg_matches, "lot_numbers");
+                let lot_selection_method =
+                    value_t_or_exit!(arg_matches, "lot_selection", LotSelectionMethod);
                 let into_keypair = keypair_of(arg_matches, "into_keypair");
 
                 let (authority_signer, authority_address) = if arg_matches.is_present("by") {
@@ -4905,6 +4911,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     from_address,
                     amount,
                     description,
+                    lot_selection_method,
                     lot_numbers,
                     authority_address,
                     vec![authority_signer],
@@ -4919,9 +4926,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             ("wrap", Some(arg_matches)) => {
                 let address = pubkey_of(arg_matches, "address").unwrap();
                 let amount = MaybeToken::SOL().amount(value_t_or_exit!(arg_matches, "amount", f64));
-                let lot_numbers = values_t!(arg_matches, "lot_numbers", usize)
-                    .ok()
-                    .map(|x| x.into_iter().collect());
+                let lot_numbers = lot_numbers_of(arg_matches, "lot_numbers");
+                let lot_selection_method =
+                    value_t_or_exit!(arg_matches, "lot_selection", LotSelectionMethod);
 
                 let (authority_signer, authority_address) = if arg_matches.is_present("by") {
                     signer_of(arg_matches, "by", &mut wallet_manager)?
@@ -4942,6 +4949,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     &rpc_client,
                     address,
                     amount,
+                    lot_selection_method,
                     lot_numbers,
                     authority_address,
                     vec![authority_signer],
@@ -4951,9 +4959,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             ("unwrap", Some(arg_matches)) => {
                 let address = pubkey_of(arg_matches, "address").unwrap();
                 let amount = MaybeToken::SOL().amount(value_t_or_exit!(arg_matches, "amount", f64));
-                let lot_numbers = values_t!(arg_matches, "lot_numbers", usize)
-                    .ok()
-                    .map(|x| x.into_iter().collect());
+                let lot_numbers = lot_numbers_of(arg_matches, "lot_numbers");
+                let lot_selection_method =
+                    value_t_or_exit!(arg_matches, "lot_selection", LotSelectionMethod);
 
                 let (authority_signer, authority_address) = if arg_matches.is_present("by") {
                     signer_of(arg_matches, "by", &mut wallet_manager)?
@@ -4974,6 +4982,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     &rpc_client,
                     address,
                     amount,
+                    lot_selection_method,
                     lot_numbers,
                     authority_address,
                     vec![authority_signer],
@@ -5238,9 +5247,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             .map(|x| token.amount(x));
                     let from_address =
                         pubkey_of_signer(arg_matches, "from", &mut wallet_manager)?.expect("from");
-                    let lot_numbers = values_t!(arg_matches, "lot_numbers", usize)
-                        .ok()
-                        .map(|x| x.into_iter().collect());
+                    let lot_numbers = lot_numbers_of(arg_matches, "lot_numbers");
+                    let lot_selection_method =
+                        value_t_or_exit!(arg_matches, "lot_selection", LotSelectionMethod);
 
                     let (authority_signer, authority_address) = if arg_matches.is_present("by") {
                         signer_of(arg_matches, "by", &mut wallet_manager)?
@@ -5279,6 +5288,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         if_exchange_balance_less_than,
                         authority_address,
                         vec![authority_signer],
+                        lot_selection_method,
                         lot_numbers,
                     )
                     .await?;
@@ -5299,10 +5309,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     };
                     let to_address =
                         pubkey_of_signer(arg_matches, "to", &mut wallet_manager)?.expect("to");
-
-                    let lot_numbers = values_t!(arg_matches, "lot_numbers", usize)
-                        .ok()
-                        .map(|x| x.into_iter().collect());
+                    let lot_numbers = lot_numbers_of(arg_matches, "lot_numbers");
+                    let lot_selection_method =
+                        value_t_or_exit!(arg_matches, "lot_selection", LotSelectionMethod);
 
                     let withdrawal_password = None; // TODO: Support reading password from stdin
                     let withdrawal_code = value_t!(arg_matches, "code", String).ok();
@@ -5325,6 +5334,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         deposit_address,
                         amount,
                         to_address,
+                        lot_selection_method,
                         lot_numbers,
                         withdrawal_password,
                         withdrawal_code,
@@ -5427,9 +5437,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let if_price_over = value_t!(arg_matches, "if_price_over", f64).ok();
                     let if_price_over_basis = arg_matches.is_present("if_price_over_basis");
                     let price_floor = value_t!(arg_matches, "price_floor", f64).ok();
-                    let lot_numbers = values_t!(arg_matches, "lot_numbers", usize)
-                        .ok()
-                        .map(|x| x.into_iter().collect());
+                    let lot_numbers = lot_numbers_of(arg_matches, "lot_numbers");
+                    let lot_selection_method =
+                        value_t_or_exit!(arg_matches, "lot_selection", LotSelectionMethod);
 
                     let price = if let Ok(price) = value_t!(arg_matches, "at", f64) {
                         LimitOrderPrice::At(price)
@@ -5451,6 +5461,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         if_price_over,
                         if_price_over_basis,
                         price_floor,
+                        lot_selection_method,
                         lot_numbers,
                         &notifier,
                     )
