@@ -1027,6 +1027,7 @@ async fn process_jup_swap<T: Signers>(
     to_token: Token,
     ui_amount: f64,
     slippage: f64,
+    lot_selection_method: LotSelectionMethod,
     signers: T,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let from_account = db
@@ -1132,6 +1133,7 @@ async fn process_jup_swap<T: Signers>(
         from_token_price,
         to_token.into(),
         to_token_price,
+        lot_selection_method,
     )?;
 
     if !send_transaction_until_expired(rpc_client, &transaction, last_valid_block_height) {
@@ -1148,6 +1150,7 @@ async fn process_tulip_deposit<T: Signers>(
     collateral_token: Token,
     liquidity_amount: Option<u64>,
     address: Pubkey,
+    lot_selection_method: LotSelectionMethod,
     signers: T,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let sol = MaybeToken::SOL();
@@ -1245,6 +1248,7 @@ async fn process_tulip_deposit<T: Signers>(
         liquidity_token_price,
         collateral_token.into(),
         collateral_token_price,
+        lot_selection_method,
     )?;
 
     if !send_transaction_until_expired(rpc_client, &transaction, last_valid_block_height) {
@@ -1261,6 +1265,7 @@ async fn process_tulip_withdraw<T: Signers>(
     collateral_token: Token,
     liquidity_amount: Option<u64>,
     address: Pubkey,
+    lot_selection_method: LotSelectionMethod,
     signers: T,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let collateral_tracked_account = db
@@ -1337,6 +1342,7 @@ async fn process_tulip_withdraw<T: Signers>(
         collateral_token_price,
         liquidity_token,
         liquidity_token_price,
+        lot_selection_method,
     )?;
 
     if !send_transaction_until_expired(rpc_client, &transaction, last_valid_block_height) {
@@ -1768,6 +1774,8 @@ async fn process_account_dispose(
     description: String,
     when: Option<NaiveDate>,
     price: Option<f64>,
+    lot_selection_method: LotSelectionMethod,
+    lot_numbers: Option<HashSet<usize>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let price = match price {
         Some(price) => Decimal::from_f64(price).unwrap(),
@@ -1777,7 +1785,6 @@ async fn process_account_dispose(
         },
     };
 
-    let lot_selection_method = LotSelectionMethod::default();
     let disposed_lots = db.record_disposal(
         address,
         token,
@@ -1786,6 +1793,7 @@ async fn process_account_dispose(
         when.unwrap_or_else(today),
         price,
         lot_selection_method,
+        lot_numbers,
     )?;
     if !disposed_lots.is_empty() {
         println!("Disposed Lots:");
@@ -3616,7 +3624,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .takes_value(true)
                                 .validator(is_parsable::<f64>)
                                 .help("Disposal price per SOL/token [default: market price on disposal date]"),
-                        ),
+                        )
+                        .arg(lot_selection_arg())
+                        .arg(lot_numbers_arg()),
                 )
                 .subcommand(
                     SubCommand::with_name("ls")
@@ -4050,6 +4060,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .default_value("1")
                                 .help("Maximum slippage percent"),
                         )
+                        .arg(lot_selection_arg())
                 )
         )
         .subcommand(
@@ -4095,6 +4106,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .validator(is_valid_signer)
                                 .help("Source account of funds"),
                         )
+                        .arg(lot_selection_arg())
                 )
                 .subcommand(
                     SubCommand::with_name("withdraw")
@@ -4133,6 +4145,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                        Typically used to specify `wSOL` instead of `SOL` \
                                        [default: deduced from the collateral token]"),
                         )
+                        .arg(lot_selection_arg())
                 )
         );
 
@@ -4757,6 +4770,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .map(|s| naivedate_of(&s).unwrap())
                     .ok();
                 let price = value_t!(arg_matches, "price", f64).ok();
+                let lot_numbers = lot_numbers_of(arg_matches, "lot_numbers");
+                let lot_selection_method =
+                    value_t_or_exit!(arg_matches, "lot_selection", LotSelectionMethod);
 
                 process_account_dispose(
                     &mut db,
@@ -4767,6 +4783,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     description,
                     when,
                     price,
+                    lot_selection_method,
+                    lot_numbers,
                 )
                 .await?;
             }
@@ -5009,6 +5027,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 let signer = signer.expect("signer");
                 let address = address.expect("address");
+                let lot_selection_method =
+                    value_t_or_exit!(arg_matches, "lot_selection", LotSelectionMethod);
 
                 process_jup_swap(
                     &mut db,
@@ -5018,6 +5038,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     to_token,
                     ui_amount,
                     slippage,
+                    lot_selection_method,
                     vec![signer],
                 )
                 .await?;
@@ -5049,6 +5070,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     })?;
                 let address = address.expect("address");
                 let signer = signer.expect("signer");
+                let lot_selection_method =
+                    value_t_or_exit!(arg_matches, "lot_selection", LotSelectionMethod);
 
                 process_tulip_deposit(
                     &mut db,
@@ -5057,6 +5080,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     collateral_token,
                     liquidity_amount,
                     address,
+                    lot_selection_method,
                     vec![signer],
                 )
                 .await?;
@@ -5080,6 +5104,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     })?;
                 let address = address.expect("address");
                 let signer = signer.expect("signer");
+                let lot_selection_method =
+                    value_t_or_exit!(arg_matches, "lot_selection", LotSelectionMethod);
 
                 process_tulip_withdraw(
                     &mut db,
@@ -5088,6 +5114,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     collateral_token,
                     liquidity_amount,
                     address,
+                    lot_selection_method,
                     vec![signer],
                 )
                 .await?;

@@ -147,6 +147,8 @@ pub struct PendingSwap {
 
     pub to_token: MaybeToken,
     pub to_token_price: Decimal,
+
+    pub lot_selection_method: LotSelectionMethod,
 }
 
 #[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
@@ -258,7 +260,7 @@ impl LotAcquistion {
     }
 }
 
-#[derive(Debug, PartialEq, Clone, EnumString, IntoStaticStr)]
+#[derive(Debug, PartialEq, Clone, Serialize, Deserialize, EnumString, IntoStaticStr)]
 pub enum LotSelectionMethod {
     #[strum(serialize = "fifo")]
     FirstInFirstOut,
@@ -728,6 +730,7 @@ impl Db {
         from_token_price: Decimal,
         to_token: MaybeToken,
         to_token_price: Decimal,
+        lot_selection_method: LotSelectionMethod,
     ) -> DbResult<()> {
         if !self.db.lexists("swaps") {
             self.db.lcreate("swaps")?;
@@ -745,6 +748,7 @@ impl Db {
             from_token_price,
             to_token,
             to_token_price,
+            lot_selection_method,
         };
         self.db.ladd("swaps", &pendining_swap).unwrap();
         self.save()
@@ -763,6 +767,7 @@ impl Db {
             from_token_price,
             to_token,
             to_token_price,
+            lot_selection_method,
             ..
         } = pending_swaps
             .iter()
@@ -785,7 +790,6 @@ impl Db {
 
         self.auto_save(false)?;
         if let Some((when, from_amount, to_amount)) = success {
-            let lot_selection_method = LotSelectionMethod::default();
             let lots = from_account.extract_lots(self, from_amount, lot_selection_method, None)?;
             let mut disposed_lots = self.disposed_lots();
 
@@ -1164,11 +1168,12 @@ impl Db {
         when: NaiveDate,
         decimal_price: Decimal,
         lot_selection_method: LotSelectionMethod,
+        lot_numbers: Option<HashSet<usize>>,
     ) -> DbResult<Vec<DisposedLot>> {
         let mut from_account = self
             .get_account(from_address, token)
             .ok_or(DbError::AccountDoesNotExist(from_address, token))?;
-        let lots = from_account.extract_lots(self, amount, lot_selection_method, None)?;
+        let lots = from_account.extract_lots(self, amount, lot_selection_method, lot_numbers)?;
         let disposed_lots = self.record_lots_disposal(
             token,
             lots,
