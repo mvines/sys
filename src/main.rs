@@ -1410,10 +1410,23 @@ async fn process_sync_swaps(
                         let owner = owner.to_string();
                         let mint = mint.to_string();
 
+                        let num_token_balances = pre_token_balances
+                            .iter()
+                            .filter(|token_balance| token_balance.mint == mint)
+                            .count();
+                        assert_eq!(
+                            num_token_balances,
+                            post_token_balances
+                                .iter()
+                                .filter(|token_balance| token_balance.mint == mint)
+                                .count()
+                        );
+
                         let pre = pre_token_balances
                             .iter()
                             .filter_map(|token_balance| {
-                                if token_balance.owner.as_ref() == Some(&owner)
+                                if (num_token_balances == 1
+                                    || token_balance.owner.as_ref() == Some(&owner))
                                     && token_balance.mint == mint
                                 {
                                     Some(
@@ -1428,11 +1441,17 @@ async fn process_sync_swaps(
                                 }
                             })
                             .next()
-                            .expect("pre_token_balance");
+                            .unwrap_or_else(|| {
+                                panic!(
+                                    "pre_token_balance not found for owner {}, mint {}",
+                                    address, mint
+                                )
+                            });
                         let post = post_token_balances
                             .iter()
                             .filter_map(|token_balance| {
-                                if token_balance.owner.as_ref() == Some(&owner)
+                                if (num_token_balances == 1
+                                    || token_balance.owner.as_ref() == Some(&owner))
                                     && token_balance.mint == mint
                                 {
                                     Some(
@@ -1447,7 +1466,12 @@ async fn process_sync_swaps(
                                 }
                             })
                             .next()
-                            .expect("post_token_balance");
+                            .unwrap_or_else(|| {
+                                panic!(
+                                    "post_token_balance not found for owner {},  mint {}",
+                                    address, mint
+                                )
+                            });
                         (post as i64 - pre as i64).abs() as u64
                     };
 
@@ -3116,7 +3140,7 @@ async fn process_account_unwrap<T: Signers>(
         ),
         spl_token::instruction::transfer_checked(
             &spl_token::id(),
-            &dbg!(wsol.ata(&address)),
+            &wsol.ata(&address),
             &wsol.mint(),
             &wsol.ata(&ephemeral_token_account.pubkey()),
             &authority_address,
@@ -4660,6 +4684,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         ("sync", Some(_arg_matches)) => {
+            process_sync_swaps(&mut db, &rpc_client, &notifier).await?;
             for (exchange, exchange_credentials) in db.get_configured_exchanges() {
                 println!("Synchronizing {:?}...", exchange);
                 let exchange_client = exchange_client_new(exchange, exchange_credentials)?;
@@ -4672,7 +4697,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 )
                 .await?
             }
-            process_sync_swaps(&mut db, &rpc_client, &notifier).await?;
             process_account_sync(&mut db, &rpc_client, None, &notifier).await?;
         }
         ("db", Some(db_matches)) => match db_matches.subcommand() {
