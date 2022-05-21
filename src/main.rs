@@ -1143,6 +1143,7 @@ async fn process_jup_swap<T: Signers>(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn process_tulip_deposit<T: Signers>(
     db: &mut Db,
     rpc_client: &RpcClient,
@@ -1258,6 +1259,7 @@ async fn process_tulip_deposit<T: Signers>(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn process_tulip_withdraw<T: Signers>(
     db: &mut Db,
     rpc_client: &RpcClient,
