@@ -1046,9 +1046,17 @@ async fn process_jup_swap<T: Signers>(
         .into());
     }
 
-    let _to_account = db
-        .get_account(address, to_token.into())
-        .ok_or_else(|| format!("{} account does not exist for {}", to_token, address))?;
+    let _ = to_token.balance(rpc_client, &address).map_err(|err| {
+        format!(
+            "{} account does not exist for {}. \
+                To create it, run `spl-token create-account {} --owner {}: {}",
+            to_token,
+            address,
+            to_token.mint(),
+            address,
+            err
+        )
+    })?;
 
     println!("Fetching best {}->{} quote...", from_token, to_token);
     let from_token_price = from_token.get_current_price(rpc_client).await?;
@@ -1125,6 +1133,18 @@ async fn process_jup_swap<T: Signers>(
     let signature = transaction.signatures[0];
     println!("Transaction signature: {}", signature);
 
+    if db.get_account(address, to_token.into()).is_none() {
+        let epoch = rpc_client.get_epoch_info()?.epoch;
+        db.add_account(TrackedAccount {
+            address,
+            token: to_token.into(),
+            description: from_account.description,
+            last_update_epoch: epoch,
+            last_update_balance: 0,
+            lots: vec![],
+            no_sync: None,
+        })?;
+    }
     db.record_swap(
         signature,
         last_valid_block_height,
@@ -1240,7 +1260,6 @@ async fn process_tulip_deposit<T: Signers>(
             no_sync: Some(true),
         })?;
     }
-
     db.record_swap(
         signature,
         last_valid_block_height,
