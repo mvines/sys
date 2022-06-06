@@ -16,7 +16,7 @@ console = "0.14.1"
 rust_decimal = "1.23"
 rust_decimal_macros = "1.23"
 fd-lock = "3.0.0"
-jup-ag = "0.2.2"
+jup-ag = "0.2.3"
 #jup-ag = { path = "../jup_ag" }
 #ftx = { git = "https://github.com/fabianboesiger/ftx", rev = "ce576c74f11c1795eef8cd101735166cb77b7892" }
 ftx = { git = "https://github.com/mvines/ftx", rev = "eea60b98cc47052dc0e6c42efe861d8d7cf6fb7f" }
