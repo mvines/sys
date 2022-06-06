@@ -1193,7 +1193,7 @@ async fn process_tulip_deposit<T: Signers>(
     let liquidity_account_balance = liquidity_tracked_account.last_update_balance;
 
     let max_liquidity_amount = if liquidity_token.is_sol() {
-        liquidity_account_balance.saturating_sub(minimum_lamport_balance)
+        liquidity_account_balance.saturating_sub(minimum_lamport_balance * 2)
     } else {
         liquidity_account_balance
     };
