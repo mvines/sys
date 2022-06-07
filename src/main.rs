@@ -1860,6 +1860,32 @@ struct RealizedGain {
     long_term_cap_gain: f64,
 }
 
+#[derive(Default)]
+struct AnnualRealizedGain {
+    by_quarter: [RealizedGain; 4],
+    by_payment_period: [RealizedGain; 4],
+}
+
+impl AnnualRealizedGain {
+    const MONTH_TO_PAYMENT_PERIOD: [usize; 12] = [0, 0, 0, 1, 1, 2, 2, 2, 3, 3, 3, 3];
+
+    fn record_income(&mut self, month: usize, income: f64) {
+        self.by_quarter[month / 3].income += income;
+        self.by_payment_period[Self::MONTH_TO_PAYMENT_PERIOD[month]].income += income;
+    }
+
+    fn record_short_term_cap_gain(&mut self, month: usize, cap_gain: f64) {
+        self.by_quarter[month / 3].short_term_cap_gain += cap_gain;
+        self.by_payment_period[Self::MONTH_TO_PAYMENT_PERIOD[month]].short_term_cap_gain +=
+            cap_gain;
+    }
+
+    fn record_long_term_cap_gain(&mut self, month: usize, cap_gain: f64) {
+        self.by_quarter[month / 3].long_term_cap_gain += cap_gain;
+        self.by_payment_period[Self::MONTH_TO_PAYMENT_PERIOD[month]].long_term_cap_gain += cap_gain;
+    }
+}
+
 async fn process_account_list(
     db: &Db,
     rpc_client: &RpcClient,
@@ -1868,7 +1894,7 @@ async fn process_account_list(
     summary_only: bool,
     notifier: &Notifier,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let mut annual_realized_gains = BTreeMap::<usize, [RealizedGain; 4]>::default();
+    let mut annual_realized_gains = BTreeMap::<usize, AnnualRealizedGain>::default();
     let mut held_tokens = BTreeMap::<MaybeToken, (/*price*/ Decimal, /*amount*/ u64)>::default();
 
     let mut accounts = db.get_accounts();
@@ -1980,8 +2006,11 @@ async fn process_account_list(
 
                     annual_realized_gains
                         .entry(lot.acquisition.when.year() as usize)
-                        .or_default()[lot.acquisition.when.month0() as usize / 3]
-                        .income += lot.income(account.token);
+                        .or_default()
+                        .record_income(
+                            lot.acquisition.when.month0() as usize,
+                            lot.income(account.token),
+                        );
 
                     if long_term_cap_gain {
                         account_unrealized_long_term_gain += account_unrealized_gain;
@@ -2026,8 +2055,11 @@ async fn process_account_list(
 
                         annual_realized_gains
                             .entry(lot.acquisition.when.year() as usize)
-                            .or_default()[lot.acquisition.when.month0() as usize / 3]
-                            .income += lot.income(account.token);
+                            .or_default()
+                            .record_income(
+                                lot.acquisition.when.month0() as usize,
+                                lot.income(account.token),
+                            );
 
                         if long_term_cap_gain {
                             account_unrealized_long_term_gain += account_unrealized_gain;
@@ -2093,19 +2125,28 @@ async fn process_account_list(
 
                 annual_realized_gains
                     .entry(disposed_lot.lot.acquisition.when.year() as usize)
-                    .or_default()[disposed_lot.lot.acquisition.when.month0() as usize / 3]
-                    .income += disposed_lot.lot.income(disposed_lot.token);
+                    .or_default()
+                    .record_income(
+                        disposed_lot.lot.acquisition.when.month0() as usize,
+                        disposed_lot.lot.income(disposed_lot.token),
+                    );
 
-                let mut realized_gain = &mut annual_realized_gains
+                let annual_realized_gain = annual_realized_gains
                     .entry(disposed_lot.when.year() as usize)
-                    .or_default()[disposed_lot.when.month0() as usize / 3];
+                    .or_default();
 
                 if long_term_cap_gain {
                     disposed_long_term_cap_gain += disposed_cap_gain;
-                    realized_gain.long_term_cap_gain += disposed_cap_gain;
+                    annual_realized_gain.record_long_term_cap_gain(
+                        disposed_lot.when.month0() as usize,
+                        disposed_cap_gain,
+                    );
                 } else {
                     disposed_short_term_cap_gain += disposed_cap_gain;
-                    realized_gain.short_term_cap_gain += disposed_cap_gain;
+                    annual_realized_gain.record_short_term_cap_gain(
+                        disposed_lot.when.month0() as usize,
+                        disposed_cap_gain,
+                    );
                 }
             }
             println!(
@@ -2131,12 +2172,18 @@ async fn process_account_list(
         println!(
             "  Year    | Income           | Short-term cap gain | Long-term cap gain  | Total"
         );
-        for (year, quarters) in annual_realized_gains {
-            for (q, realized_gain) in quarters.iter().enumerate() {
+        for (year, annual_realized_gain) in annual_realized_gains {
+            let (symbol, realized_gains) = {
+                ('P', annual_realized_gain.by_payment_period)
+                // TODO: Add user option to restore `by_quarter` display
+                //('Q', annual_realized_gains.by_quarter)
+            };
+            for (q, realized_gain) in realized_gains.iter().enumerate() {
                 if *realized_gain != RealizedGain::default() {
                     println!(
-                        "  {} Q{} | ${:15} | ${:18} | ${:18} | ${:18}",
+                        "  {} {}{} | ${:15} | ${:18} | ${:18} | ${:18}",
                         year,
+                        symbol,
                         q + 1,
                         realized_gain.income.separated_string_with_fixed_place(2),
                         realized_gain
