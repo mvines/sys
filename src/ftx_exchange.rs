@@ -196,7 +196,14 @@ impl ExchangeClient for FtxExchangeClient {
             })
             .await
             .unwrap();
-        assert_eq!(hourly_prices.len(), 24);
+
+        if hourly_prices.len() != 24 {
+            return Err(format!(
+                "Failed to fetch price data for last 24 hours (fetched {} hours)",
+                hourly_prices.len()
+            )
+            .into());
+        }
 
         let weighted_24h_avg_price = {
             let mut total_volume = 0.;
