@@ -1173,6 +1173,7 @@ async fn process_tulip_deposit<T: Signers>(
     address: Pubkey,
     lot_selection_method: LotSelectionMethod,
     signers: T,
+    existing_signature: Option<Signature>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let sol = MaybeToken::SOL();
     let minimum_lamport_balance = sol.amount(0.01);
@@ -1224,30 +1225,6 @@ async fn process_tulip_deposit<T: Signers>(
         liquidity_token_price * Decimal::from_f64(liquidity_token_ui_amount).unwrap()
     );
 
-    let instructions = tulip::deposit(
-        rpc_client,
-        address,
-        liquidity_token,
-        collateral_token,
-        liquidity_amount,
-    )?;
-
-    let (recent_blockhash, last_valid_block_height) =
-        rpc_client.get_latest_blockhash_with_commitment(rpc_client.commitment())?;
-
-    let mut message = Message::new(&instructions, Some(&address));
-    message.recent_blockhash = recent_blockhash;
-
-    let mut transaction = Transaction::new_unsigned(message);
-    let simulation_result = rpc_client.simulate_transaction(&transaction)?.value;
-    if simulation_result.err.is_some() {
-        return Err(format!("Simulation failure: {:?}", simulation_result).into());
-    }
-
-    transaction.try_sign(&signers, recent_blockhash)?;
-    let signature = transaction.signatures[0];
-    println!("Transaction signature: {}", signature);
-
     if db.get_account(address, collateral_token.into()).is_none() {
         let epoch = rpc_client.get_epoch_info()?.epoch;
         db.add_account(TrackedAccount {
@@ -1260,20 +1237,58 @@ async fn process_tulip_deposit<T: Signers>(
             no_sync: Some(true),
         })?;
     }
-    db.record_swap(
-        signature,
-        last_valid_block_height,
-        address,
-        liquidity_token,
-        liquidity_token_price,
-        collateral_token.into(),
-        collateral_token_price,
-        lot_selection_method,
-    )?;
 
-    if !send_transaction_until_expired(rpc_client, &transaction, last_valid_block_height) {
-        db.cancel_swap(signature).expect("cancel_swap");
-        return Err("Swap failed".into());
+    if let Some(existing_signature) = existing_signature {
+        db.record_swap(
+            existing_signature,
+            0, /*last_valid_block_height*/
+            address,
+            liquidity_token,
+            liquidity_token_price,
+            collateral_token.into(),
+            collateral_token_price,
+            lot_selection_method,
+        )?;
+    } else {
+        let instructions = tulip::deposit(
+            rpc_client,
+            address,
+            liquidity_token,
+            collateral_token,
+            liquidity_amount,
+        )?;
+
+        let (recent_blockhash, last_valid_block_height) =
+            rpc_client.get_latest_blockhash_with_commitment(rpc_client.commitment())?;
+
+        let mut message = Message::new(&instructions, Some(&address));
+        message.recent_blockhash = recent_blockhash;
+
+        let mut transaction = Transaction::new_unsigned(message);
+        let simulation_result = rpc_client.simulate_transaction(&transaction)?.value;
+        if simulation_result.err.is_some() {
+            return Err(format!("Simulation failure: {:?}", simulation_result).into());
+        }
+
+        transaction.try_sign(&signers, recent_blockhash)?;
+        let signature = transaction.signatures[0];
+        println!("Transaction signature: {}", signature);
+
+        db.record_swap(
+            signature,
+            last_valid_block_height,
+            address,
+            liquidity_token,
+            liquidity_token_price,
+            collateral_token.into(),
+            collateral_token_price,
+            lot_selection_method,
+        )?;
+
+        if !send_transaction_until_expired(rpc_client, &transaction, last_valid_block_height) {
+            db.cancel_swap(signature).expect("cancel_swap");
+            return Err("Swap failed".into());
+        }
     }
     Ok(())
 }
@@ -4199,6 +4214,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .help("Source account of funds"),
                         )
                         .arg(lot_selection_arg())
+                        .arg(
+                            Arg::with_name("transaction")
+                                .long("transaction")
+                                .value_name("SIGNATURE")
+                                .takes_value(true)
+                                .validator(is_parsable::<Signature>)
+                                .help("Existing deposit transaction signature that succeeded but \
+                                      due to RPC infrastructure limitations the local database \
+                                      considered it to have failed. Careful!")
+                        )
                 )
                 .subcommand(
                     SubCommand::with_name("withdraw")
@@ -5164,6 +5189,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let signer = signer.expect("signer");
                 let lot_selection_method =
                     value_t_or_exit!(arg_matches, "lot_selection", LotSelectionMethod);
+                let signature = value_t!(arg_matches, "transaction", Signature).ok();
 
                 process_tulip_deposit(
                     &mut db,
@@ -5174,6 +5200,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     address,
                     lot_selection_method,
                     vec![signer],
+                    signature,
                 )
                 .await?;
                 process_sync_swaps(&mut db, &rpc_client, &notifier).await?;
