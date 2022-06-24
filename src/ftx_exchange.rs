@@ -127,10 +127,10 @@ impl ExchangeClient for FtxExchangeClient {
                             Token::from_str(&wd.coin).ok()
                         };
 
-                        let (completed, tx_id) = if wd.status == WithdrawStatus::Complete {
-                            (true, wd.txid)
-                        } else {
-                            (false, None)
+                        let (completed, tx_id) = match wd.status {
+                            WithdrawStatus::Complete => (true, wd.txid),
+                            WithdrawStatus::Cancelled => (true, None),
+                            _ => (false, None),
                         };
 
                         return Some(WithdrawalInfo {
