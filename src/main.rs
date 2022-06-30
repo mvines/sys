@@ -1506,7 +1506,7 @@ async fn process_sync_swaps(
                                     address, mint
                                 )
                             });
-                        (post as i64 - pre as i64).abs() as u64
+                        (post as i64 - pre as i64).unsigned_abs()
                     };
 
                     let from_amount = token_amount_diff(address, from_token.mint());
