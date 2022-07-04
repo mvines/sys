@@ -1025,7 +1025,7 @@ async fn process_jup_swap<T: Signers>(
     address: Pubkey,
     from_token: Token,
     to_token: Token,
-    ui_amount: f64,
+    ui_amount: Option<f64>,
     slippage: f64,
     lot_selection_method: LotSelectionMethod,
     signers: T,
@@ -1034,7 +1034,10 @@ async fn process_jup_swap<T: Signers>(
         .get_account(address, from_token.into())
         .ok_or_else(|| format!("{} account does not exist for {}", from_token, address))?;
 
-    let amount = from_token.amount(ui_amount);
+    let amount = match ui_amount {
+        Some(ui_amount) => from_token.amount(ui_amount),
+        None => from_account.last_update_balance,
+    };
 
     if from_account.last_update_balance < amount {
         return Err(format!(
@@ -3103,7 +3106,7 @@ async fn process_account_wrap<T: Signers>(
     db: &mut Db,
     rpc_client: &RpcClient,
     address: Pubkey,
-    amount: u64,
+    amount: Option<u64>,
     lot_selection_method: LotSelectionMethod,
     lot_numbers: Option<HashSet<usize>>,
     authority_address: Pubkey,
@@ -3113,9 +3116,10 @@ async fn process_account_wrap<T: Signers>(
     let wsol = Token::wSOL;
     let wsol_address = wsol.ata(&address);
 
-    let _from_account = db
+    let from_account = db
         .get_account(address, sol)
         .ok_or_else(|| format!("SOL account does not exist for {}", address))?;
+    let amount = amount.unwrap_or(from_account.last_update_balance);
 
     let _to_account = db
         .get_account(address, wsol.into())
@@ -3191,7 +3195,7 @@ async fn process_account_unwrap<T: Signers>(
     db: &mut Db,
     rpc_client: &RpcClient,
     address: Pubkey,
-    amount: u64,
+    amount: Option<u64>,
     lot_selection_method: LotSelectionMethod,
     lot_numbers: Option<HashSet<usize>>,
     authority_address: Pubkey,
@@ -3200,9 +3204,10 @@ async fn process_account_unwrap<T: Signers>(
     let sol = MaybeToken::SOL();
     let wsol = Token::wSOL;
 
-    let _from_account = db
+    let from_account = db
         .get_account(address, wsol.into())
         .ok_or_else(|| format!("Wrapped SOL account does not exist for {}", address))?;
+    let amount = amount.unwrap_or(from_account.last_update_balance);
 
     let _to_account = db
         .get_account(address, sol)
@@ -3966,9 +3971,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             Arg::with_name("amount")
                                 .value_name("AMOUNT")
                                 .takes_value(true)
-                                .validator(is_amount)
+                                .validator(is_amount_or_all)
                                 .required(true)
-                                .help("The amount to wrap, in SOL"),
+                                .help("The amount to wrap, in SOL; accepts keyword ALL"),
                         )
                         .arg(
                             Arg::with_name("by")
@@ -3989,8 +3994,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .value_name("ADDRESS")
                                 .takes_value(true)
                                 .required(true)
-                                .validator(is_valid_pubkey)
-                                .help("Address of the account to unwrap")
+                                .validator(is_amount_or_all)
+                                .help("Address of the account to unwrap; accepts keyword ALL")
                         )
                         .arg(
                             Arg::with_name("amount")
@@ -4154,9 +4159,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             Arg::with_name("amount")
                                 .value_name("SOURCE TOKEN AMOUNT")
                                 .takes_value(true)
-                                .validator(is_amount)
+                                .validator(is_amount_or_all)
                                 .required(true)
-                                .help("Amount of tokens to swap"),
+                                .help("Amount of tokens to swap; accepts ALL keyword"),
                         )
                         .arg(
                             Arg::with_name("slippage")
@@ -5060,7 +5065,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             ("wrap", Some(arg_matches)) => {
                 let address = pubkey_of(arg_matches, "address").unwrap();
-                let amount = MaybeToken::SOL().amount(value_t_or_exit!(arg_matches, "amount", f64));
+                let amount = match arg_matches.value_of("amount").unwrap() {
+                    "ALL" => None,
+                    amount => Some(MaybeToken::SOL().amount(amount.parse::<f64>().unwrap())),
+                };
                 let lot_numbers = lot_numbers_of(arg_matches, "lot_numbers");
                 let lot_selection_method =
                     value_t_or_exit!(arg_matches, "lot_selection", LotSelectionMethod);
@@ -5093,7 +5101,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             ("unwrap", Some(arg_matches)) => {
                 let address = pubkey_of(arg_matches, "address").unwrap();
-                let amount = MaybeToken::SOL().amount(value_t_or_exit!(arg_matches, "amount", f64));
+                let amount = match arg_matches.value_of("amount").unwrap() {
+                    "ALL" => None,
+                    amount => Some(MaybeToken::SOL().amount(amount.parse::<f64>().unwrap())),
+                };
                 let lot_numbers = lot_numbers_of(arg_matches, "lot_numbers");
                 let lot_selection_method =
                     value_t_or_exit!(arg_matches, "lot_selection", LotSelectionMethod);
@@ -5139,9 +5150,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let (signer, address) = signer_of(arg_matches, "address", &mut wallet_manager)?;
                 let from_token = value_t_or_exit!(arg_matches, "from_token", Token);
                 let to_token = value_t_or_exit!(arg_matches, "to_token", Token);
-                let ui_amount = value_t_or_exit!(arg_matches, "amount", f64);
+                let ui_amount = match arg_matches.value_of("ui_amount").unwrap() {
+                    "ALL" => None,
+                    ui_amount => Some(ui_amount.parse::<f64>().unwrap()),
+                };
                 let slippage = value_t_or_exit!(arg_matches, "slippage", f64);
-
                 let signer = signer.expect("signer");
                 let address = address.expect("address");
                 let lot_selection_method =
