@@ -13,21 +13,21 @@ chrono = "0.4"
 chrono-humanize = "0.2.1"
 clap = "2.33"
 console = "0.14.1"
-rust_decimal = "1.23"
-rust_decimal_macros = "1.23"
 fd-lock = "3.0.0"
-jup-ag = "0.2.3"
-#jup-ag = { path = "../jup_ag" }
 #ftx = { git = "https://github.com/fabianboesiger/ftx", rev = "ce576c74f11c1795eef8cd101735166cb77b7892" }
 ftx = { git = "https://github.com/mvines/ftx", rev = "eea60b98cc47052dc0e6c42efe861d8d7cf6fb7f" }
 #ftx = { path = "../ftx" }
 itertools = "0.10.0"
-separator = "0.4.1"
+jup-ag = "0.2.3"
+#jup-ag = { path = "../jup_ag" }
 pickledb = { git = "https://github.com/seladb/pickledb-rs.git", rev = "0.5.0" }
 reqwest = "0.11"
-simple_excel_writer = "0.1.9"
+rust_decimal = "1.23"
+rust_decimal_macros = "1.23"
+separator = "0.4.1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+simple_excel_writer = "0.1.9"
 solana-clap-utils = "=1.10.8"
 solana-cli-config = "=1.10.8"
 solana-cli-output = "=1.10.8"
