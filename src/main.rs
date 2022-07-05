@@ -2802,7 +2802,6 @@ async fn process_account_sweep<T: Signers>(
         via_transitory_stake.as_ref()
     {
         transaction.try_sign(
-            //&[&transitory_stake_account, &sweep_stake_authority_keypair],
             &[transitory_stake_account, sweep_stake_authority_keypair],
             recent_blockhash,
         )?;
