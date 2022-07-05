@@ -161,6 +161,13 @@ fn send_transaction_until_expired(
             }
         };
 
+        // `send_and_confirm_transaction_with_spinner()` fails with
+        // "Transaction simulation failed: This transaction has already been processed" (AlreadyProcessed)
+        // if the transaction was already processed by an earlier iteration of this loop
+        if matches!(rpc_client.confirm_transaction(&transaction.signatures[0]), Ok(true)) {
+            return true;
+        }
+
         match rpc_client.send_and_confirm_transaction_with_spinner(transaction) {
             Ok(_) => return true,
             Err(err) => {
