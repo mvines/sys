@@ -215,9 +215,11 @@ impl fmt::Display for LotAcquistionKind {
             }
             LotAcquistionKind::Swap {
                 token,
-                amount,
                 signature,
+                /*amount*/
+                ..
             } => {
+                /*
                 if let Some(amount) = amount {
                     write!(
                         f,
@@ -231,6 +233,8 @@ impl fmt::Display for LotAcquistionKind {
                 } else {
                     write!(f, "Swap from {}, {}", token, signature)
                 }
+                */
+                write!(f, "Swap from {}, {}", token, signature)
             }
         }
     }
