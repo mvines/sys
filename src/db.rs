@@ -12,8 +12,9 @@ use {
     },
     std::{
         collections::HashSet,
-        fmt, fs,
+        fmt, fs, io,
         path::{Path, PathBuf},
+        time::{SystemTime, UNIX_EPOCH},
     },
     strum::{EnumString, IntoStaticStr},
     thiserror::Error,
@@ -22,7 +23,7 @@ use {
 #[derive(Error, Debug)]
 pub enum DbError {
     #[error("Io: {0}")]
-    Io(#[from] std::io::Error),
+    Io(#[from] io::Error),
 
     #[error("PickleDb: {0}")]
     PickleDb(#[from] pickledb::error::Error),
@@ -66,14 +67,9 @@ pub fn new<P: AsRef<Path>>(db_path: P) -> DbResult<Db> {
         fs::create_dir_all(db_path)?;
     }
 
-    let db_filename = db_path.join("◎.db");
+    let legacy_db_filename = db_path.join("◎.db");
     let credentials_db_filename = db_path.join("🤐.db");
-
-    let db = if db_filename.exists() {
-        PickleDb::load_json(db_filename, PickleDbDumpPolicy::DumpUponRequest)?
-    } else {
-        PickleDb::new_json(db_filename, PickleDbDumpPolicy::DumpUponRequest)
-    };
+    let data_filename = db_path.join("data.json");
 
     let credentials_db = if credentials_db_filename.exists() {
         PickleDb::load_json(credentials_db_filename, PickleDbDumpPolicy::DumpUponRequest)?
@@ -81,16 +77,27 @@ pub fn new<P: AsRef<Path>>(db_path: P) -> DbResult<Db> {
         PickleDb::new_json(credentials_db_filename, PickleDbDumpPolicy::DumpUponRequest)
     };
 
+    let data = if data_filename.exists() {
+        DbData::load(&data_filename)?
+    } else if legacy_db_filename.exists() {
+        let db = PickleDb::load_json(&legacy_db_filename, PickleDbDumpPolicy::NeverDump)?;
+        DbData::import_legacy_db(&db)
+    } else {
+        DbData::default()
+    };
+
     Ok(Db {
-        db,
+        data,
+        data_filename,
         credentials_db,
         auto_save: true,
     })
 }
 
 pub struct Db {
-    db: PickleDb,
     credentials_db: PickleDb,
+    data: DbData,
+    data_filename: PathBuf,
     auto_save: bool,
 }
 
@@ -580,6 +587,99 @@ pub struct TransitorySweepStake {
     pub address: Pubkey,
 }
 
+#[derive(Debug, Default, PartialEq, Clone, Serialize, Deserialize)]
+pub struct DbData {
+    next_lot_number: usize,
+    accounts: Vec<TrackedAccount>,
+    open_orders: Vec<OpenOrder>,
+    disposed_lots: Vec<DisposedLot>,
+    pending_deposits: Vec<PendingDeposit>,
+    pending_withdrawals: Vec<PendingWithdrawal>,
+    pending_transfers: Vec<PendingTransfer>,
+    pending_swaps: Vec<PendingSwap>,
+    sweep_stake_account: Option<SweepStakeAccount>,
+    transitory_sweep_stake_accounts: Vec<TransitorySweepStake>,
+}
+
+impl DbData {
+    fn import_legacy_db(db: &PickleDb) -> Self {
+        Self {
+            next_lot_number: db.get::<usize>("next_lot_number").unwrap_or(0),
+            accounts: db
+                .liter("accounts")
+                .filter_map(|item_iter| item_iter.get_item())
+                .collect(),
+            open_orders: db.get("orders").unwrap_or_default(),
+            disposed_lots: db.get("disposed-lots").unwrap_or_default(),
+            pending_deposits: db
+                .lexists("deposits")
+                .then(|| {
+                    db.liter("deposits")
+                        .filter_map(|item_iter| item_iter.get_item())
+                        .collect()
+                })
+                .unwrap_or_default(),
+            pending_withdrawals: db
+                .lexists("withdrawals")
+                .then(|| {
+                    db.liter("withdrawals")
+                        .filter_map(|item_iter| item_iter.get_item())
+                        .collect()
+                })
+                .unwrap_or_default(),
+            pending_transfers: db
+                .lexists("transfers")
+                .then(|| {
+                    db.liter("transfers")
+                        .filter_map(|item_iter| item_iter.get_item())
+                        .collect()
+                })
+                .unwrap_or_default(),
+            pending_swaps: db
+                .lexists("swaps")
+                .then(|| {
+                    db.liter("swaps")
+                        .filter_map(|item_iter| item_iter.get_item())
+                        .collect()
+                })
+                .unwrap_or_default(),
+            sweep_stake_account: db.get("sweep-stake-account"),
+            transitory_sweep_stake_accounts: db
+                .get("transitory-sweep-stake-accounts")
+                .unwrap_or_default(),
+        }
+    }
+
+    fn load(filename: &Path) -> io::Result<Self> {
+        let bytes = fs::read(filename)?;
+
+        serde_json::from_str(std::str::from_utf8(&bytes).expect("invalid utf8")).map_err(|err| {
+            io::Error::new(
+                io::ErrorKind::Other,
+                format!("JSON parse failed: {:?}", err),
+            )
+        })
+    }
+
+    fn save(&self, filename: &Path) -> io::Result<()> {
+        let bytes = serde_json::to_string_pretty(self)?.into_bytes();
+
+        let temp_filename = format!(
+            "{}.temp.{}",
+            filename.display(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs()
+        );
+
+        fs::write(&temp_filename, bytes)?;
+        fs::rename(temp_filename, filename)?;
+
+        Ok(())
+    }
+}
+
 impl Db {
     pub fn set_exchange_credentials(
         &mut self,
@@ -629,7 +729,7 @@ impl Db {
 
     fn save(&mut self) -> DbResult<()> {
         if self.auto_save {
-            self.db.dump()?;
+            self.data.save(&self.data_filename)?;
         }
         Ok(())
     }
@@ -647,10 +747,6 @@ impl Db {
         lot_selection_method: LotSelectionMethod,
         lot_numbers: Option<HashSet<usize>>,
     ) -> DbResult<()> {
-        if !self.db.lexists("deposits") {
-            self.db.lcreate("deposits")?;
-        }
-
         let mut from_account = self
             .get_account(from_address, token)
             .ok_or(DbError::AccountDoesNotExist(from_address, token))?;
@@ -668,8 +764,7 @@ impl Db {
                 lots: from_account.extract_lots(self, amount, lot_selection_method, lot_numbers)?,
             },
         };
-        self.db.ladd("deposits", &deposit).unwrap();
-
+        self.data.pending_deposits.push(deposit);
         self.update_account(from_account) // `update_account` calls `save`...
     }
 
@@ -678,20 +773,17 @@ impl Db {
         signature: Signature,
         success: Option<NaiveDate>,
     ) -> DbResult<()> {
-        let mut pending_deposits = self.pending_deposits(None);
-
-        let PendingDeposit { transfer, .. } = pending_deposits
+        let PendingDeposit { transfer, .. } = self
+            .data
+            .pending_deposits
             .iter()
             .find(|pd| pd.transfer.signature == signature)
             .ok_or(DbError::PendingDepositDoesNotExist(signature))?
             .clone();
 
-        pending_deposits.retain(|pd| pd.transfer.signature != signature);
-
-        self.db.lrem_list("deposits")?;
-        self.db.lcreate("deposits")?;
-        self.db.lextend("deposits", &pending_deposits).unwrap();
-
+        self.data
+            .pending_deposits
+            .retain(|pd| pd.transfer.signature != signature);
         self.complete_transfer_or_deposit(transfer, success, false) // `complete_transfer_or_deposit` calls `save`...
     }
 
@@ -704,16 +796,9 @@ impl Db {
     }
 
     pub fn pending_deposits(&self, exchange: Option<Exchange>) -> Vec<PendingDeposit> {
-        if !self.db.lexists("deposits") {
-            // Handle buggy older databases with "deposits" saved as a value instead of list.
-            if self.db.exists("deposits") {
-                return self.db.get::<Vec<PendingDeposit>>("deposits").unwrap();
-            }
-            return vec![];
-        }
-        self.db
-            .liter("deposits")
-            .filter_map(|item_iter| item_iter.get_item::<PendingDeposit>())
+        self.data
+            .pending_deposits
+            .iter()
             .filter(|pending_deposit| {
                 if let Some(exchange) = exchange {
                     pending_deposit.exchange == exchange
@@ -721,6 +806,7 @@ impl Db {
                     true
                 }
             })
+            .cloned()
             .collect()
     }
 
@@ -736,15 +822,11 @@ impl Db {
         to_token_price: Decimal,
         lot_selection_method: LotSelectionMethod,
     ) -> DbResult<()> {
-        if !self.db.lexists("swaps") {
-            self.db.lcreate("swaps")?;
-        }
-
         let _ = self
             .get_account(address, from_token)
             .ok_or(DbError::AccountDoesNotExist(address, from_token))?;
 
-        let pendining_swap = PendingSwap {
+        self.data.pending_swaps.push(PendingSwap {
             signature,
             last_valid_block_height,
             address,
@@ -753,8 +835,7 @@ impl Db {
             to_token,
             to_token_price,
             lot_selection_method,
-        };
-        self.db.ladd("swaps", &pendining_swap).unwrap();
+        });
         self.save()
     }
 
@@ -763,7 +844,6 @@ impl Db {
         signature: Signature,
         success: Option<(NaiveDate, u64, u64)>,
     ) -> DbResult<()> {
-        let mut pending_swaps = self.pending_swaps();
         let PendingSwap {
             signature,
             address,
@@ -773,17 +853,17 @@ impl Db {
             to_token_price,
             lot_selection_method,
             ..
-        } = pending_swaps
+        } = self
+            .data
+            .pending_swaps
             .iter()
             .find(|pd| pd.signature == signature)
             .ok_or(DbError::PendingDepositDoesNotExist(signature))?
             .clone();
 
-        pending_swaps.retain(|pd| pd.signature != signature);
-
-        self.db.lrem_list("swaps")?;
-        self.db.lcreate("swaps")?;
-        self.db.lextend("swaps", &pending_swaps).unwrap();
+        self.data
+            .pending_swaps
+            .retain(|pd| pd.signature != signature);
 
         let mut from_account = self
             .get_account(address, from_token)
@@ -795,14 +875,13 @@ impl Db {
         self.auto_save(false)?;
         if let Some((when, from_amount, to_amount)) = success {
             let lots = from_account.extract_lots(self, from_amount, lot_selection_method, None)?;
-            let mut disposed_lots = self.disposed_lots();
 
             let to_amount_over_from_amount = to_amount as f64 / from_amount as f64;
             for lot in lots {
                 let lot_from_amount = lot.amount as f64;
                 let lot_to_amount = lot_from_amount * to_amount_over_from_amount;
 
-                disposed_lots.push(DisposedLot {
+                self.data.disposed_lots.push(DisposedLot {
                     lot,
                     when,
                     price: None,
@@ -815,7 +894,6 @@ impl Db {
                     token: from_token,
                 });
             }
-            self.db.set("disposed-lots", &disposed_lots).unwrap();
 
             to_account.merge_or_add_lot(Lot {
                 lot_number: self.next_lot_number(),
@@ -853,13 +931,7 @@ impl Db {
     }
 
     pub fn pending_swaps(&self) -> Vec<PendingSwap> {
-        if !self.db.lexists("swaps") {
-            return vec![];
-        }
-        self.db
-            .liter("swaps")
-            .filter_map(|item_iter| item_iter.get_item::<PendingSwap>())
-            .collect()
+        self.data.pending_swaps.clone()
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -874,15 +946,8 @@ impl Db {
         lot_selection_method: LotSelectionMethod,
         lot_numbers: Option<HashSet<usize>>,
     ) -> DbResult<()> {
-        if !self.db.lexists("withdrawals") {
-            self.db.lcreate("withdrawals")?;
-        }
-
-        {
-            let pending_withdrawals = self.pending_withdrawals(None);
-            if pending_withdrawals.iter().any(|pw| pw.tag == tag) {
-                panic!("Withdrawal tag already present in database: {}", tag);
-            }
+        if self.data.pending_withdrawals.iter().any(|pw| pw.tag == tag) {
+            panic!("Withdrawal tag already present in database: {}", tag);
         }
 
         let mut from_account = self
@@ -920,21 +985,13 @@ impl Db {
             lots,
         };
 
-        self.db.ladd("withdrawals", &withdrawal).unwrap();
+        self.data.pending_withdrawals.push(withdrawal);
         self.update_account(from_account) // `update_account` calls `save`.../
     }
 
-    fn remove_pending_withdrawal(&mut self, tag: &str) -> DbResult<()> {
-        let mut pending_withdrawals = self.pending_withdrawals(None);
-        pending_withdrawals.retain(|pw| pw.tag != tag);
-
-        self.db.lrem_list("withdrawals")?;
-        self.db.lcreate("withdrawals")?;
-        self.db
-            .lextend("withdrawals", &pending_withdrawals)
-            .unwrap();
-
-        Ok(())
+    // The caller must call `save()`...
+    fn remove_pending_withdrawal(&mut self, tag: &str) {
+        self.data.pending_withdrawals.retain(|pw| pw.tag != tag);
     }
 
     pub fn cancel_withdrawal(
@@ -947,7 +1004,7 @@ impl Db {
             ..
         }: PendingWithdrawal,
     ) -> DbResult<()> {
-        self.remove_pending_withdrawal(&tag)?;
+        self.remove_pending_withdrawal(&tag);
 
         let mut from_account = self
             .get_account(from_address, token)
@@ -968,7 +1025,7 @@ impl Db {
             ..
         }: PendingWithdrawal,
     ) -> DbResult<()> {
-        self.remove_pending_withdrawal(&tag)?;
+        self.remove_pending_withdrawal(&tag);
 
         let mut to_account = self
             .get_account(to_address, token)
@@ -979,13 +1036,9 @@ impl Db {
     }
 
     pub fn pending_withdrawals(&self, exchange: Option<Exchange>) -> Vec<PendingWithdrawal> {
-        if !self.db.lexists("withdrawals") {
-            return vec![];
-        }
-
-        self.db
-            .liter("withdrawals")
-            .filter_map(|item_iter| item_iter.get_item::<PendingWithdrawal>())
+        self.data
+            .pending_withdrawals
+            .iter()
             .filter(|pending_withdrawal| {
                 if let Some(exchange) = exchange {
                     pending_withdrawal.exchange == exchange
@@ -993,6 +1046,7 @@ impl Db {
                     true
                 }
             })
+            .cloned()
             .collect()
     }
 
@@ -1018,8 +1072,8 @@ impl Db {
                 assert!(ui_amount.is_none())
             }
         }
-        let mut open_orders = self.open_orders(None, None);
-        open_orders.push(OpenOrder {
+
+        self.data.open_orders.push(OpenOrder {
             side,
             creation_time: Utc::now(),
             exchange,
@@ -1031,25 +1085,23 @@ impl Db {
             token: deposit_account.token,
             ui_amount,
         });
-        self.db.set("orders", &open_orders).unwrap();
         self.update_account(deposit_account) // `update_account` calls `save`...
     }
 
     #[allow(dead_code)]
     pub fn update_order_price(&mut self, order_id: &str, price: f64) -> DbResult<()> {
-        let orders: Vec<_> = self
-            .db
-            .get::<Vec<OpenOrder>>("orders")
-            .unwrap_or_default()
-            .into_iter()
-            .map(|mut order| {
+        self.data.open_orders = self
+            .data
+            .open_orders
+            .iter()
+            .map(|order| {
+                let mut order = order.clone();
                 if order.order_id == order_id {
                     order.price = price
                 }
                 order
             })
             .collect::<Vec<_>>();
-        self.db.set("orders", &orders).unwrap();
         self.save()
     }
 
@@ -1063,7 +1115,6 @@ impl Db {
         fee: Option<(f64, String)>,
     ) -> DbResult<()> {
         self.auto_save(false)?;
-        let mut open_orders = self.open_orders(None, None);
 
         let OpenOrder {
             exchange,
@@ -1074,14 +1125,14 @@ impl Db {
             deposit_address,
             token,
             ..
-        } = open_orders
+        } = self
+            .data
+            .open_orders
             .iter()
             .find(|o| o.order_id == order_id)
             .ok_or_else(|| DbError::OpenOrderDoesNotExist(order_id.to_string()))?
             .clone();
-
-        open_orders.retain(|o| o.order_id != order_id);
-        self.db.set("orders", &open_orders).unwrap();
+        self.data.open_orders.retain(|o| o.order_id != order_id);
 
         match side {
             OrderSide::Buy => {
@@ -1123,7 +1174,6 @@ impl Db {
                 );
 
                 if !filled_lots.is_empty() {
-                    let mut disposed_lots = self.disposed_lots();
                     for lot in filled_lots {
                         // Split fee proportionally across all disposed lots
                         let fee = fee.clone().map(|(fee_amount, fee_coin)| {
@@ -1132,7 +1182,7 @@ impl Db {
                                 fee_coin,
                             )
                         });
-                        disposed_lots.push(DisposedLot {
+                        self.data.disposed_lots.push(DisposedLot {
                             lot,
                             when,
                             price: Some(price),
@@ -1146,7 +1196,6 @@ impl Db {
                             token,
                         });
                     }
-                    self.db.set("disposed-lots", &disposed_lots).unwrap();
                 }
 
                 if !cancelled_lots.is_empty() {
@@ -1184,7 +1233,7 @@ impl Db {
             LotDisposalKind::Other { description },
             when,
             decimal_price,
-        )?;
+        );
         self.update_account(from_account)?; // `update_account` calls `save`...
         Ok(disposed_lots)
     }
@@ -1197,20 +1246,21 @@ impl Db {
         kind: LotDisposalKind,
         when: NaiveDate,
         decimal_price: Decimal,
-    ) -> DbResult<Vec<DisposedLot>> {
-        let mut disposed_lots = self.disposed_lots();
+    ) -> Vec<DisposedLot> {
+        let mut newly_disposed_lots = vec![];
         for lot in lots {
-            disposed_lots.push(DisposedLot {
+            let disposed_lot = DisposedLot {
                 lot,
                 when,
                 price: None,
                 decimal_price: Some(decimal_price),
                 kind: kind.clone(),
                 token,
-            });
+            };
+            self.data.disposed_lots.push(disposed_lot.clone());
+            newly_disposed_lots.push(disposed_lot);
         }
-        self.db.set("disposed-lots", &disposed_lots)?;
-        Ok(disposed_lots)
+        newly_disposed_lots
     }
 
     pub fn open_orders(
@@ -1218,9 +1268,9 @@ impl Db {
         exchange: Option<Exchange>,
         side: Option<OrderSide>,
     ) -> Vec<OpenOrder> {
-        let orders: Vec<OpenOrder> = self.db.get("orders").unwrap_or_default();
-        orders
-            .into_iter()
+        self.data
+            .open_orders
+            .iter()
             .filter(|order| {
                 if let Some(exchange) = exchange {
                     order.exchange == exchange
@@ -1229,20 +1279,17 @@ impl Db {
                 }
             })
             .filter(|order| side.is_none() || Some(order.side) == side)
+            .cloned()
             .collect()
     }
 
     pub fn add_account_no_save(&mut self, account: TrackedAccount) -> DbResult<()> {
         account.assert_lot_balance();
 
-        if !self.db.lexists("accounts") {
-            self.db.lcreate("accounts")?;
-        }
-
         if self.get_account(account.address, account.token).is_some() {
             Err(DbError::AccountAlreadyExists(account.address))
         } else {
-            self.db.ladd("accounts", &account).unwrap();
+            self.data.accounts.push(account);
             Ok(())
         }
     }
@@ -1258,15 +1305,7 @@ impl Db {
         let position = self
             .get_account_position(account.address, account.token)
             .ok_or(DbError::AccountDoesNotExist(account.address, account.token))?;
-        assert!(
-            self.db
-                .lpop::<TrackedAccount>("accounts", position)
-                .is_some(),
-            "Cannot update unknown account: {} ({})",
-            account.address,
-            account.token,
-        );
-        self.db.ladd("accounts", &account).unwrap();
+        self.data.accounts[position] = account;
         self.save()
     }
 
@@ -1274,13 +1313,7 @@ impl Db {
         let position = self
             .get_account_position(address, token)
             .ok_or(DbError::AccountDoesNotExist(address, token))?;
-        assert!(
-            self.db
-                .lpop::<TrackedAccount>("accounts", position)
-                .is_some(),
-            "Cannot remove unknown account: {}",
-            address
-        );
+        self.data.accounts.remove(position);
         Ok(())
     }
 
@@ -1290,63 +1323,48 @@ impl Db {
     }
 
     fn get_account_position(&self, address: Pubkey, token: MaybeToken) -> Option<usize> {
-        if self.db.lexists("accounts") {
-            for (position, value) in self.db.liter("accounts").enumerate() {
-                if let Some(tracked_account) = value.get_item::<TrackedAccount>() {
-                    if tracked_account.address == address && tracked_account.token == token {
-                        return Some(position);
-                    }
-                }
+        for (position, tracked_account) in self.data.accounts.iter().enumerate() {
+            if tracked_account.address == address && tracked_account.token == token {
+                return Some(position);
             }
         }
+
         None
     }
 
     pub fn get_account(&self, address: Pubkey, token: MaybeToken) -> Option<TrackedAccount> {
-        if !self.db.lexists("accounts") {
-            None
-        } else {
-            self.db
-                .liter("accounts")
-                .filter_map(|item_iter| item_iter.get_item::<TrackedAccount>())
-                .find(|tracked_account| {
-                    tracked_account.address == address && tracked_account.token == token
-                })
-        }
+        self.data
+            .accounts
+            .iter()
+            .find(|tracked_account| {
+                tracked_account.address == address && tracked_account.token == token
+            })
+            .cloned()
     }
 
     /// Returns all `MaybeToken`s associated with an `address`
     pub fn get_account_tokens(&self, address: Pubkey) -> Vec<TrackedAccount> {
-        if !self.db.lexists("accounts") {
-            vec![]
-        } else {
-            self.db
-                .liter("accounts")
-                .filter_map(|item_iter| item_iter.get_item::<TrackedAccount>())
-                .filter(|tracked_account| tracked_account.address == address)
-                .collect()
-        }
+        self.data
+            .accounts
+            .iter()
+            .filter(|tracked_account| tracked_account.address == address)
+            .cloned()
+            .collect()
     }
 
     pub fn get_accounts(&self) -> Vec<TrackedAccount> {
-        if !self.db.lexists("accounts") {
-            return vec![];
-        }
-        self.db
-            .liter("accounts")
-            .filter_map(|item_iter| item_iter.get_item::<TrackedAccount>())
-            .collect()
+        self.data.accounts.clone()
     }
 
     // The caller must call `save()`...
     pub fn next_lot_number(&mut self) -> usize {
-        let lot_number = self.db.get::<usize>("next_lot_number").unwrap_or(0);
-        self.db.set("next_lot_number", &(lot_number + 1)).unwrap();
-        lot_number
+        let next_lot_number = self.data.next_lot_number;
+        self.data.next_lot_number += 1;
+        next_lot_number
     }
 
     pub fn get_sweep_stake_account(&self) -> Option<SweepStakeAccount> {
-        self.db.get("sweep-stake-account")
+        self.data.sweep_stake_account.clone()
     }
 
     pub fn set_sweep_stake_account(
@@ -1358,17 +1376,15 @@ impl Db {
             .ok_or_else(|| {
                 DbError::AccountDoesNotExist(sweep_stake_account.address, MaybeToken::SOL())
             })?;
-        self.db
-            .set("sweep-stake-account", &sweep_stake_account)
-            .unwrap();
+
+        self.data.sweep_stake_account = Some(sweep_stake_account);
         self.save()
     }
 
     pub fn get_transitory_sweep_stake_addresses(&self) -> HashSet<Pubkey> {
-        self.db
-            .get::<Vec<TransitorySweepStake>>("transitory-sweep-stake-accounts")
-            .unwrap_or_default()
-            .into_iter()
+        self.data
+            .transitory_sweep_stake_accounts
+            .iter()
             .map(|tss| tss.address)
             .collect()
     }
@@ -1419,15 +1435,10 @@ impl Db {
     where
         T: IntoIterator<Item = Pubkey>,
     {
-        self.db
-            .set(
-                "transitory-sweep-stake-accounts",
-                &transitory_sweep_stake_addresses
-                    .into_iter()
-                    .map(|address| TransitorySweepStake { address })
-                    .collect::<Vec<_>>(),
-            )
-            .unwrap();
+        self.data.transitory_sweep_stake_accounts = transitory_sweep_stake_addresses
+            .into_iter()
+            .map(|address| TransitorySweepStake { address })
+            .collect();
         self.save()
     }
 
@@ -1470,7 +1481,7 @@ impl Db {
             )?,
         });
 
-        self.db.set("transfers", &pending_transfers).unwrap();
+        self.data.pending_transfers = pending_transfers;
         self.update_account(from_account) // `update_account` calls `save`...
     }
 
@@ -1540,7 +1551,7 @@ impl Db {
             .clone();
 
         pending_transfers.retain(|pt| pt.signature != signature);
-        self.db.set("transfers", &pending_transfers).unwrap();
+        self.data.pending_transfers = pending_transfers;
 
         self.complete_transfer_or_deposit(transfer, success, true) // `complete_transfer_or_deposit` calls `save`...
     }
@@ -1554,11 +1565,11 @@ impl Db {
     }
 
     pub fn pending_transfers(&self) -> Vec<PendingTransfer> {
-        self.db.get("transfers").unwrap_or_default()
+        self.data.pending_transfers.clone()
     }
 
     pub fn disposed_lots(&self) -> Vec<DisposedLot> {
-        let mut disposed_lots: Vec<DisposedLot> = self.db.get("disposed-lots").unwrap_or_default();
+        let mut disposed_lots = self.data.disposed_lots.clone();
         disposed_lots.sort_by_key(|lot| lot.when);
         disposed_lots
     }
@@ -1647,7 +1658,7 @@ impl Db {
             disposed_lot.lot = lot2;
             disposed_lots.push(disposed_lot);
 
-            self.db.set("disposed-lots", &disposed_lots)?;
+            self.data.disposed_lots = disposed_lots;
             self.update_account(account2)?;
         } else {
             if tracked_accounts.len() != 2 {
@@ -1794,8 +1805,8 @@ impl Db {
             other_disposed_lot.lot.lot_number = self.next_lot_number();
             disposed_lots.push(other_disposed_lot);
         }
-        self.db.set("disposed-lots", &disposed_lots)?;
 
+        self.data.disposed_lots = disposed_lots;
         self.auto_save(true)?;
         Ok(())
     }

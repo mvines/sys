@@ -21,6 +21,7 @@ itertools = "0.10.0"
 jup-ag = "0.2.3"
 #jup-ag = { path = "../jup_ag" }
 pickledb = { git = "https://github.com/seladb/pickledb-rs.git", rev = "0.5.0" }
+#pickledb = { path = "../pickledb-rs" }
 reqwest = "0.11"
 rust_decimal = "1.23"
 rust_decimal_macros = "1.23"
