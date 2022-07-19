@@ -587,6 +587,13 @@ pub struct TransitorySweepStake {
     pub address: Pubkey,
 }
 
+#[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
+pub struct TaxRate {
+    pub income: f64,
+    pub short_term_gain: f64,
+    pub long_term_gain: f64,
+}
+
 #[derive(Debug, Default, PartialEq, Clone, Serialize, Deserialize)]
 pub struct DbData {
     next_lot_number: usize,
@@ -599,6 +606,7 @@ pub struct DbData {
     pending_swaps: Vec<PendingSwap>,
     sweep_stake_account: Option<SweepStakeAccount>,
     transitory_sweep_stake_accounts: Vec<TransitorySweepStake>,
+    tax_rate: Option<TaxRate>,
 }
 
 impl DbData {
@@ -647,6 +655,7 @@ impl DbData {
             transitory_sweep_stake_accounts: db
                 .get("transitory-sweep-stake-accounts")
                 .unwrap_or_default(),
+            tax_rate: None,
         }
     }
 
@@ -1439,6 +1448,15 @@ impl Db {
             .into_iter()
             .map(|address| TransitorySweepStake { address })
             .collect();
+        self.save()
+    }
+
+    pub fn get_tax_rate(&self) -> Option<&TaxRate> {
+        self.data.tax_rate.as_ref()
+    }
+
+    pub fn set_tax_rate(&mut self, tax_rate: TaxRate) -> DbResult<()> {
+        self.data.tax_rate = Some(tax_rate);
         self.save()
     }
 

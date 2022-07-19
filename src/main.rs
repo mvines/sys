@@ -2196,10 +2196,9 @@ async fn process_account_list(
             println!();
         }
 
+        let tax_rate = db.get_tax_rate();
         println!("Realized Gains");
-        println!(
-            "  Year    | Income           | Short-term cap gain | Long-term cap gain  | Total"
-        );
+        println!("  Year    | Income                              | Short-term gain                     | Long-term gain");
         for (year, annual_realized_gain) in annual_realized_gains {
             let (symbol, realized_gains) = {
                 ('P', annual_realized_gain.by_payment_period)
@@ -2208,22 +2207,40 @@ async fn process_account_list(
             };
             for (q, realized_gain) in realized_gains.iter().enumerate() {
                 if *realized_gain != RealizedGain::default() {
+                    let tax = if let Some(tax_rate) = tax_rate {
+                        [
+                            realized_gain.income * tax_rate.income,
+                            realized_gain.short_term_cap_gain * tax_rate.short_term_gain,
+                            realized_gain.long_term_cap_gain * tax_rate.long_term_gain,
+                        ]
+                        .into_iter()
+                        .map(|tax| {
+                            if tax > 0. {
+                                format!("(tax: ${})", tax.separated_string_with_fixed_place(2))
+                            } else {
+                                String::new()
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                    } else {
+                        (0..3).map(|_| "  (tax: ?)".into()).collect()
+                    };
+
                     println!(
-                        "  {} {}{} | ${:15} | ${:18} | ${:18} | ${:18}",
+                        "  {} {}{} | ${:14}{:20} | ${:14}{:20} | ${:14}{:20}",
                         year,
                         symbol,
                         q + 1,
                         realized_gain.income.separated_string_with_fixed_place(2),
+                        tax[0],
                         realized_gain
                             .short_term_cap_gain
                             .separated_string_with_fixed_place(2),
+                        tax[1],
                         realized_gain
                             .long_term_cap_gain
                             .separated_string_with_fixed_place(2),
-                        (realized_gain.income
-                            + realized_gain.short_term_cap_gain
-                            + realized_gain.long_term_cap_gain)
-                            .separated_string_with_fixed_place(2),
+                        tax[2]
                     );
                 }
             }
@@ -3536,6 +3553,16 @@ fn lot_selection_arg<'a, 'b>() -> Arg<'a, 'b> {
         .help("Lot selection method")
 }
 
+fn is_tax_rate(s: String) -> Result<(), String> {
+    is_parsable::<f64>(s.clone())?;
+    let f = s.parse::<f64>().unwrap();
+    if (0. ..=1.).contains(&f) {
+        Ok(())
+    } else {
+        Err(format!("rate must be in the range [0,1]: {}", f))
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     solana_logger::setup_with_default("solana=info");
@@ -3833,6 +3860,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .takes_value(true)
                                 .required(true)
                                 .help("Stake authority keypair"),
+                        )
+                )
+                .subcommand(
+                    SubCommand::with_name("set-tax-rate")
+                        .about("Set entity tax rate for account listing")
+                        .arg(
+                            Arg::with_name("income")
+                                .takes_value(true)
+                                .required(true)
+                                .validator(is_tax_rate)
+                                .help("Income tax rate")
+                        )
+                        .arg(
+                            Arg::with_name("short-term-gain")
+                                .takes_value(true)
+                                .required(true)
+                                .validator(is_tax_rate)
+                                .help("Short-term capital gain tax rate")
+                        )
+                        .arg(
+                            Arg::with_name("long-term-gain")
+                                .takes_value(true)
+                                .required(true)
+                                .validator(is_tax_rate)
+                                .help("Long-term capital gain tax rate")
                         )
                 )
                 .subcommand(
@@ -4976,6 +5028,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 })?;
 
                 println!("Sweep stake account set to {}", address);
+            }
+            ("set-tax-rate", Some(arg_matches)) => {
+                let income = arg_matches
+                    .value_of("income")
+                    .unwrap()
+                    .parse::<f64>()
+                    .unwrap();
+                let short_term_gain = arg_matches
+                    .value_of("short-term-gain")
+                    .unwrap()
+                    .parse::<f64>()
+                    .unwrap();
+                let long_term_gain = arg_matches
+                    .value_of("long-term-gain")
+                    .unwrap()
+                    .parse::<f64>()
+                    .unwrap();
+
+                println!("Income tax rate: {:.2}", income);
+                println!("Short-term gain rate: {:.2}", short_term_gain);
+                println!("Long-term gain rate: {:.2}", long_term_gain);
+
+                db.set_tax_rate(TaxRate {
+                    income,
+                    short_term_gain,
+                    long_term_gain,
+                })?;
             }
             ("merge", Some(arg_matches)) => {
                 let from_address = pubkey_of(arg_matches, "from_address").unwrap();
