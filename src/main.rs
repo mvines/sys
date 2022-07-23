@@ -957,6 +957,7 @@ async fn process_exchange_sell(
             &mut false,
             &mut 0.,
             None,
+            true,
         )
         .await;
     }
@@ -1588,9 +1589,8 @@ fn liquidity_token_ui_amount(
 
                 (
                     format!(
-                        " [{}{}{}]",
-                        liquidity_token.symbol(),
-                        liquidity_ui_amount.separated_string_with_fixed_place(2),
+                        " [{}{}]",
+                        liquidity_token.format_ui_amount(liquidity_ui_amount),
                         match current_apr {
                             Some(current_apr) if include_apr =>
                                 format!(", {:.2}% APR", current_apr),
@@ -1624,6 +1624,7 @@ async fn println_lot(
     long_term_cap_gain: &mut bool,
     total_current_value: &mut f64,
     notifier: Option<&Notifier>,
+    verbose: bool,
 ) {
     let current_value =
         f64::try_from(Decimal::from_f64(token.ui_amount(lot.amount)).unwrap() * current_price)
@@ -1658,15 +1659,27 @@ async fn println_lot(
         false,
     );
 
+    let current_value = format!(
+        "value: ${}{}",
+        current_value.separated_string_with_fixed_place(2),
+        liquidity_ui_amount
+    );
+
+    let description = if verbose {
+        format!("| {}", lot.acquisition.kind,)
+    } else {
+        String::new()
+    };
+
     let msg = format!(
-        "{:>4}. {} | {}{:<16} at ${:<6} | current value: ${:<14}{} | income: ${:<11} | {} gain: ${:<14}{} | {}",
+        "{:>5}. {} | {:<20} at ${:<6} | {:<35} | income: ${:<11} | {} gain: ${:<14}{} {}",
         lot.lot_number,
         lot.acquisition.when,
-        token.symbol(),
-        ui_amount.separated_string_with_fixed_place(6),
-        f64::try_from(lot.acquisition.price()).unwrap().separated_string_with_fixed_place(2),
-        current_value.separated_string_with_fixed_place(2),
-        liquidity_ui_amount,
+        token.format_ui_amount(ui_amount),
+        f64::try_from(lot.acquisition.price())
+            .unwrap()
+            .separated_string_with_fixed_place(2),
+        current_value,
         income.separated_string_with_fixed_place(2),
         if *long_term_cap_gain {
             " long"
@@ -1675,7 +1688,7 @@ async fn println_lot(
         },
         cap_gain.separated_string_with_fixed_place(2),
         liquidity_token_cap_gain,
-        lot.acquisition.kind,
+        description,
     );
 
     if let Some(notifier) = notifier {
@@ -1691,7 +1704,9 @@ fn format_disposed_lot(
     total_cap_gain: &mut f64,
     long_term_cap_gain: &mut bool,
     total_current_value: &mut f64,
+    verbose: bool,
 ) -> String {
+    #![allow(clippy::to_string_in_format_args)]
     let cap_gain = disposed_lot
         .lot
         .cap_gain(disposed_lot.token, disposed_lot.price());
@@ -1703,13 +1718,21 @@ fn format_disposed_lot(
     *total_current_value += income + cap_gain;
     *total_cap_gain += cap_gain;
 
+    let description = if verbose {
+        format!(
+            "| {} | {}",
+            disposed_lot.lot.acquisition.kind, disposed_lot.kind
+        )
+    } else {
+        String::new()
+    };
+
     format!(
-        "{:>4}. {} | {:<4} | {}{:<17.9} at ${:<6} | income: ${:<11} | sold {} at ${:6} | {} gain: ${:<14} | {} | {}",
+        "{:>5}. {} | {:<7} | {:<17} at ${:<6} | income: ${:<11} | sold {} at ${:6} | {} gain: ${:<14} {}",
         disposed_lot.lot.lot_number,
         disposed_lot.lot.acquisition.when,
-        disposed_lot.token,
-        disposed_lot.token.symbol(),
-        disposed_lot.token.ui_amount(disposed_lot.lot.amount),
+        disposed_lot.token.to_string(),
+        disposed_lot.token.format_amount(disposed_lot.lot.amount),
         f64::try_from(disposed_lot.lot.acquisition.price()).unwrap().separated_string_with_fixed_place(2),
         income.separated_string_with_fixed_place(2),
         disposed_lot.when,
@@ -1720,8 +1743,7 @@ fn format_disposed_lot(
             "short"
         },
         cap_gain.separated_string_with_fixed_place(2),
-        disposed_lot.lot.acquisition.kind,
-        disposed_lot.kind,
+        description,
     )
 }
 
@@ -1817,6 +1839,7 @@ async fn process_account_add(
             &mut false,
             &mut 0.,
             None,
+            true,
         )
         .await;
 
@@ -1873,7 +1896,7 @@ async fn process_account_dispose(
         for disposed_lot in disposed_lots {
             println!(
                 "{}",
-                format_disposed_lot(&disposed_lot, &mut 0., &mut 0., &mut false, &mut 0.)
+                format_disposed_lot(&disposed_lot, &mut 0., &mut 0., &mut false, &mut 0., true)
             );
         }
         println!();
@@ -1921,6 +1944,7 @@ async fn process_account_list(
     show_all_disposed_lots: bool,
     summary_only: bool,
     notifier: &Notifier,
+    verbose: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut annual_realized_gains = BTreeMap::<usize, AnnualRealizedGain>::default();
     let mut held_tokens = BTreeMap::<MaybeToken, (/*price*/ Decimal, /*amount*/ u64)>::default();
@@ -2029,6 +2053,7 @@ async fn process_account_list(
                         &mut long_term_cap_gain,
                         &mut account_current_value,
                         None,
+                        verbose,
                     )
                     .await;
 
@@ -2056,11 +2081,10 @@ async fn process_account_list(
                             .ui_amount(lots.iter().map(|lot| lot.amount).sum::<u64>())
                     });
                     println!(
-                        " [Open {}: {} {}{} at ${} | id {} created {}]",
+                        " [Open {}: {} {} at ${} | id {} created {}]",
                         open_order.pair,
                         format_order_side(open_order.side),
-                        account.token.symbol(),
-                        ui_amount,
+                        account.token.format_ui_amount(ui_amount),
                         open_order.price,
                         open_order.order_id,
                         HumanTime::from(open_order.creation_time),
@@ -2078,6 +2102,7 @@ async fn process_account_list(
                             &mut long_term_cap_gain,
                             &mut account_current_value,
                             None,
+                            verbose,
                         )
                         .await;
 
@@ -2138,6 +2163,7 @@ async fn process_account_list(
                     &mut disposed_cap_gain,
                     &mut long_term_cap_gain,
                     &mut disposed_value,
+                    verbose,
                 );
 
                 if show_all_disposed_lots {
@@ -2247,29 +2273,29 @@ async fn process_account_list(
         }
         println!();
 
-        println!("Current Holdings Summary");
+        println!("Current Holdings");
         for (held_token, (current_token_price, total_held_amount)) in held_tokens {
             println!(
-                "  {: >4}:                {}{} (${} per {}; ${})",
+                "  {:<7}       {:<20} (${:14} ; ${} per {})",
                 held_token.to_string(),
-                held_token.symbol(),
-                held_token
-                    .ui_amount(total_held_amount)
-                    .separated_string_with_fixed_place(3),
-                f64::try_from(current_token_price)
-                    .unwrap()
-                    .separated_string_with_fixed_place(3),
-                held_token,
+                held_token.format_amount(total_held_amount),
                 f64::try_from(
                     Decimal::from_f64(held_token.ui_amount(total_held_amount)).unwrap()
                         * current_token_price
                 )
                 .unwrap()
                 .separated_string_with_fixed_place(2),
+                f64::try_from(current_token_price)
+                    .unwrap()
+                    .separated_string_with_fixed_place(3),
+                held_token,
             );
         }
+        println!();
+
+        println!("Summary");
         println!(
-            "  Value:               ${}",
+            "  Current Value:       ${}",
             total_current_value.separated_string_with_fixed_place(2)
         );
         println!(
@@ -3059,6 +3085,7 @@ async fn process_account_sync(
                     &mut false,
                     &mut 0.,
                     Some(notifier),
+                    true,
                 )
                 .await;
                 account.lots.push(lot);
@@ -3115,6 +3142,7 @@ async fn process_account_sync(
                 &mut false,
                 &mut 0.,
                 Some(notifier),
+                true,
             )
             .await;
             account.lots.push(lot);
@@ -4975,8 +5003,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let all = arg_matches.is_present("all");
                 let summary = arg_matches.is_present("summary");
                 let account_filter = pubkey_of(arg_matches, "account");
-                process_account_list(&db, &rpc_client, account_filter, all, summary, &notifier)
-                    .await?;
+                process_account_list(
+                    &db,
+                    &rpc_client,
+                    account_filter,
+                    all,
+                    summary,
+                    &notifier,
+                    verbose,
+                )
+                .await?;
             }
             ("xls", Some(arg_matches)) => {
                 let outfile = value_t_or_exit!(arg_matches, "outfile", String);

@@ -31,10 +31,10 @@ use {
 #[allow(non_camel_case_types)]
 pub enum Token {
     USDC,
-    tuUSDC,
     mSOL,
     stSOL,
     tuSOL,
+    tuUSDC,
     tumSOL,
     tustSOL,
     wSOL,
@@ -61,12 +61,12 @@ impl Token {
     pub fn symbol(&self) -> &'static str {
         match self {
             Token::USDC => "($)",
-            Token::tuUSDC => "🌷($)",
+            Token::tuUSDC => "tu($)",
             Token::mSOL => "m◎",
             Token::stSOL => "st◎",
-            Token::tuSOL => "🌷◎",
-            Token::tumSOL => "🌷m◎",
-            Token::tustSOL => "🌷st◎",
+            Token::tuSOL => "tu◎",
+            Token::tumSOL => "tum◎",
+            Token::tustSOL => "tust◎",
             Token::wSOL => "(◎)",
         }
     }
@@ -292,6 +292,14 @@ impl MaybeToken {
             None => coin_gecko::get_historical_price(when, self).await,
             Some(token) => token.get_historical_price(rpc_client, when).await,
         }
+    }
+
+    pub fn format_amount(&self, amount: u64) -> String {
+        self.format_ui_amount(self.ui_amount(amount))
+    }
+
+    pub fn format_ui_amount(&self, ui_amount: f64) -> String {
+        format!("{}{:.6}", self.symbol(), ui_amount)
     }
 }
 
