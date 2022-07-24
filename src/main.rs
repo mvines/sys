@@ -2224,7 +2224,7 @@ async fn process_account_list(
 
         let tax_rate = db.get_tax_rate();
         println!("Realized Gains");
-        println!("  Year    | Income          | Short-term gain | Long-term gain | Tax ");
+        println!("  Year    | Income          | Short-term gain | Long-term gain | Estimated Tax ");
         for (year, annual_realized_gain) in annual_realized_gains {
             let (symbol, realized_gains) = {
                 ('P', annual_realized_gain.by_payment_period)
@@ -2236,10 +2236,11 @@ async fn process_account_list(
                     let tax = if let Some(tax_rate) = tax_rate {
                         let tax = [
                             realized_gain.income * tax_rate.income,
-                            realized_gain.short_term_cap_gain * tax_rate.short_term_gain,
+                            realized_gain.short_term_cap_gain * tax_rate.short_term_gain +
                             realized_gain.long_term_cap_gain * tax_rate.long_term_gain,
                         ]
                         .into_iter()
+                        .map(|x| x.max(0.))
                         .sum::<f64>();
 
                         if tax > 0. {
