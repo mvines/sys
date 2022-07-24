@@ -2,6 +2,7 @@ use {
     crate::coin_gecko,
     chrono::prelude::*,
     rust_decimal::prelude::*,
+    separator::FixedPlaceSeparatable,
     serde::{Deserialize, Serialize},
     solana_client::rpc_client::RpcClient,
     solana_sdk::{
@@ -299,7 +300,11 @@ impl MaybeToken {
     }
 
     pub fn format_ui_amount(&self, ui_amount: f64) -> String {
-        format!("{}{:.6}", self.symbol(), ui_amount)
+        format!(
+            "{}{}",
+            self.symbol(),
+            ui_amount.separated_string_with_fixed_place(2)
+        )
     }
 }
 

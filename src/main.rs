@@ -1672,7 +1672,7 @@ async fn println_lot(
     };
 
     let msg = format!(
-        "{:>5}. {} | {:<20} at ${:<6} | {:<35} | income: ${:<11} | {} gain: ${:<14}{} {}",
+        "{:>5}. {} | {:>20} at ${:<6} | {:<35} | income: ${:<11} | {} gain: ${:<14}{} {}",
         lot.lot_number,
         lot.acquisition.when,
         token.format_ui_amount(ui_amount),
