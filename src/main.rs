@@ -1,5 +1,4 @@
 mod binance_exchange;
-mod coin_gecko;
 mod db;
 mod exchange;
 mod field_as_string;
@@ -7,11 +6,9 @@ mod ftx_exchange;
 mod get_transaction_balance_change;
 mod notifier;
 mod rpc_client_utils;
-mod token;
-mod tulip;
 
 use {
-    crate::{get_transaction_balance_change::*, token::*},
+    crate::get_transaction_balance_change::*,
     chrono::prelude::*,
     chrono_humanize::HumanTime,
     clap::{
@@ -47,6 +44,7 @@ use {
         process::exit,
         str::FromStr,
     },
+    sys::{app_version, send_transaction_until_expired, token::*, tulip},
 };
 
 fn get_deprecated_fee_calculator(
@@ -92,16 +90,6 @@ fn naivedate_of(string: &str) -> Result<NaiveDate, String> {
         .map_err(|err| format!("error parsing '{}': {}", string, err))
 }
 
-fn app_version() -> String {
-    let tag = option_env!("GITHUB_REF")
-        .and_then(|github_ref| github_ref.strip_prefix("refs/tags/").map(|s| s.to_string()));
-
-    tag.unwrap_or_else(|| match option_env!("GITHUB_SHA") {
-        None => "devbuild".to_string(),
-        Some(commit) => commit[..8].to_string(),
-    })
-}
-
 async fn get_block_date(
     rpc_client: &RpcClient,
     slot: Slot,
@@ -138,46 +126,6 @@ async fn get_block_date_and_price(
         block_date,
         token.get_historical_price(rpc_client, block_date).await?,
     ))
-}
-
-fn send_transaction_until_expired(
-    rpc_client: &RpcClient,
-    transaction: &Transaction,
-    last_valid_block_height: u64,
-) -> bool {
-    loop {
-        match rpc_client.get_epoch_info() {
-            Ok(epoch_info) => {
-                if epoch_info.block_height > last_valid_block_height {
-                    return false;
-                }
-                println!(
-                    "Transaction pending for at most {} blocks",
-                    last_valid_block_height.saturating_sub(epoch_info.block_height),
-                );
-            }
-            Err(err) => {
-                println!("Failed to get epoch info: {:?}", err);
-            }
-        };
-
-        // `send_and_confirm_transaction_with_spinner()` fails with
-        // "Transaction simulation failed: This transaction has already been processed" (AlreadyProcessed)
-        // if the transaction was already processed by an earlier iteration of this loop
-        if matches!(
-            rpc_client.confirm_transaction(&transaction.signatures[0]),
-            Ok(true)
-        ) {
-            return true;
-        }
-
-        match rpc_client.send_and_confirm_transaction_with_spinner(transaction) {
-            Ok(_) => return true,
-            Err(err) => {
-                println!("Transaction failed to send: {:?}", err);
-            }
-        }
-    }
 }
 
 fn add_exchange_deposit_address_to_db(

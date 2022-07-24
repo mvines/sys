@@ -1,10 +1,11 @@
 use {
-    crate::{binance_exchange, ftx_exchange, token::MaybeToken},
+    crate::{binance_exchange, ftx_exchange},
     async_trait::async_trait,
     chrono::NaiveDate,
     serde::{Deserialize, Serialize},
     solana_sdk::pubkey::Pubkey,
     std::{collections::HashMap, str::FromStr},
+    sys::token::MaybeToken,
     thiserror::Error,
 };
 

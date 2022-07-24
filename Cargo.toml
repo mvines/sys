@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 license = "WTFPL"
 publish = false
+default-run = "sys"
 
 [dependencies]
 async-recursion = "1.0.0"

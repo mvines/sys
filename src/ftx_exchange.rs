@@ -1,8 +1,5 @@
 use {
-    crate::{
-        exchange::*,
-        token::{MaybeToken, Token},
-    },
+    crate::exchange::*,
     async_trait::async_trait,
     chrono::{prelude::*, Duration},
     ftx::rest::{
@@ -18,6 +15,7 @@ use {
         collections::HashMap,
         convert::{TryFrom, TryInto},
     },
+    sys::token::{MaybeToken, Token},
 };
 
 pub struct FtxExchangeClient {

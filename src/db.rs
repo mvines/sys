@@ -1,5 +1,5 @@
 use {
-    crate::{exchange::*, field_as_string, token::*},
+    crate::{exchange::*, field_as_string},
     chrono::{prelude::*, NaiveDate},
     pickledb::{PickleDb, PickleDbDumpPolicy},
     rust_decimal::prelude::*,
@@ -17,6 +17,7 @@ use {
         time::{SystemTime, UNIX_EPOCH},
     },
     strum::{EnumString, IntoStaticStr},
+    sys::token::*,
     thiserror::Error,
 };
 
