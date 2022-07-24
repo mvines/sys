@@ -43,8 +43,9 @@ jobs:
     - uses: actions/upload-artifact@v2
       with:
         name: ${{ matrix.target }}
-        path: sys-${{ matrix.target }}
-        path: sys-tulip-sol-deposit-${{ matrix.target }}
+        path: |
+          sys-${{ matrix.target }}
+          sys-tulip-sol-deposit-${{ matrix.target }}
         if-no-files-found: error
 
   publish_release:
