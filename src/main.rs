@@ -2236,8 +2236,8 @@ async fn process_account_list(
                     let tax = if let Some(tax_rate) = tax_rate {
                         let tax = [
                             realized_gain.income * tax_rate.income,
-                            realized_gain.short_term_cap_gain * tax_rate.short_term_gain +
-                            realized_gain.long_term_cap_gain * tax_rate.long_term_gain,
+                            realized_gain.short_term_cap_gain * tax_rate.short_term_gain
+                                + realized_gain.long_term_cap_gain * tax_rate.long_term_gain,
                         ]
                         .into_iter()
                         .map(|x| x.max(0.))
