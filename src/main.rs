@@ -2224,7 +2224,7 @@ async fn process_account_list(
 
         let tax_rate = db.get_tax_rate();
         println!("Realized Gains");
-        println!("  Year    | Income                              | Short-term gain                     | Long-term gain");
+        println!("  Year    | Income          | Short-term gain | Long-term gain | Tax ");
         for (year, annual_realized_gain) in annual_realized_gains {
             let (symbol, realized_gains) = {
                 ('P', annual_realized_gain.by_payment_period)
@@ -2234,39 +2234,36 @@ async fn process_account_list(
             for (q, realized_gain) in realized_gains.iter().enumerate() {
                 if *realized_gain != RealizedGain::default() {
                     let tax = if let Some(tax_rate) = tax_rate {
-                        [
+                        let tax = [
                             realized_gain.income * tax_rate.income,
                             realized_gain.short_term_cap_gain * tax_rate.short_term_gain,
                             realized_gain.long_term_cap_gain * tax_rate.long_term_gain,
                         ]
                         .into_iter()
-                        .map(|tax| {
-                            if tax > 0. {
-                                format!("(tax: ${})", tax.separated_string_with_fixed_place(2))
-                            } else {
-                                String::new()
-                            }
-                        })
-                        .collect::<Vec<_>>()
+                        .sum::<f64>();
+
+                        if tax > 0. {
+                            format!("${}", tax.separated_string_with_fixed_place(2))
+                        } else {
+                            String::new()
+                        }
                     } else {
-                        (0..3).map(|_| "  (tax: ?)".into()).collect()
+                        "-".into()
                     };
 
                     println!(
-                        "  {} {}{} | ${:14}{:20} | ${:14}{:20} | ${:14}{:20}",
+                        "  {} {}{} | ${:14} | ${:14} | ${:14}| {}",
                         year,
                         symbol,
                         q + 1,
                         realized_gain.income.separated_string_with_fixed_place(2),
-                        tax[0],
                         realized_gain
                             .short_term_cap_gain
                             .separated_string_with_fixed_place(2),
-                        tax[1],
                         realized_gain
                             .long_term_cap_gain
                             .separated_string_with_fixed_place(2),
-                        tax[2]
+                        tax
                     );
                 }
             }
