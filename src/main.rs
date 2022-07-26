@@ -898,7 +898,7 @@ async fn process_exchange_sell(
         println_lot(
             deposit_account.token,
             lot,
-            Decimal::from_f64(price).unwrap(),
+            Decimal::from_f64(price),
             None,
             &mut 0.,
             &mut 0.,
@@ -1565,7 +1565,7 @@ fn liquidity_token_ui_amount(
 async fn println_lot(
     token: MaybeToken,
     lot: &Lot,
-    current_price: Decimal,
+    current_price: Option<Decimal>,
     liquidity_token_info: Option<&LiquidityTokenInfo>,
     total_income: &mut f64,
     total_cap_gain: &mut f64,
@@ -1574,11 +1574,12 @@ async fn println_lot(
     notifier: Option<&Notifier>,
     verbose: bool,
 ) {
-    let current_value =
+    let current_value = current_price.map(|current_price| {
         f64::try_from(Decimal::from_f64(token.ui_amount(lot.amount)).unwrap() * current_price)
-            .unwrap();
+            .unwrap()
+    });
     let income = lot.income(token);
-    let cap_gain = lot.cap_gain(token, current_price);
+    let cap_gain = lot.cap_gain(token, current_price.unwrap_or_default());
 
     let mut acquisition_liquidity_ui_amount = None;
     if let Some(LiquidityTokenInfo {
@@ -1596,7 +1597,7 @@ async fn println_lot(
 
     *total_income += income;
     *total_cap_gain += cap_gain;
-    *total_current_value += current_value;
+    *total_current_value += current_value.unwrap_or_default();
     *long_term_cap_gain = is_long_term_cap_gain(lot.acquisition.when, None);
 
     let ui_amount = token.ui_amount(lot.amount);
@@ -1607,11 +1608,15 @@ async fn println_lot(
         false,
     );
 
-    let current_value = format!(
-        "value: ${}{}",
-        current_value.separated_string_with_fixed_place(2),
-        liquidity_ui_amount
-    );
+    let current_value = current_value
+        .map(|current_value| {
+            format!(
+                "value: ${}{}",
+                current_value.separated_string_with_fixed_place(2),
+                liquidity_ui_amount
+            )
+        })
+        .unwrap_or_else(|| "value: ?".into());
 
     let description = if verbose {
         format!("| {}", lot.acquisition.kind,)
@@ -1780,7 +1785,7 @@ async fn process_account_add(
         println_lot(
             token,
             &lot,
-            current_price,
+            Some(current_price),
             None,
             &mut 0.,
             &mut 0.,
@@ -1895,7 +1900,8 @@ async fn process_account_list(
     verbose: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut annual_realized_gains = BTreeMap::<usize, AnnualRealizedGain>::default();
-    let mut held_tokens = BTreeMap::<MaybeToken, (/*price*/ Decimal, /*amount*/ u64)>::default();
+    let mut held_tokens =
+        BTreeMap::<MaybeToken, (/*price*/ Option<Decimal>, /*amount*/ u64)>::default();
 
     let mut accounts = db.get_accounts();
     accounts.sort_by(|a, b| {
@@ -1927,7 +1933,7 @@ async fn process_account_list(
 
             if let std::collections::btree_map::Entry::Vacant(e) = held_tokens.entry(account.token)
             {
-                e.insert((account.token.get_current_price(rpc_client).await?, 0));
+                e.insert((account.token.get_current_price(rpc_client).await.ok(), 0));
             }
 
             let held_token = held_tokens.get_mut(&account.token).unwrap();
@@ -1938,17 +1944,21 @@ async fn process_account_list(
 
             let liquidity_token_info =
                 if let Some(liquidity_token) = account.token.liquidity_token() {
-                    let current_liquidity_token_rate = account
+                    if let Ok(current_liquidity_token_rate) = account
                         .token
                         .get_current_liquidity_token_rate(rpc_client)
-                        .await?;
-                    Some(LiquidityTokenInfo {
-                        liquidity_token,
-                        current_liquidity_token_rate,
-                        current_apr: tulip::get_current_lending_apr(rpc_client, &account.token)
-                            .await
-                            .ok(),
-                    })
+                        .await
+                    {
+                        Some(LiquidityTokenInfo {
+                            liquidity_token,
+                            current_liquidity_token_rate,
+                            current_apr: tulip::get_current_lending_apr(rpc_client, &account.token)
+                                .await
+                                .ok(),
+                        })
+                    } else {
+                        None
+                    }
                 } else {
                     None
                 };
@@ -2225,15 +2235,19 @@ async fn process_account_list(
                 "  {:<7}       {:<20} (${:14} ; ${} per {})",
                 held_token.to_string(),
                 held_token.format_amount(total_held_amount),
-                f64::try_from(
-                    Decimal::from_f64(held_token.ui_amount(total_held_amount)).unwrap()
-                        * current_token_price
-                )
-                .unwrap()
-                .separated_string_with_fixed_place(2),
-                f64::try_from(current_token_price)
+                current_token_price
+                    .map(|current_token_price| f64::try_from(
+                        Decimal::from_f64(held_token.ui_amount(total_held_amount)).unwrap()
+                            * current_token_price
+                    )
                     .unwrap()
-                    .separated_string_with_fixed_place(3),
+                    .separated_string_with_fixed_place(2))
+                    .unwrap_or_else(|| "?".into()),
+                current_token_price
+                    .map(|current_token_price| f64::try_from(current_token_price)
+                        .unwrap()
+                        .separated_string_with_fixed_place(3))
+                    .unwrap_or_else(|| "?".into()),
                 held_token,
             );
         }
@@ -3024,7 +3038,7 @@ async fn process_account_sync(
                 println_lot(
                     account.token,
                     &lot,
-                    current_sol_price,
+                    Some(current_sol_price),
                     None,
                     &mut 0.,
                     &mut 0.,
@@ -3081,7 +3095,7 @@ async fn process_account_sync(
             println_lot(
                 account.token,
                 &lot,
-                current_token_price,
+                Some(current_token_price),
                 None,
                 &mut 0.,
                 &mut 0.,
