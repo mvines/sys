@@ -2270,7 +2270,29 @@ async fn process_account_list(
             "  Long-term cap gain:  ${} (unrealized)",
             total_unrealized_long_term_gain.separated_string_with_fixed_place(2)
         );
+
+        let pending_deposits = db.pending_deposits(None).len();
+        let pending_withdrawals = db.pending_withdrawals(None).len();
+        let pending_transfers = db.pending_transfers().len();
+        let pending_swaps = db.pending_swaps().len();
+
+        if pending_deposits + pending_withdrawals + pending_transfers + pending_swaps > 0 {
+            println!();
+        }
+        if pending_deposits > 0 {
+            println!("  !! Pending deposits: {}", pending_deposits);
+        }
+        if pending_withdrawals > 0 {
+            println!("  !! Pending withdrawals: {}", pending_withdrawals);
+        }
+        if pending_transfers > 0 {
+            println!("  !! Pending transfers: {}", pending_transfers);
+        }
+        if pending_swaps > 0 {
+            println!("  !! Pending swaps: {}", pending_swaps);
+        }
     }
+
     Ok(())
 }
 
