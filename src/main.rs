@@ -1,8 +1,5 @@
-mod binance_exchange;
 mod db;
-mod exchange;
 mod field_as_string;
-mod ftx_exchange;
 mod get_transaction_balance_change;
 mod notifier;
 mod rpc_client_utils;
@@ -17,7 +14,6 @@ use {
     },
     console::{style, Style},
     db::*,
-    exchange::*,
     itertools::Itertools,
     notifier::*,
     rust_decimal::prelude::*,
@@ -44,7 +40,14 @@ use {
         process::exit,
         str::FromStr,
     },
-    sys::{app_version, send_transaction_until_expired, token::*, tulip},
+    sys::{
+        app_version,
+        exchange::{self, *},
+        metrics::{self, dp, MetricsConfig},
+        send_transaction_until_expired,
+        token::*,
+        tulip,
+    },
 };
 
 fn get_deprecated_fee_calculator(
@@ -219,6 +222,13 @@ async fn process_sync_exchange(
 
         if wi.completed {
             if let Some(ref tx_id) = wi.tx_id {
+                metrics::push(dp::exchange_withdrawal(
+                    exchange,
+                    token,
+                    &wi.address,
+                    token.ui_amount(pending_withdrawal.amount),
+                ))
+                .await;
                 let msg = format!(
                     "{} {}{} withdrawal to {} successful ({})",
                     token,
@@ -230,6 +240,7 @@ async fn process_sync_exchange(
                     tx_id,
                 );
                 println!("{}", msg);
+
                 db.confirm_withdrawal(pending_withdrawal)?;
                 notifier.send(&format!("{:?}: {}", exchange, msg)).await;
             } else {
@@ -309,6 +320,12 @@ async fn process_sync_exchange(
             db.cancel_deposit(pending_deposit.transfer.signature)
                 .expect("cancel_deposit");
         } else if confirmed {
+            metrics::push(dp::exchange_deposit(
+                exchange,
+                token,
+                token.ui_amount(pending_deposit.amount),
+            ))
+            .await;
             println!(
                 "{} {}{} deposit pending ({} confirmed)",
                 token,
@@ -374,6 +391,19 @@ async fn process_sync_exchange(
                 order_status.last_update,
                 order_status.fee,
             )?;
+
+            if order_status.filled_amount > f64::EPSILON {
+                metrics::push(dp::exchange_fill(
+                    exchange,
+                    &order_info.pair,
+                    order_info.side,
+                    token,
+                    order_status.filled_amount,
+                    order_status.price,
+                ))
+                .await;
+            }
+
             let msg = if (order_status.amount - order_status.filled_amount).abs() < f64::EPSILON {
                 format!(" Filled {}{}", order_summary, fee_summary)
             } else if order_status.filled_amount < f64::EPSILON {
@@ -3658,6 +3688,52 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 )
         )
         .subcommand(
+            SubCommand::with_name("influxdb")
+                .about("InfluxDb metrics management")
+                .setting(AppSettings::SubcommandRequiredElseHelp)
+                .setting(AppSettings::InferSubcommands)
+                .subcommand(
+                    SubCommand::with_name("clear")
+                        .about("Clear InfluxDb configuration")
+                )
+                .subcommand(
+                    SubCommand::with_name("show")
+                        .about("Show InfluxDb configuration")
+                )
+                .subcommand(
+                    SubCommand::with_name("set")
+                        .about("Set InfluxDb configuration")
+                        .arg(
+                            Arg::with_name("url")
+                                .value_name("URL")
+                                .takes_value(true)
+                                .required(true)
+                                .help("InfluxDb URL"),
+                        )
+                        .arg(
+                            Arg::with_name("token")
+                                .value_name("TOKEN")
+                                .takes_value(true)
+                                .required(true)
+                                .help("Access Token"),
+                        )
+                        .arg(
+                            Arg::with_name("org_id")
+                                .value_name("ORGANIZATION ID")
+                                .takes_value(true)
+                                .required(true)
+                                .help("Organization Id"),
+                        )
+                        .arg(
+                            Arg::with_name("bucket")
+                                .value_name("BUCKET")
+                                .takes_value(true)
+                                .required(true)
+                                .help("Bucket name"),
+                        )
+                )
+        )
+        .subcommand(
             SubCommand::with_name("account")
                 .about("Account management")
                 .setting(AppSettings::SubcommandRequiredElseHelp)
@@ -4896,6 +4972,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             _ => unreachable!(),
         },
+        ("influxdb", Some(db_matches)) => match db_matches.subcommand() {
+            ("clear", Some(_arg_matches)) => {
+                println!("Cleared InfluxDb configuration");
+            }
+            ("show", Some(_arg_matches)) => match db.get_metrics_config() {
+                None => {
+                    println!("No InfluxDb configuration");
+                }
+                Some(MetricsConfig {
+                    url,
+                    token: _,
+                    org_id,
+                    bucket,
+                }) => {
+                    println!("Url: {}", url);
+                    println!("Token: ********");
+                    println!("Organization Id: {}", org_id);
+                    println!("Bucket: {}", bucket);
+                }
+            },
+            ("set", Some(arg_matches)) => {
+                db.set_metrics_config(MetricsConfig {
+                    url: value_t_or_exit!(arg_matches, "url", String),
+                    token: value_t_or_exit!(arg_matches, "token", String),
+                    org_id: value_t_or_exit!(arg_matches, "org_id", String),
+                    bucket: value_t_or_exit!(arg_matches, "bucket", String),
+                })?;
+                println!("InfluxDb configuration set");
+            }
+            _ => unreachable!(),
+        },
         ("account", Some(account_matches)) => match account_matches.subcommand() {
             ("lot", Some(lot_matches)) => match lot_matches.subcommand() {
                 ("swap", Some(arg_matches)) => {
@@ -5475,7 +5582,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     };
 
                     print_balance("SOL", "◎", &balance);
-                    for coin in crate::exchange::USD_COINS {
+                    for coin in exchange::USD_COINS {
                         if let Some(balance) = balances.get(*coin) {
                             if balance.total > 0. {
                                 print_balance(coin, "$", balance);
@@ -5887,5 +5994,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         _ => unreachable!(),
     };
 
+    metrics::send(db.get_metrics_config()).await;
     Ok(())
 }

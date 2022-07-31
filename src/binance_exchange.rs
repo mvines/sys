@@ -1,11 +1,10 @@
 use {
-    crate::exchange::*,
+    crate::{exchange::*, token::MaybeToken},
     async_trait::async_trait,
     chrono::{Local, TimeZone},
     serde::Deserialize,
     solana_sdk::pubkey::Pubkey,
     std::collections::HashMap,
-    sys::token::MaybeToken,
     tokio_binance::AccountClient,
 };
 

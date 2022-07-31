@@ -1,11 +1,10 @@
 use {
-    crate::{binance_exchange, ftx_exchange},
+    crate::{binance_exchange, ftx_exchange, token::MaybeToken},
     async_trait::async_trait,
     chrono::NaiveDate,
     serde::{Deserialize, Serialize},
     solana_sdk::pubkey::Pubkey,
     std::{collections::HashMap, str::FromStr},
-    sys::token::MaybeToken,
     thiserror::Error,
 };
 
@@ -15,6 +14,12 @@ pub enum Exchange {
     BinanceUs,
     Ftx,
     FtxUs,
+}
+
+impl std::fmt::Display for Exchange {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "{:?}", self)
+    }
 }
 
 pub const USD_COINS: &[&str] = &["USD", "USDC", "USDT", "BUSD"];
@@ -81,6 +86,12 @@ pub type OrderId = String;
 pub enum OrderSide {
     Buy,
     Sell,
+}
+
+impl std::fmt::Display for OrderSide {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "{:?}", self)
+    }
 }
 
 #[derive(Debug)]

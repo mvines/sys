@@ -252,6 +252,13 @@ impl MaybeToken {
         }
     }
 
+    pub fn name(&self) -> &'static str {
+        match self.0 {
+            None => "SOL",
+            Some(token) => token.into(),
+        }
+    }
+
     pub fn fiat_fungible(&self) -> bool {
         match self.0 {
             None => false,
@@ -322,10 +329,7 @@ impl From<Token> for MaybeToken {
 
 impl std::fmt::Display for MaybeToken {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        match self.0 {
-            None => write!(f, "SOL"),
-            Some(token) => write!(f, "{}", token),
-        }
+        write!(f, "{}", self.name())
     }
 }
 

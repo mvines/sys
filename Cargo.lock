@@ -1638,6 +1638,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "influxdb-client"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "99e0b2e8a52e0d4209255bc8156964c4cb986d284e5a314d376143f6323bec1b"
+dependencies = [
+ "influxdb-derives",
+ "reqwest",
+]
+
+[[package]]
+name = "influxdb-derives"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b3f429c49eed281470660111fc6c566ab16199777b6b7849f125ec1a4cae763a"
+dependencies = [
+ "proc-macro2 1.0.26",
+ "proc_macro_roids",
+ "quote 1.0.9",
+ "syn 1.0.72",
+]
+
+[[package]]
 name = "inout"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2344,6 +2366,17 @@ dependencies = [
  "syn 1.0.72",
  "version_check",
  "yansi",
+]
+
+[[package]]
+name = "proc_macro_roids"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "06675fa2c577f52bcf77fbb511123927547d154faa08097cc012c66ec3c9611a"
+dependencies = [
+ "proc-macro2 1.0.26",
+ "quote 1.0.9",
+ "syn 1.0.72",
 ]
 
 [[package]]
@@ -3956,8 +3989,10 @@ dependencies = [
  "console 0.14.1",
  "fd-lock",
  "ftx",
+ "influxdb-client",
  "itertools",
  "jup-ag",
+ "lazy_static",
  "pickledb",
  "reqwest",
  "rust_decimal",

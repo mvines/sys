@@ -1,5 +1,5 @@
 use {
-    crate::{exchange::*, field_as_string},
+    crate::{field_as_string, metrics::MetricsConfig},
     chrono::{prelude::*, NaiveDate},
     pickledb::{PickleDb, PickleDbDumpPolicy},
     rust_decimal::prelude::*,
@@ -17,7 +17,7 @@ use {
         time::{SystemTime, UNIX_EPOCH},
     },
     strum::{EnumString, IntoStaticStr},
-    sys::token::*,
+    sys::{exchange::*, token::*},
     thiserror::Error,
 };
 
@@ -730,6 +730,28 @@ impl Db {
                 }
             })
             .collect()
+    }
+
+    pub fn set_metrics_config(&mut self, metrics_config: MetricsConfig) -> DbResult<()> {
+        self.clear_metrics_config()?;
+
+        self.credentials_db
+            .set("influxdb", &metrics_config)
+            .unwrap();
+
+        Ok(self.credentials_db.dump()?)
+    }
+
+    pub fn get_metrics_config(&self) -> Option<MetricsConfig> {
+        self.credentials_db.get("influxdb")
+    }
+
+    pub fn clear_metrics_config(&mut self) -> DbResult<()> {
+        if self.get_metrics_config().is_some() {
+            self.credentials_db.rem("influxdb").ok();
+            self.credentials_db.dump()?;
+        }
+        Ok(())
     }
 
     fn auto_save(&mut self, auto_save: bool) -> DbResult<()> {
