@@ -4328,6 +4328,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .setting(AppSettings::SubcommandRequiredElseHelp)
                 .setting(AppSettings::InferSubcommands)
                 .subcommand(
+                    SubCommand::with_name("apr")
+                        .about("Display the spot APR for a given collateral token")
+                        .arg(
+                            Arg::with_name("collateral_token")
+                                .value_name("COLLATERAL_TOKEN")
+                                .takes_value(true)
+                                .required(true)
+                                .validator(is_valid_token)
+                                .possible_values(&["tuSOL", "tumSOL", "tustSOL", "tuUSDC"])
+                                .help("Collateral token"),
+                        )
+                )
+                .subcommand(
                     SubCommand::with_name("deposit")
                         .about("Deposit liquidity")
                         .arg(
@@ -4974,6 +4987,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
         ("influxdb", Some(db_matches)) => match db_matches.subcommand() {
             ("clear", Some(_arg_matches)) => {
+                db.clear_metrics_config()?;
                 println!("Cleared InfluxDb configuration");
             }
             ("show", Some(_arg_matches)) => match db.get_metrics_config() {
@@ -5390,6 +5404,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             _ => unreachable!(),
         },
         ("tulip", Some(tulip_matches)) => match tulip_matches.subcommand() {
+            ("apr", Some(arg_matches)) => {
+                let token = value_t_or_exit!(arg_matches, "collateral_token", Token);
+                println!(
+                    "{}",
+                    tulip::get_current_lending_apr(&rpc_client, &token.into())
+                        .await?
+                        .separated_string_with_fixed_place(2)
+                );
+            }
             ("deposit", Some(arg_matches)) => {
                 let collateral_token = value_t_or_exit!(arg_matches, "collateral_token", Token);
                 let liquidity_token = value_t!(arg_matches, "liquidity_token", Token)
