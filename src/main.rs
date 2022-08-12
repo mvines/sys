@@ -5669,7 +5669,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         deposit_address,
                         &rpc_client,
                     )?;
-
                     process_exchange_deposit(
                         &mut db,
                         &rpc_client,
