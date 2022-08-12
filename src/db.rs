@@ -141,7 +141,7 @@ pub struct PendingTransfer {
     pub lots: Vec<Lot>,
 }
 
-#[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 pub struct PendingSwap {
     #[serde(with = "field_as_string")]
     pub signature: Signature, // transaction signature of the swap
@@ -177,7 +177,7 @@ pub struct OpenOrder {
     pub token: MaybeToken,
 }
 
-#[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 pub enum LotAcquistionKind {
     EpochReward {
         epoch: Epoch,
@@ -272,7 +272,7 @@ impl LotAcquistion {
     }
 }
 
-#[derive(Debug, PartialEq, Clone, Serialize, Deserialize, EnumString, IntoStaticStr)]
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, EnumString, IntoStaticStr)]
 pub enum LotSelectionMethod {
     #[strum(serialize = "fifo")]
     FirstInFirstOut,
@@ -575,14 +575,14 @@ impl TrackedAccount {
     }
 }
 
-#[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 pub struct SweepStakeAccount {
     #[serde(with = "field_as_string")]
     pub address: Pubkey,
     pub stake_authority: PathBuf,
 }
 
-#[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 pub struct TransitorySweepStake {
     #[serde(with = "field_as_string")]
     pub address: Pubkey,
