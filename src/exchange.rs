@@ -44,7 +44,7 @@ pub enum ParseExchangeError {
     Invalid,
 }
 
-#[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExchangeCredentials {
     pub api_key: String,
     pub secret: String,
@@ -82,7 +82,7 @@ pub struct BidAsk {
 
 pub type OrderId = String;
 
-#[derive(Debug, PartialEq, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize)]
 pub enum OrderSide {
     Buy,
     Sell,
@@ -105,7 +105,7 @@ pub struct OrderStatus {
     pub fee: Option<(f64, String)>,
 }
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Eq)]
 pub enum MarketInfoFormat {
     All,
     Ask,

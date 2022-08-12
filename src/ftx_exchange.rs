@@ -28,7 +28,7 @@ fn binance_to_ftx_pair(binance_pair: &str) -> Result<&'static str, Box<dyn std::
     match binance_pair {
         "SOLUSDT" => Ok("SOL/USDT"),
         "SOLUSD" => Ok("SOL/USD"),
-        _ => return Err(format!("Unknown pair: {}", binance_pair).into()),
+        _ => Err(format!("Unknown pair: {}", binance_pair).into()),
     }
 }
 
@@ -36,7 +36,7 @@ fn ftx_to_binance_pair(ftx_pair: &str) -> Result<&'static str, Box<dyn std::erro
     match ftx_pair {
         "SOL/USDT" => Ok("SOLUSDT"),
         "SOL/USD" => Ok("SOLUSD"),
-        _ => return Err(format!("Unknown pair: {}", ftx_pair).into()),
+        _ => Err(format!("Unknown pair: {}", ftx_pair).into()),
     }
 }
 
