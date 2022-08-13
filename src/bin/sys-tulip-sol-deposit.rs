@@ -33,6 +33,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .required(true)
                 .validator(is_valid_signer)
                 .help("Account holding the SOL to deposit"),
+        )
+        .arg(
+            Arg::with_name("retain")
+                .short("r")
+                .long("retain")
+                .value_name("SOL")
+                .takes_value(true)
+                .validator(is_parsable::<f64>)
+                .default_value("0.1")
+                .help("Amount of SOL to retain in the source account"),
         );
 
     let matches = app.get_matches();
@@ -48,10 +58,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let signer = signer.expect("signer");
 
     let sol = MaybeToken::SOL();
-    let minimum_lamport_balance = sol.amount(0.01);
+    let retain_amount = sol.amount(value_t_or_exit!(matches, "retain", f64));
+
     let balance = rpc_client.get_balance(&address)?;
 
-    let deposit_amount = balance.saturating_sub(minimum_lamport_balance * 2);
+    let deposit_amount = balance.saturating_sub(retain_amount);
 
     if deposit_amount == 0 {
         println!("Nothing to deposit");
