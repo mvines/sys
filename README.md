@@ -1,6 +1,8 @@
 ## Sell Your ◎
 
-This program provides tracking from acquisition through disposal of SOL from staking, voting, and validator transaction fee/rent rewards.
+This program provides tracking from acquisition through disposal of SOL from staking, voting, and validator transaction fee/rent rewards, useful
+for portfolio tracking as well as producing the necessary records for proper tax preparation.
+
 The intended audience for this program is:
 1. Solana Validators that need to track voting and transaction fee/rent rewards
 2. Solana Stakers that need to track staking rewards
@@ -30,7 +32,7 @@ You can also run `./fetch-release.sh` to download the latest Linux and macOS bin
 * A _sweep stake account_ system, whereby vote account rewards can be automatically swept into a stake account and staked as quickly as possible
 * Historical and spot price via CoinGecko for SOL and supported tokens.
 * Data is contained in a local `sell-your-sol/` subdirectory that can be easily backed up, and is editable by hand if necessary
-* Excel export
+* Full Excel export, useful to hand off to a CPA or your entity's finance department. Sorry no TurboTax import!
 
 ## Examples
 Explore the help system instead:
@@ -43,4 +45,5 @@ It aims to be self explanatory. If not feel free to ask, or better yet send a PR
 ## Limitations
 * No FMV discount is computed for locked stake rewards
 * Accounts under `sys` management should not be manipulated outside of `sys`.  For example `sys` will get confused if you split some stake using the `solana` command-line tool, and probably assert
+* The US tax system is assumed in several of the commands, extending to other jurisdictions should be doable and would be a welcome contribution
 * You may have to write code to fix bugs or implement new features that are not required in my workflow
