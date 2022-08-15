@@ -20,7 +20,7 @@ ftx = { git = "https://github.com/mvines/ftx", rev = "eea60b98cc47052dc0e6c42efe
 #ftx = { path = "../ftx" }
 influxdb-client = "0.1.4"
 itertools = "0.10.0"
-jup-ag = "0.2.3"
+jup-ag = "0.2.4"
 #jup-ag = { path = "../jup_ag" }
 lazy_static = "1.4.0"
 pickledb = { git = "https://github.com/seladb/pickledb-rs.git", rev = "0.5.0" }
