@@ -2940,9 +2940,17 @@ async fn process_account_split<T: Signers>(
         .get_account(from_address, MaybeToken::SOL())
         .ok_or_else(|| format!("SOL account does not exist for {}", from_address))?;
 
-    let (split_all, amount, description) = match amount  {
-        None => (true, from_account.last_update_balance, description.unwrap_or_else(|| from_account.description)),
-        Some(amount) => (false, amount, description.unwrap_or_else(|| format!("Split at {}", Local::now()))),
+    let (split_all, amount, description) = match amount {
+        None => (
+            true,
+            from_account.last_update_balance,
+            description.unwrap_or(from_account.description),
+        ),
+        Some(amount) => (
+            false,
+            amount,
+            description.unwrap_or_else(|| format!("Split at {}", Local::now())),
+        ),
     };
 
     let instructions = solana_stake_program::stake_instruction::split(
