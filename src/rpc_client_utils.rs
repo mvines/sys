@@ -1,7 +1,11 @@
 use {
     solana_client::{rpc_client::RpcClient, rpc_response::StakeActivationState},
-    solana_sdk::{account::Account, account_utils::StateMut, pubkey::Pubkey},
-    solana_stake_program::stake_state::{Authorized, StakeState},
+    solana_sdk::{
+        account::Account,
+        account_utils::StateMut,
+        pubkey::Pubkey,
+        stake::state::{Authorized, StakeState},
+    },
 };
 
 pub fn get_stake_authorized(
@@ -34,7 +38,7 @@ pub fn stake_accounts_have_same_credits_observed(
     stake_account1: &Account,
     stake_account2: &Account,
 ) -> Result<bool, Box<dyn std::error::Error>> {
-    use solana_stake_program::stake_state::Stake;
+    use solana_sdk::stake::state::Stake;
 
     let stake_state1 = bincode::deserialize(stake_account1.data.as_slice())
         .map_err(|err| format!("Invalid stake account 1: {}", err))?;

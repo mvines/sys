@@ -540,11 +540,11 @@ async fn process_exchange_deposit<T: Signers>(
                     )],
                     amount,
                 )
-            } else if from_account.owner == solana_stake_program::id() {
+            } else if from_account.owner == solana_sdk::stake::program::id() {
                 let amount = amount.unwrap_or(from_account_balance);
 
                 (
-                    vec![solana_stake_program::stake_instruction::withdraw(
+                    vec![solana_sdk::stake::instruction::withdraw(
                         &from_address,
                         &authority_address,
                         &deposit_address,
@@ -570,10 +570,11 @@ async fn process_exchange_deposit<T: Signers>(
                 .is_none()
             {
                 instructions.push(
-                    spl_associated_token_account::create_associated_token_account(
+                    spl_associated_token_account::instruction::create_associated_token_account_idempotent(
                         &authority_address,
                         &deposit_address,
                         &token.mint(),
+                        &spl_token::id(),
                     ),
                 );
             }
@@ -2563,12 +2564,8 @@ async fn process_account_merge<T: Signers>(
             .ok_or_else(|| format!("Authority account, {}, does not exist", authority_address))?
     };
 
-    let instructions = if from_account.owner == solana_stake_program::id() {
-        solana_stake_program::stake_instruction::merge(
-            &into_address,
-            &from_address,
-            &authority_address,
-        )
+    let instructions = if from_account.owner == solana_sdk::stake::program::id() {
+        solana_sdk::stake::instruction::merge(&into_address, &from_address, &authority_address)
     } else {
         // TODO: Support merging two system accounts, tokens, and possibly other variations
         return Err(format!("Unsupported `from` account owner: {}", from_account.owner).into());
@@ -2752,13 +2749,13 @@ async fn process_account_sweep<T: Signers>(
             )],
             lamports,
         )
-    } else if from_account.owner == solana_stake_program::id() {
+    } else if from_account.owner == solana_sdk::stake::program::id() {
         let lamports = from_tracked_account
             .last_update_balance
             .saturating_sub(retain_amount);
 
         (
-            vec![solana_stake_program::stake_instruction::withdraw(
+            vec![solana_sdk::stake::instruction::withdraw(
                 &from_address,
                 &from_authority_address,
                 &to_address,
@@ -2815,18 +2812,18 @@ async fn process_account_sweep<T: Signers>(
         instructions.append(&mut vec![
             system_instruction::allocate(
                 &transitory_stake_account.pubkey(),
-                std::mem::size_of::<solana_stake_program::stake_state::StakeState>() as u64,
+                std::mem::size_of::<solana_sdk::stake::state::StakeState>() as u64,
             ),
             system_instruction::assign(
                 &transitory_stake_account.pubkey(),
-                &solana_stake_program::id(),
+                &solana_sdk::stake::program::id(),
             ),
-            solana_stake_program::stake_instruction::initialize(
+            solana_sdk::stake::instruction::initialize(
                 &transitory_stake_account.pubkey(),
                 &sweep_stake_authorized,
-                &solana_stake_program::stake_state::Lockup::default(),
+                &solana_sdk::stake::state::Lockup::default(),
             ),
-            solana_stake_program::stake_instruction::delegate_stake(
+            solana_sdk::stake::instruction::delegate_stake(
                 &transitory_stake_account.pubkey(),
                 &sweep_stake_authority_keypair.pubkey(),
                 &sweep_stake_vote_account_address,
@@ -2953,7 +2950,7 @@ async fn process_account_split<T: Signers>(
         ),
     };
 
-    let instructions = solana_stake_program::stake_instruction::split(
+    let instructions = solana_sdk::stake::instruction::split(
         &from_address,
         &authority_address,
         amount,
@@ -3229,10 +3226,11 @@ async fn process_account_wrap<T: Signers>(
         .is_none()
     {
         instructions.push(
-            spl_associated_token_account::create_associated_token_account(
+            spl_associated_token_account::instruction::create_associated_token_account_idempotent(
                 &authority_address,
                 &address,
                 &wsol.mint(),
+                &spl_token::id(),
             ),
         );
     }
@@ -3309,10 +3307,11 @@ async fn process_account_unwrap<T: Signers>(
     let ephemeral_token_account = Keypair::new();
 
     let instructions = [
-        spl_associated_token_account::create_associated_token_account(
+        spl_associated_token_account::instruction::create_associated_token_account_idempotent(
             &authority_address,
             &ephemeral_token_account.pubkey(),
             &wsol.mint(),
+            &spl_token::id(),
         ),
         spl_token::instruction::transfer_checked(
             &spl_token::id(),
@@ -3537,7 +3536,7 @@ async fn process_account_sync_sweep(
         println!("  Merging into sweep stake account");
 
         let message = Message::new(
-            &solana_stake_program::stake_instruction::merge(
+            &solana_sdk::stake::instruction::merge(
                 &sweep_stake_account_info.address,
                 &transitory_sweep_stake_address,
                 &sweep_stake_account_authority_keypair.pubkey(),
