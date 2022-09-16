@@ -3019,6 +3019,113 @@ async fn process_account_split<T: Signers>(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
+async fn process_account_redelegate<T: Signers>(
+    db: &mut Db,
+    rpc_client: &RpcClient,
+    from_address: Pubkey,
+    vote_account_address: Pubkey,
+    lot_selection_method: LotSelectionMethod,
+    authority_address: Pubkey,
+    signers: T,
+    into_keypair: Option<Keypair>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (recent_blockhash, last_valid_block_height) =
+        rpc_client.get_latest_blockhash_with_commitment(rpc_client.commitment())?;
+
+    let minimum_stake_account_balance = rpc_client
+        .get_minimum_balance_for_rent_exemption(solana_sdk::stake::state::StakeState::size_of())?;
+
+    let into_keypair = into_keypair.unwrap_or_else(Keypair::new);
+    if db
+        .get_account(into_keypair.pubkey(), MaybeToken::SOL())
+        .is_some()
+    {
+        return Err(format!(
+            "Account {} ({}) already exists",
+            into_keypair.pubkey(),
+            MaybeToken::SOL()
+        )
+        .into());
+    }
+
+    let from_account = db
+        .get_account(from_address, MaybeToken::SOL())
+        .ok_or_else(|| format!("SOL account does not exist for {}", from_address))?;
+
+    if from_account.last_update_balance < minimum_stake_account_balance * 2 {
+        return Err(format!(
+            "Account {} ({}) has insufficient balance",
+            into_keypair.pubkey(),
+            MaybeToken::SOL()
+        )
+        .into());
+    }
+    let redelegated_amount = from_account.last_update_balance - minimum_stake_account_balance;
+
+    let instructions = solana_sdk::stake::instruction::redelegate(
+        &from_address,
+        &authority_address,
+        &vote_account_address,
+        &into_keypair.pubkey(),
+    );
+
+    let message = Message::new(&instructions, Some(&authority_address));
+
+    let mut transaction = Transaction::new_unsigned(message);
+    transaction.message.recent_blockhash = recent_blockhash;
+    let simulation_result = rpc_client.simulate_transaction(&transaction)?.value;
+    if simulation_result.err.is_some() {
+        return Err(format!("Simulation failure: {:?}", simulation_result).into());
+    }
+
+    println!(
+        "Relegating {} to {} via{}",
+        from_address,
+        vote_account_address,
+        into_keypair.pubkey(),
+    );
+
+    transaction.partial_sign(&signers, recent_blockhash);
+    transaction.try_sign(&[&into_keypair], recent_blockhash)?;
+
+    let signature = transaction.signatures[0];
+    println!("Transaction signature: {}", signature);
+
+    let epoch = rpc_client.get_epoch_info()?.epoch;
+    db.add_account(TrackedAccount {
+        address: into_keypair.pubkey(),
+        token: MaybeToken::SOL(),
+        description: from_account.description,
+        last_update_epoch: epoch.saturating_sub(1),
+        last_update_balance: 0,
+        lots: vec![],
+        no_sync: None,
+    })?;
+    db.record_transfer(
+        signature,
+        last_valid_block_height,
+        Some(redelegated_amount),
+        from_address,
+        MaybeToken::SOL(),
+        into_keypair.pubkey(),
+        MaybeToken::SOL(),
+        lot_selection_method,
+        None,
+    )?;
+
+    if !send_transaction_until_expired(rpc_client, &transaction, last_valid_block_height) {
+        db.cancel_transfer(signature)?;
+        db.remove_account(into_keypair.pubkey(), MaybeToken::SOL())?;
+        return Err("Redelegate failed".into());
+    }
+    println!("Redelegation confirmed: {}", signature);
+    let when = get_signature_date(rpc_client, signature).await?;
+    db.confirm_transfer(signature, when)?;
+
+    Ok(())
+}
+
 async fn process_account_sync(
     db: &mut Db,
     rpc_client: &RpcClient,
@@ -4077,7 +4184,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .takes_value(true)
                                 .required(true)
                                 .validator(is_valid_pubkey)
-                                .help("Address of the account to split")
+                                .help("Address of the stake account to split")
                         )
                         .arg(
                             Arg::with_name("amount")
@@ -4113,6 +4220,44 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         )
                         .arg(lot_selection_arg())
                         .arg(lot_numbers_arg())
+                )
+                .subcommand(
+                    SubCommand::with_name("redelegate")
+                        .about("Redelegate a stake account to another validator")
+                        .arg(
+                            Arg::with_name("from_address")
+                                .value_name("ADDRESS")
+                                .takes_value(true)
+                                .required(true)
+                                .validator(is_valid_pubkey)
+                                .help("Address of the stake account to redelegate")
+                        )
+                        .arg(
+                            Arg::with_name("vote_account_address")
+                                .long("to")
+                                .value_name("VOTE ACCOUNT")
+                                .takes_value(true)
+                                .validator(is_valid_pubkey)
+                                .required(true)
+                                .help("Address of the redelegated validator vote account"),
+                        )
+                        .arg(
+                            Arg::with_name("by")
+                                .long("by")
+                                .value_name("KEYPAIR")
+                                .takes_value(true)
+                                .validator(is_valid_signer)
+                                .help("Optional authority for the redelegation"),
+                        )
+                        .arg(
+                            Arg::with_name("into_keypair")
+                                .long("into")
+                                .value_name("KEYPAIR")
+                                .takes_value(true)
+                                .validator(is_keypair)
+                                .help("Optional keypair for the redelegated stake account [default: randomly generated]"),
+                        )
+                        .arg(lot_selection_arg())
                 )
                 .subcommand(
                     SubCommand::with_name("sync")
@@ -5304,6 +5449,39 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     description,
                     lot_selection_method,
                     lot_numbers,
+                    authority_address,
+                    vec![authority_signer],
+                    into_keypair,
+                )
+                .await?;
+            }
+            ("redelegate", Some(arg_matches)) => {
+                let from_address = pubkey_of(arg_matches, "from_address").unwrap();
+                let vote_account_address = pubkey_of(arg_matches, "vote_account_address").unwrap();
+                let lot_selection_method =
+                    value_t_or_exit!(arg_matches, "lot_selection", LotSelectionMethod);
+                let into_keypair = keypair_of(arg_matches, "into_keypair");
+
+                let (authority_signer, authority_address) = if arg_matches.is_present("by") {
+                    signer_of(arg_matches, "by", &mut wallet_manager)?
+                } else {
+                    signer_of(arg_matches, "from_address", &mut wallet_manager).map_err(|err| {
+                        format!(
+                            "Authority not found, consider using the `--by` argument): {}",
+                            err
+                        )
+                    })?
+                };
+
+                let authority_address = authority_address.expect("authority_address");
+                let authority_signer = authority_signer.expect("authority_signer");
+
+                process_account_redelegate(
+                    &mut db,
+                    &rpc_client,
+                    from_address,
+                    vote_account_address,
+                    lot_selection_method,
                     authority_address,
                     vec![authority_signer],
                     into_keypair,
