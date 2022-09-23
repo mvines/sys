@@ -34,6 +34,14 @@ You can also run `./fetch-release.sh` to download the latest Linux and macOS bin
 * Data is contained in a local `sell-your-sol/` subdirectory that can be easily backed up, and is editable by hand if necessary
 * Full Excel export, useful to hand off to a CPA or your entity's finance department. Sorry no TurboTax import!
 
+## Coming Soon Features!
+Once Solana mainnet upgrades to Solana v1.14 and the stake redelegation
+instruction is activated (see
+[here](https://github.com/solana-labs/solana/issues/26765)), the following
+features will become available in `sys`:
+* Stake account redelegation with no loss of staking rewards (`sys account redelegate --help`)
+* Stake Spreader functionality that allows you to chase the highest performing validators with no loss of staking rewards (`sys stake-spreader --help`)
+
 ## Examples
 Explore the help system instead:
 ```

@@ -3,6 +3,7 @@ mod field_as_string;
 mod get_transaction_balance_change;
 mod notifier;
 mod rpc_client_utils;
+mod stake_spreader;
 
 use {
     crate::get_transaction_balance_change::*,
@@ -4518,6 +4519,75 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 )
         )
         .subcommand(
+            SubCommand::with_name("stake-spreader")
+                .alias("ss")
+                .about("Spread stake across the top-performing validators")
+                .after_help("\
+                    The stake spreader will not explicitly split or merge stake accounts. \
+                    Instead the normal `account split` and `account merge` subcommands should be \
+                    used to shape your stake accounts as desired, at any time. The spreader will \
+                    then aim to delegate those accounts equally over the number of validators \
+                    specified, favouring the more performant validators. \
+                ")
+                .arg(
+                    Arg::with_name("stake_authority")
+                        .long("stake-authority")
+                        .value_name("KEYPAIR")
+                        .takes_value(true)
+                        .required(true)
+                        .validator(is_valid_signer)
+                        .help("Stake authority of the stake accounts to be spread"),
+                )
+                .arg(
+                    Arg::with_name("epoch_completed_percentage")
+                        .long("epoch-completed-percentage")
+                        .value_name("PERCENT")
+                        .takes_value(true)
+                        .validator(is_valid_percentage)
+                        .required(true)
+                        .default_value("90")
+                        .help("Wait until the current epoch is this percent complete before rebalancing stake"),
+                )
+                .arg(
+                    Arg::with_name("epoch_history")
+                        .long("epoch_history")
+                        .value_name("COUNT")
+                        .takes_value(true)
+                        .validator(is_parsable::<usize>)
+                        .required(true)
+                        .default_value("3")
+                        .help("Consider validator performance over the previous COUNT epochs"),
+                )
+                .arg(
+                    Arg::with_name("num_validators")
+                        .long("validators")
+                        .value_name("COUNT")
+                        .takes_value(true)
+                        .validator(is_parsable::<usize>)
+                        .required(true)
+                        .default_value("10")
+                        .help("Number of validators to spread the stake over"),
+                )
+                .arg(
+                    Arg::with_name("include")
+                        .long("include")
+                        .value_name("VOTE ACCOUNT ADDRESS")
+                        .takes_value(true)
+                        .multiple(true)
+                        .validator(is_valid_pubkey)
+                        .help("Always select this this vote account for a delegation"),
+                )
+                .arg(
+                    Arg::with_name("exclude")
+                        .long("exclude")
+                        .value_name("VOTE ACCOUNT ADDRESS")
+                        .takes_value(true)
+                        .multiple(true)
+                        .validator(is_valid_pubkey)
+                        .help("Never select this this vote account for a delegation"),
+                )
+        )
+        .subcommand(
             SubCommand::with_name("tulip")
                 .about("tulip.garden")
                 .setting(AppSettings::SubcommandRequiredElseHelp)
@@ -5634,6 +5704,42 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             _ => unreachable!(),
         },
+        ("stake-spreader", Some(ss_matches)) => {
+            let (authority_signer, authority_address) =
+                signer_of(ss_matches, "stake_authority", &mut wallet_manager)?;
+            let authority_address = authority_address.expect("authority_address");
+            let authority_signer = authority_signer.expect("authority_signer");
+
+            let epoch_completed_percentage =
+                value_t_or_exit!(ss_matches, "epoch_completed_percentage", u8);
+            let epoch_history = value_t_or_exit!(ss_matches, "epoch_history", usize);
+            let num_validators = value_t_or_exit!(ss_matches, "num_validators", usize);
+
+            let included_vote_account_addresses: HashSet<Pubkey> =
+                pubkeys_of(ss_matches, "include")
+                    .unwrap_or_default()
+                    .into_iter()
+                    .collect();
+            let excluded_vote_account_addresses: HashSet<Pubkey> =
+                pubkeys_of(ss_matches, "exclude")
+                    .unwrap_or_default()
+                    .into_iter()
+                    .collect();
+
+            stake_spreader::run(
+                &mut db,
+                &rpc_client,
+                epoch_completed_percentage,
+                epoch_history,
+                num_validators,
+                included_vote_account_addresses,
+                excluded_vote_account_addresses,
+                authority_address,
+                vec![authority_signer],
+                &notifier,
+            )
+            .await?;
+        }
         ("tulip", Some(tulip_matches)) => match tulip_matches.subcommand() {
             ("apr", Some(arg_matches)) => {
                 let token = value_t_or_exit!(arg_matches, "collateral_token", Token);
