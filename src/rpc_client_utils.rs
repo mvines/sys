@@ -1,12 +1,28 @@
 use {
+    chrono::prelude::*,
     solana_client::{rpc_client::RpcClient, rpc_response::StakeActivationState},
     solana_sdk::{
         account::Account,
         account_utils::StateMut,
+        clock::Slot,
         pubkey::Pubkey,
+        signature::Signature,
         stake::state::{Authorized, StakeState},
     },
 };
+
+pub async fn get_block_date(
+    rpc_client: &RpcClient,
+    slot: Slot,
+) -> Result<NaiveDate, Box<dyn std::error::Error>> {
+    let block_time = rpc_client.get_block_time(slot)?;
+    let local_timestamp = Local.timestamp(block_time, 0);
+    Ok(NaiveDate::from_ymd(
+        local_timestamp.year(),
+        local_timestamp.month(),
+        local_timestamp.day(),
+    ))
+}
 
 pub fn get_stake_authorized(
     rpc_client: &RpcClient,
@@ -65,4 +81,17 @@ pub fn stake_accounts_have_same_credits_observed(
         return Ok(credits_observed1 == credits_observed2);
     }
     Ok(false)
+}
+
+pub async fn get_signature_date(
+    rpc_client: &RpcClient,
+    signature: Signature,
+) -> Result<NaiveDate, Box<dyn std::error::Error>> {
+    let statuses = rpc_client.get_signature_statuses_with_history(&[signature])?;
+    if let Some(Some(ts)) = statuses.value.get(0) {
+        let block_date = get_block_date(rpc_client, ts.slot).await?;
+        Ok(block_date)
+    } else {
+        Err(format!("Unknown signature: {}", signature).into())
+    }
 }

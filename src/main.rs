@@ -17,6 +17,7 @@ use {
     db::*,
     itertools::Itertools,
     notifier::*,
+    rpc_client_utils::get_signature_date,
     rust_decimal::prelude::*,
     separator::FixedPlaceSeparatable,
     solana_clap_utils::{self, input_parsers::*, input_validators::*},
@@ -94,38 +95,12 @@ fn naivedate_of(string: &str) -> Result<NaiveDate, String> {
         .map_err(|err| format!("error parsing '{}': {}", string, err))
 }
 
-async fn get_block_date(
-    rpc_client: &RpcClient,
-    slot: Slot,
-) -> Result<NaiveDate, Box<dyn std::error::Error>> {
-    let block_time = rpc_client.get_block_time(slot)?;
-    let local_timestamp = Local.timestamp(block_time, 0);
-    Ok(NaiveDate::from_ymd(
-        local_timestamp.year(),
-        local_timestamp.month(),
-        local_timestamp.day(),
-    ))
-}
-
-async fn get_signature_date(
-    rpc_client: &RpcClient,
-    signature: Signature,
-) -> Result<NaiveDate, Box<dyn std::error::Error>> {
-    let statuses = rpc_client.get_signature_statuses_with_history(&[signature])?;
-    if let Some(Some(ts)) = statuses.value.get(0) {
-        let block_date = get_block_date(rpc_client, ts.slot).await?;
-        Ok(block_date)
-    } else {
-        Err(format!("Unknown signature: {}", signature).into())
-    }
-}
-
 async fn get_block_date_and_price(
     rpc_client: &RpcClient,
     slot: Slot,
     token: MaybeToken,
 ) -> Result<(NaiveDate, Decimal), Box<dyn std::error::Error>> {
-    let block_date = get_block_date(rpc_client, slot).await?;
+    let block_date = rpc_client_utils::get_block_date(rpc_client, slot).await?;
     Ok((
         block_date,
         token.get_historical_price(rpc_client, block_date).await?,
@@ -3045,7 +3020,7 @@ async fn process_account_redelegate<T: Signers>(
     vote_account_address: Pubkey,
     lot_selection_method: LotSelectionMethod,
     authority_address: Pubkey,
-    signers: T,
+    signers: &T,
     into_keypair: Option<Keypair>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (recent_blockhash, last_valid_block_height) =
@@ -3104,7 +3079,7 @@ async fn process_account_redelegate<T: Signers>(
         into_keypair.pubkey(),
     );
 
-    transaction.partial_sign(&signers, recent_blockhash);
+    transaction.partial_sign(signers, recent_blockhash);
     transaction.try_sign(&[&into_keypair], recent_blockhash)?;
 
     let signature = transaction.signatures[0];
@@ -4550,12 +4525,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 )
                 .arg(
                     Arg::with_name("epoch_history")
-                        .long("epoch_history")
+                        .long("epoch-history")
                         .value_name("COUNT")
                         .takes_value(true)
                         .validator(is_parsable::<usize>)
                         .required(true)
-                        .default_value("3")
+                        .default_value("2")
                         .help("Consider validator performance over the previous COUNT epochs"),
                 )
                 .arg(
@@ -4586,6 +4561,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .validator(is_valid_pubkey)
                         .help("Never select this this vote account for a delegation"),
                 )
+                .arg(
+                    Arg::with_name("danger")
+                        .long("danger")
+                        .takes_value(false)
+                        .help("NOT WELL TESTED YET, MIGHT SCREW UP YOUR DELEGATIONS"),
+                ),
         )
         .subcommand(
             SubCommand::with_name("tulip")
@@ -5138,8 +5119,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let app_matches = app.get_matches();
     let db_path = value_t_or_exit!(app_matches, "db_path", PathBuf);
     let verbose = app_matches.is_present("verbose");
-    let rpc_client = RpcClient::new_with_commitment(
+    let rpc_client = RpcClient::new_with_timeout_and_commitment(
         normalize_to_url_if_moniker(value_t_or_exit!(app_matches, "json_rpc_url", String)),
+        std::time::Duration::from_secs(120),
         CommitmentConfig::confirmed(),
     );
     let mut wallet_manager = None;
@@ -5582,7 +5564,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     vote_account_address,
                     lot_selection_method,
                     authority_address,
-                    vec![authority_signer],
+                    &vec![authority_signer],
                     into_keypair,
                 )
                 .await?;
@@ -5712,7 +5694,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let epoch_completed_percentage =
                 value_t_or_exit!(ss_matches, "epoch_completed_percentage", u8);
-            let epoch_history = value_t_or_exit!(ss_matches, "epoch_history", usize);
+            let epoch_history = value_t_or_exit!(ss_matches, "epoch_history", u64);
             let num_validators = value_t_or_exit!(ss_matches, "num_validators", usize);
 
             let included_vote_account_addresses: HashSet<Pubkey> =
@@ -5725,6 +5707,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .unwrap_or_default()
                     .into_iter()
                     .collect();
+
+            eprintln!("DANGER: stake spreader is untested");
+            if !ss_matches.is_present("danger") {
+                eprintln!("Add --danger arg to proceed at your own risk");
+                exit(1);
+            }
 
             stake_spreader::run(
                 &mut db,

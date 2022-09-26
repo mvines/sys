@@ -11,7 +11,7 @@ use {
         signature::Signature,
     },
     std::{
-        collections::HashSet,
+        collections::{HashMap, HashSet},
         fmt, fs, io,
         path::{Path, PathBuf},
         time::{SystemTime, UNIX_EPOCH},
@@ -595,6 +595,13 @@ pub struct TaxRate {
     pub long_term_gain: f64,
 }
 
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
+pub struct ValidatorCreditScore {
+    #[serde(with = "field_as_string")]
+    pub vote_account: Pubkey,
+    pub credits: u64,
+}
+
 #[derive(Debug, Default, PartialEq, Clone, Serialize, Deserialize)]
 pub struct DbData {
     next_lot_number: usize,
@@ -608,6 +615,7 @@ pub struct DbData {
     sweep_stake_account: Option<SweepStakeAccount>,
     transitory_sweep_stake_accounts: Vec<TransitorySweepStake>,
     tax_rate: Option<TaxRate>,
+    validator_credit_scores: Option<HashMap<Epoch, Vec<ValidatorCreditScore>>>,
 }
 
 impl DbData {
@@ -657,6 +665,7 @@ impl DbData {
                 .get("transitory-sweep-stake-accounts")
                 .unwrap_or_default(),
             tax_rate: None,
+            validator_credit_scores: None,
         }
     }
 
@@ -1480,6 +1489,50 @@ impl Db {
 
     pub fn set_tax_rate(&mut self, tax_rate: TaxRate) -> DbResult<()> {
         self.data.tax_rate = Some(tax_rate);
+        self.save()
+    }
+
+    pub fn contains_validator_credit_scores(&self, epoch: Epoch) -> bool {
+        self.data
+            .validator_credit_scores
+            .as_ref()
+            .and_then(|vcs| vcs.get(&epoch))
+            .is_some()
+    }
+
+    pub fn get_validator_credit_scores(&self, epoch: Epoch) -> Vec<ValidatorCreditScore> {
+        self.data
+            .validator_credit_scores
+            .as_ref()
+            .and_then(|vcs| vcs.get(&epoch))
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    pub fn set_validator_credit_scores(
+        &mut self,
+        epoch: Epoch,
+        validator_credit_scores: Vec<ValidatorCreditScore>,
+    ) -> DbResult<()> {
+        if self.data.validator_credit_scores.is_none() {
+            self.data.validator_credit_scores = Some(HashMap::default());
+        }
+
+        *self
+            .data
+            .validator_credit_scores
+            .as_mut()
+            .unwrap()
+            .entry(epoch)
+            .or_default() = validator_credit_scores;
+
+        // Retain the last 10 epochs
+        self.data
+            .validator_credit_scores
+            .as_mut()
+            .unwrap()
+            .retain(|k, _| *k >= epoch.saturating_sub(10));
+
         self.save()
     }
 

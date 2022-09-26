@@ -4082,6 +4082,7 @@ dependencies = [
  "itertools",
  "jup-ag",
  "lazy_static",
+ "log",
  "pickledb",
  "reqwest",
  "rust_decimal",
