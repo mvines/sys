@@ -2544,73 +2544,90 @@ async fn process_account_merge<T: Signers>(
     into_address: Pubkey,
     authority_address: Pubkey,
     signers: T,
+    existing_signature: Option<Signature>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let token = MaybeToken::SOL(); // TODO: Support merging tokens one day
 
-    let (recent_blockhash, last_valid_block_height) =
-        rpc_client.get_latest_blockhash_with_commitment(rpc_client.commitment())?;
-
-    let from_account = rpc_client
-        .get_account_with_commitment(&from_address, rpc_client.commitment())?
-        .value
-        .ok_or_else(|| format!("From account, {}, does not exist", from_address))?;
-
-    let authority_account = if from_address == authority_address {
-        from_account.clone()
+    if let Some(existing_signature) = existing_signature {
+        db.record_transfer(
+            existing_signature,
+            0, /*last_valid_block_height*/
+            None,
+            from_address,
+            token,
+            into_address,
+            token,
+            LotSelectionMethod::default(),
+            None,
+        )?;
     } else {
-        rpc_client
-            .get_account_with_commitment(&authority_address, rpc_client.commitment())?
+        let (recent_blockhash, last_valid_block_height) =
+            rpc_client.get_latest_blockhash_with_commitment(rpc_client.commitment())?;
+
+        let from_account = rpc_client
+            .get_account_with_commitment(&from_address, rpc_client.commitment())?
             .value
-            .ok_or_else(|| format!("Authority account, {}, does not exist", authority_address))?
-    };
+            .ok_or_else(|| format!("From account, {}, does not exist", from_address))?;
 
-    let instructions = if from_account.owner == solana_sdk::stake::program::id() {
-        solana_sdk::stake::instruction::merge(&into_address, &from_address, &authority_address)
-    } else {
-        // TODO: Support merging two system accounts, tokens, and possibly other variations
-        return Err(format!("Unsupported `from` account owner: {}", from_account.owner).into());
-    };
+        let authority_account = if from_address == authority_address {
+            from_account.clone()
+        } else {
+            rpc_client
+                .get_account_with_commitment(&authority_address, rpc_client.commitment())?
+                .value
+                .ok_or_else(|| {
+                    format!("Authority account, {}, does not exist", authority_address)
+                })?
+        };
 
-    println!("Merging {} into {}", from_address, into_address);
-    if from_address != authority_address {
-        println!("Authority address: {}", authority_address);
+        let instructions = if from_account.owner == solana_sdk::stake::program::id() {
+            solana_sdk::stake::instruction::merge(&into_address, &from_address, &authority_address)
+        } else {
+            // TODO: Support merging two system accounts, tokens, and possibly other variations
+            return Err(format!("Unsupported `from` account owner: {}", from_account.owner).into());
+        };
+
+        println!("Merging {} into {}", from_address, into_address);
+        if from_address != authority_address {
+            println!("Authority address: {}", authority_address);
+        }
+
+        let mut message = Message::new(&instructions, Some(&authority_address));
+        message.recent_blockhash = recent_blockhash;
+        if rpc_client.get_fee_for_message(&message)? > authority_account.lamports {
+            return Err("Insufficient funds for transaction fee".into());
+        }
+
+        let mut transaction = Transaction::new_unsigned(message);
+        let simulation_result = rpc_client.simulate_transaction(&transaction)?.value;
+        if simulation_result.err.is_some() {
+            return Err(format!("Simulation failure: {:?}", simulation_result).into());
+        }
+
+        transaction.try_sign(&signers, recent_blockhash)?;
+        let signature = transaction.signatures[0];
+        println!("Transaction signature: {}", signature);
+
+        db.record_transfer(
+            signature,
+            last_valid_block_height,
+            None,
+            from_address,
+            token,
+            into_address,
+            token,
+            LotSelectionMethod::default(),
+            None,
+        )?;
+
+        if !send_transaction_until_expired(rpc_client, &transaction, last_valid_block_height) {
+            db.cancel_transfer(signature)?;
+            return Err("Merge failed".into());
+        }
+        let when = get_signature_date(rpc_client, signature).await?;
+        db.confirm_transfer(signature, when)?;
+        db.remove_account(from_address, token)?;
     }
-
-    let mut message = Message::new(&instructions, Some(&authority_address));
-    message.recent_blockhash = recent_blockhash;
-    if rpc_client.get_fee_for_message(&message)? > authority_account.lamports {
-        return Err("Insufficient funds for transaction fee".into());
-    }
-
-    let mut transaction = Transaction::new_unsigned(message);
-    let simulation_result = rpc_client.simulate_transaction(&transaction)?.value;
-    if simulation_result.err.is_some() {
-        return Err(format!("Simulation failure: {:?}", simulation_result).into());
-    }
-
-    transaction.try_sign(&signers, recent_blockhash)?;
-    let signature = transaction.signatures[0];
-    println!("Transaction signature: {}", signature);
-
-    db.record_transfer(
-        signature,
-        last_valid_block_height,
-        None,
-        from_address,
-        token,
-        into_address,
-        token,
-        LotSelectionMethod::default(),
-        None,
-    )?;
-
-    if !send_transaction_until_expired(rpc_client, &transaction, last_valid_block_height) {
-        db.cancel_transfer(signature)?;
-        return Err("Merge failed".into());
-    }
-    let when = get_signature_date(rpc_client, signature).await?;
-    db.confirm_transfer(signature, when)?;
-    db.remove_account(from_address, token)?;
     Ok(())
 }
 
@@ -4131,6 +4148,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .validator(is_valid_signer)
                                 .help("Optional authority for the merge"),
                         )
+                        .arg(
+                            Arg::with_name("transaction")
+                                .long("transaction")
+                                .value_name("SIGNATURE")
+                                .takes_value(true)
+                                .validator(is_parsable::<Signature>)
+                                .help("Existing merge transaction signature that succeeded but \
+                                      due to RPC infrastructure limitations the local database \
+                                      considered it to have failed. Careful!")
+                        )
                 )
                 .subcommand(
                     SubCommand::with_name("sweep")
@@ -5380,6 +5407,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 let authority_address = authority_address.expect("authority_address");
                 let authority_signer = authority_signer.expect("authority_signer");
+                let signature = value_t!(arg_matches, "transaction", Signature).ok();
 
                 process_account_merge(
                     &mut db,
@@ -5388,6 +5416,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     into_address,
                     authority_address,
                     vec![authority_signer],
+                    signature,
                 )
                 .await?;
             }
