@@ -49,8 +49,8 @@ impl ExchangeClient for FtxExchangeClient {
         Ok(self
             .rest
             .request(GetWalletDepositAddress {
-                coin: token.to_string(),
-                method: Some("sol".into()),
+                coin: &token.to_string(),
+                method: Some("sol"),
             })
             .await
             .map_err(|err| format!("{:?}", err))?
@@ -188,7 +188,7 @@ impl ExchangeClient for FtxExchangeClient {
         let hourly_prices = self
             .rest
             .request(GetHistoricalPrices {
-                market_name: ftx_pair.into(),
+                market_name: ftx_pair,
                 resolution: 3600,
                 limit: Some(24),
                 start_time: None,
@@ -289,7 +289,7 @@ impl ExchangeClient for FtxExchangeClient {
         let order_info = self
             .rest
             .request(PlaceOrder {
-                market: pair.into(),
+                market: pair,
                 side,
                 price: Some(FromPrimitive::from_f64(price).unwrap()),
                 r#type: OrderType::Limit,
@@ -352,7 +352,7 @@ impl ExchangeClient for FtxExchangeClient {
         let fills = self
             .rest
             .request(GetFills {
-                market_name: order_info.market,
+                market_name: &order_info.market,
                 order_id: Some(order_id),
                 ..GetFills::default()
             })
@@ -404,7 +404,9 @@ impl ExchangeClient for FtxExchangeClient {
                 locked: lending_info.locked.to_f64().unwrap(),
                 offered: lending_info.offered.to_f64().unwrap(),
                 estimate_rate: lending_rate.estimate.to_f64().unwrap() * HOURS_PER_YEAR * 100.,
-                previous_rate: lending_rate.previous.to_f64().unwrap() * HOURS_PER_YEAR * 100.,
+                previous_rate: lending_rate.previous.unwrap_or_default().to_f64().unwrap()
+                    * HOURS_PER_YEAR
+                    * 100.,
             }))
     }
 
@@ -472,7 +474,7 @@ impl ExchangeClient for FtxExchangeClient {
     ) -> Result<(), Box<dyn std::error::Error>> {
         self.rest
             .request(SubmitLendingOffer {
-                coin: coin.to_string(),
+                coin,
                 size: size.try_into().unwrap(),
                 rate: 0.00000000001_f64.try_into().unwrap(),
             })

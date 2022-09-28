@@ -494,6 +494,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8d696c370c750c948ada61c69a0ee2cbbb9c50b1019ddb86d9317157a99c2cae"
 
 [[package]]
+name = "boolinator"
+version = "2.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cfa8873f51c92e232f9bac4065cddef41b714152812bfc5f7672ba16d6ef8cd9"
+
+[[package]]
 name = "borsh"
 version = "0.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -782,6 +788,26 @@ name = "const-oid"
 version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e4c78c047431fee22c1a7bb92e00ad095a02a983affe4d8a72e2a2c62c1b94f3"
+
+[[package]]
+name = "const_format"
+version = "0.2.26"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "939dc9e2eb9077e0679d2ce32de1ded8531779360b003b4a972a7a39ec263495"
+dependencies = [
+ "const_format_proc_macros",
+]
+
+[[package]]
+name = "const_format_proc_macros"
+version = "0.2.22"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ef196d5d972878a48da7decb7686eded338b4858fbabeed513d63a7c98b2b82d"
+dependencies = [
+ "proc-macro2 1.0.43",
+ "quote 1.0.21",
+ "unicode-xid 0.2.2",
+]
 
 [[package]]
 name = "constant_time_eq"
@@ -1303,10 +1329,12 @@ dependencies = [
 
 [[package]]
 name = "ftx"
-version = "0.5.0"
-source = "git+https://github.com/mvines/ftx?rev=eea60b98cc47052dc0e6c42efe861d8d7cf6fb7f#eea60b98cc47052dc0e6c42efe861d8d7cf6fb7f"
+version = "0.6.0"
+source = "git+https://github.com/mvines/ftx?rev=22dea8cf63269645eb220c9ce5ffdd0b746a9ceb#22dea8cf63269645eb220c9ce5ffdd0b746a9ceb"
 dependencies = [
+ "boolinator",
  "chrono",
+ "const_format",
  "crc32fast",
  "dotenv",
  "futures",
