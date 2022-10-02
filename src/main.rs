@@ -1719,9 +1719,11 @@ async fn process_account_add(
     income: bool,
     signature: Option<Signature>,
     no_sync: bool,
+    ui_amount: Option<f64>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (when, amount, last_update_epoch, kind) = match signature {
         Some(signature) => {
+            assert!(ui_amount.is_none()); // argument parsing should have asserted this already
             let (address, address_is_token) = match token.token() {
                 Some(token) => (token.ata(&address), true),
                 None => (address, false),
@@ -1756,7 +1758,11 @@ async fn process_account_add(
             )
         }
         None => {
-            let amount = token.balance(rpc_client, &address)?;
+            let amount = match ui_amount {
+                Some(ui_amount) => token.amount(ui_amount),
+                None => token.balance(rpc_client, &address)?,
+            };
+
             let last_update_epoch = rpc_client.get_epoch_info()?.epoch.saturating_sub(1);
             (
                 when,
@@ -3927,7 +3933,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .long("no-sync")
                                 .takes_value(false)
                                 .help("Never synchronize this account with the on-chain state (advanced; uncommon)"),
-                        ),
+                        )
+                        .arg(
+                            Arg::with_name("amount")
+                                .long("amount")
+                                .value_name("AMOUNT")
+                                .takes_value(true)
+                                .validator(is_parsable::<f64>)
+                                .conflicts_with("transaction")
+                                .help("Consider the account to have this amount of tokens rather than \
+                                       using the current value on chain (advanced; uncommon)"),
+                        )
                 )
                 .subcommand(
                     SubCommand::with_name("dispose")
@@ -5304,6 +5320,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .ok()
                     .unwrap_or_default();
                 let no_sync = arg_matches.is_present("no_sync");
+                let ui_amount = value_t!(arg_matches, "amount", f64).ok();
 
                 process_account_add(
                     &mut db,
@@ -5316,6 +5333,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     income,
                     signature,
                     no_sync,
+                    ui_amount,
                 )
                 .await?;
                 process_account_sync(&mut db, &rpc_client, Some(address), &notifier).await?;
