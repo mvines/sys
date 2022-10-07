@@ -99,66 +99,48 @@ fn get_validator_credit_scores(
 
     let vote_accounts = rpc_client.get_vote_accounts()?;
 
-    Ok(vote_accounts.current.into_iter().chain(vote_accounts.delinquent).filter_map(|vai| {
-        vai.epoch_credits.iter().find(|ec| ec.0 == epoch).and_then(|(_, credits, prev_credits)| {
-            vai.vote_pubkey.parse::<Pubkey>().ok().and_then(|vote_pubkey| {
+    Ok(vote_accounts
+        .current
+        .into_iter()
+        .chain(vote_accounts.delinquent)
+        .filter_map(|vai| {
+            vai.epoch_credits.iter().find(|ec| ec.0 == epoch).and_then(
+                |(_, credits, prev_credits)| {
+                    vai.vote_pubkey
+                        .parse::<Pubkey>()
+                        .ok()
+                        .and_then(|vote_pubkey| {
+                            let (epoch_commission, epoch_credits) = {
+                                let epoch_commission = match &epoch_commissions {
+                                    Some(epoch_commissions) => {
+                                        *epoch_commissions.get(&vote_pubkey).unwrap()
+                                    }
+                                    None => vai.commission,
+                                };
+                                let epoch_credits = credits.saturating_sub(*prev_credits);
+                                (epoch_commission, epoch_credits)
+                            };
 
-                #[cfg(feature = "correct_zero_commission_handling")]
-                let (epoch_commission, epoch_credits) = {
-                    let epoch_commission = match &epoch_commissions {
-                        Some(epoch_commissions) => *epoch_commissions.get(&vote_pubkey).unwrap(),
-                        None => vai.commission
-                    };
-                    let epoch_credits = credits.saturating_sub(*prev_credits);
-                    (epoch_commission, epoch_credits)
-                };
-
-                #[cfg(not(feature = "correct_zero_commission_handling"))]
-                let (epoch_commission, epoch_credits) = {
-                    // NOTE!! Validators with 0% commissions will not be included in `commissions` for epochs
-                    //        prior to when https://github.com/solana-labs/solana/pull/28001 is deployed to RPC servers
-                    // Assume 0% commission if the vote account is not found in the requested epoch's
-                    // rewards.
-                    //
-                    // This logic should be removed once https://github.com/solana-labs/solana/pull/28001 is deployed
-                    let epoch_commission = match &epoch_commissions {
-                        Some(epoch_commissions) => epoch_commissions.get(&vote_pubkey).copied().unwrap_or_default(),
-                        None => vai.commission
-                    };
-
-                    let epoch_credits = if vai.commission > epoch_commission {
-                        // Out of an abundance of caution, exclude validators that increase their
-                        // commission.
-                        //
-                        // This logic should be removed once https://github.com/solana-labs/solana/pull/28001 is deployed
-                        //
-                        debug!("Excluding {} due to increased commission from {} (at epoch {}) to {} (current)", vote_pubkey, epoch_commission, epoch, vai.commission);
-                        0
-                    } else {
-                        credits.saturating_sub(*prev_credits)
-                    };
-
-                    (epoch_commission, epoch_credits)
-                };
-
-                if epoch_credits > 0 {
-                    let staker_credits = (u128::from(epoch_credits) * u128::from(100 - epoch_commission) / 100) as u64;
-                    debug!(
-                        "{}: total credits {}, staker credits {} in epoch {}",
-                        vote_pubkey,
-                        epoch_credits, staker_credits,
-                        epoch,
-                    );
-                    Some((staker_credits, vote_pubkey))
-                } else {
-                    None
-                }
-            })
+                            if epoch_credits > 0 {
+                                let staker_credits =
+                                    (u128::from(epoch_credits) * u128::from(100 - epoch_commission)
+                                        / 100) as u64;
+                                debug!(
+                                    "{}: total credits {}, staker credits {} in epoch {}",
+                                    vote_pubkey, epoch_credits, staker_credits, epoch,
+                                );
+                                Some((staker_credits, vote_pubkey))
+                            } else {
+                                None
+                            }
+                        })
+                },
+            )
         })
-    }).collect::<BTreeMap::<u64,_>>()
+        .collect::<BTreeMap<u64, _>>()
         .into_iter()
         .rev()
-        .map(|(credits,vote_account)| ValidatorCreditScore {
+        .map(|(credits, vote_account)| ValidatorCreditScore {
             vote_account,
             credits,
         })
