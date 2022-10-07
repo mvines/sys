@@ -2915,6 +2915,7 @@ async fn process_account_split<T: Signers>(
     authority_address: Pubkey,
     signers: T,
     into_keypair: Option<Keypair>,
+    if_balance_exceeds: Option<f64>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // TODO: Support splitting two system accounts? Tokens? Otherwise at least error cleanly when it's attempted
     let token = MaybeToken::SOL(); // TODO: Support splitting tokens one day
@@ -2948,6 +2949,17 @@ async fn process_account_split<T: Signers>(
             description.unwrap_or_else(|| format!("Split at {}", Local::now())),
         ),
     };
+
+    if let Some(if_balance_exceeds) = if_balance_exceeds {
+        if token.ui_amount(amount) < if_balance_exceeds {
+            println!(
+                "Split declined because {:?} balance is less than {}",
+                from_address,
+                token.format_ui_amount(if_balance_exceeds)
+            );
+            return Ok(());
+        }
+    }
 
     let instructions = solana_sdk::stake::instruction::split(
         &from_address,
@@ -4236,6 +4248,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .takes_value(true)
                                 .validator(is_keypair)
                                 .help("Optional keypair of the split destination [default: randomly generated]"),
+                        )
+                        .arg(
+                            Arg::with_name("if_balance_exceeds")
+                                .long("if-balance-exceeds")
+                                .value_name("AMOUNT")
+                                .takes_value(true)
+                                .validator(is_amount)
+                                .help(
+                                    "Exit successfully without performing the split if \
+                                       the account balance is less than this amount",
+                                ),
                         )
                         .arg(lot_selection_arg())
                         .arg(lot_numbers_arg())
@@ -5539,6 +5562,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 let authority_address = authority_address.expect("authority_address");
                 let authority_signer = authority_signer.expect("authority_signer");
+                let if_balance_exceeds = value_t!(arg_matches, "if_balance_exceeds", f64).ok();
 
                 process_account_split(
                     &mut db,
@@ -5551,6 +5575,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     authority_address,
                     vec![authority_signer],
                     into_keypair,
+                    if_balance_exceeds,
                 )
                 .await?;
             }
