@@ -4351,8 +4351,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .value_name("ADDRESS")
                                 .takes_value(true)
                                 .required(true)
-                                .validator(is_amount_or_all)
-                                .help("Address of the account to unwrap; accepts keyword ALL")
+                                .validator(is_valid_pubkey)
+                                .help("Address of the account to unwrap")
                         )
                         .arg(
                             Arg::with_name("amount")
@@ -4360,7 +4360,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .takes_value(true)
                                 .validator(is_amount)
                                 .required(true)
-                                .help("The amount to unwrap, in SOL"),
+                                .help("The amount to unwrap, in SOL; accepts keyword ALL"),
                         )
                         .arg(
                             Arg::with_name("by")
