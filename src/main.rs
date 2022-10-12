@@ -4358,7 +4358,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             Arg::with_name("amount")
                                 .value_name("AMOUNT")
                                 .takes_value(true)
-                                .validator(is_amount)
+                                .validator(is_amount_or_all)
                                 .required(true)
                                 .help("The amount to unwrap, in SOL; accepts keyword ALL"),
                         )
