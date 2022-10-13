@@ -3141,6 +3141,7 @@ async fn process_account_sync(
     db: &mut Db,
     rpc_client: &RpcClient,
     address: Option<Pubkey>,
+    max_epochs_to_process: Option<u64>,
     notifier: &Notifier,
 ) -> Result<(), Box<dyn std::error::Error>> {
     process_account_sync_pending_transfers(db, rpc_client).await?;
@@ -3169,7 +3170,7 @@ async fn process_account_sync(
         .collect::<Vec<_>>();
 
     let epoch_info = rpc_client.get_epoch_info()?;
-    let stop_epoch = epoch_info.epoch.saturating_sub(1);
+    let mut stop_epoch = epoch_info.epoch.saturating_sub(1);
 
     let start_epoch = accounts
         .iter()
@@ -3185,6 +3186,13 @@ async fn process_account_sync(
     if start_epoch > stop_epoch {
         println!("Processed up to epoch {}", stop_epoch);
         return Ok(());
+    }
+
+    if let Some(max_epochs_to_process) = max_epochs_to_process {
+        if max_epochs_to_process == 0 {
+            return Ok(());
+        }
+        stop_epoch = stop_epoch.min(start_epoch.saturating_add(max_epochs_to_process - 1));
     }
 
     // Look for inflationary rewards
@@ -3811,7 +3819,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .help("Date to fetch the price for [default: current spot price]"),
                 )
         )
-        .subcommand(SubCommand::with_name("sync").about("Synchronize with all exchanges and accounts"))
+        .subcommand(
+            SubCommand::with_name("sync")
+                .about("Synchronize with all exchanges and accounts"))
+                .arg(
+                    Arg::with_name("max_epochs_to_process")
+                        .long("max-epochs-to-process")
+                        .value_name("NUMBER")
+                        .takes_value(true)
+                        .validator(is_parsable::<u64>)
+                        .help("Only process up to this number of epochs for account balance changes [default: all]"),
+                )
         .subcommand(
             SubCommand::with_name("db")
                 .about("Database management")
@@ -4311,7 +4329,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .required(false)
                                 .validator(is_valid_pubkey)
                                 .help("Account to synchronize"),
-                        ),
+                        )
+                        .arg(
+                            Arg::with_name("max_epochs_to_process")
+                                .long("max-epochs-to-process")
+                                .value_name("NUMBER")
+                                .takes_value(true)
+                                .validator(is_parsable::<u64>)
+                                .help("Only process up to this number of epochs for account balance changes [default: all]"),
+                        )
                 )
                 .subcommand(
                     SubCommand::with_name("wrap")
@@ -5225,7 +5251,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("{:.2}", price);
             }
         }
-        ("sync", Some(_arg_matches)) => {
+        ("sync", Some(arg_matches)) => {
+            let max_epochs_to_process = value_t!(arg_matches, "max_epochs_to_process", u64).ok();
             process_sync_swaps(&mut db, &rpc_client, &notifier).await?;
             for (exchange, exchange_credentials) in db.get_configured_exchanges() {
                 println!("Synchronizing {:?}...", exchange);
@@ -5239,7 +5266,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 )
                 .await?
             }
-            process_account_sync(&mut db, &rpc_client, None, &notifier).await?;
+            process_account_sync(&mut db, &rpc_client, None, max_epochs_to_process, &notifier)
+                .await?;
         }
         ("db", Some(db_matches)) => match db_matches.subcommand() {
             ("import", Some(arg_matches)) => {
@@ -5359,7 +5387,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     ui_amount,
                 )
                 .await?;
-                process_account_sync(&mut db, &rpc_client, Some(address), &notifier).await?;
+                process_account_sync(&mut db, &rpc_client, Some(address), None, &notifier).await?;
             }
             ("dispose", Some(arg_matches)) => {
                 let address = pubkey_of(arg_matches, "address").unwrap();
@@ -5614,7 +5642,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             ("sync", Some(arg_matches)) => {
                 let address = pubkey_of(arg_matches, "address");
-                process_account_sync(&mut db, &rpc_client, address, &notifier).await?;
+                let max_epochs_to_process =
+                    value_t!(arg_matches, "max_epochs_to_process", u64).ok();
+                process_account_sync(
+                    &mut db,
+                    &rpc_client,
+                    address,
+                    max_epochs_to_process,
+                    &notifier,
+                )
+                .await?;
             }
             ("wrap", Some(arg_matches)) => {
                 let address = pubkey_of(arg_matches, "address").unwrap();
