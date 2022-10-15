@@ -99,7 +99,7 @@ fn get_validator_credit_scores(
 
     let vote_accounts = rpc_client.get_vote_accounts()?;
 
-    Ok(vote_accounts
+    let mut list = vote_accounts
         .current
         .into_iter()
         .chain(vote_accounts.delinquent)
@@ -129,7 +129,10 @@ fn get_validator_credit_scores(
                                     "{}: total credits {}, staker credits {} in epoch {}",
                                     vote_pubkey, epoch_credits, staker_credits, epoch,
                                 );
-                                Some((staker_credits, vote_pubkey))
+                                Some(ValidatorCreditScore {
+                                    credits: staker_credits,
+                                    vote_account: vote_pubkey,
+                                })
                             } else {
                                 None
                             }
@@ -137,14 +140,10 @@ fn get_validator_credit_scores(
                 },
             )
         })
-        .collect::<BTreeMap<u64, _>>()
-        .into_iter()
-        .rev()
-        .map(|(credits, vote_account)| ValidatorCreditScore {
-            vote_account,
-            credits,
-        })
-        .collect())
+        .collect::<Vec<_>>();
+
+    list.sort_by(|a, b| b.credits.cmp(&a.credits));
+    Ok(list)
 }
 
 #[allow(clippy::too_many_arguments)]
