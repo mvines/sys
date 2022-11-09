@@ -18,8 +18,8 @@ chrono-humanize = "0.2.1"
 clap = "2.33"
 console = "0.14.1"
 fd-lock = "3.0.0"
-#ftx = { git = "https://github.com/fabianboesiger/ftx", rev = "ce576c74f11c1795eef8cd101735166cb77b7892" }
-ftx = { git = "https://github.com/mvines/ftx", rev = "22dea8cf63269645eb220c9ce5ffdd0b746a9ceb" }
+ftx = { git = "https://github.com/fabianboesiger/ftx", rev = "bb98235d356dd1a2becc5bdf32a4b738311ed434" }
+#ftx = { git = "https://github.com/mvines/ftx", rev = "22dea8cf63269645eb220c9ce5ffdd0b746a9ceb" }
 #ftx = { path = "../ftx" }
 influxdb-client = "0.1.4"
 itertools = "0.10.0"
