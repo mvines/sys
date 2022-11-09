@@ -188,6 +188,7 @@ pub trait ExchangeClient {
         coin: &str,
         size: f64,
     ) -> Result<(), Box<dyn std::error::Error>>;
+    fn preferred_solusd_pair(&self) -> &'static str;
 }
 
 pub fn exchange_client_new(

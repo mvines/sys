@@ -481,6 +481,10 @@ impl ExchangeClient for FtxExchangeClient {
             .await?;
         Ok(())
     }
+
+    fn preferred_solusd_pair(&self) -> &'static str {
+        "SOLUSD"
+    }
 }
 
 pub fn new(

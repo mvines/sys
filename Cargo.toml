@@ -9,6 +9,9 @@ default-run = "sys"
 [dependencies]
 async-recursion = "1.0.0"
 async-trait = "0.1.50"
+#binance-rs-async = { version = "1.2.0", features = ["wallet_api"]}
+#binance-rs-async = { path = "../binance-rs-async", features = ["wallet_api"]}
+binance-rs-async = { git = "https://github.com/mvines/binance-rs-async", rev = "228755448a5210c4dd944fb60bd1a28562ff8c41", features = ["wallet_api"]}
 bincode = "1.3"
 chrono = "0.4"
 chrono-humanize = "0.2.1"
@@ -48,7 +51,6 @@ spl-token-lending = { git = "https://github.com/solana-labs/solana-program-libra
 strum = { version = "0.23", features = ["derive"] }
 thiserror = "1.0"
 tokio = { version = "1", features = ["macros", "time"] }
-tokio-binance = "1.0"
 tulipv2-sdk-common = "0.9.5"
 
 [profile.dev]

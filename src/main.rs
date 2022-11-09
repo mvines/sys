@@ -4791,7 +4791,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             Arg::with_name("pair")
                                 .value_name("TRADING_PAIR")
                                 .takes_value(true)
-                                .default_value("SOLUSD")
+                                .help("[default: preferred SOL/USD pair for the exchange]")
                         )
                         .arg(
                             Arg::with_name("ask")
@@ -4988,8 +4988,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .long("pair")
                                 .value_name("TRADING_PAIR")
                                 .takes_value(true)
-                                .default_value("SOLUSD")
-                                .help("Market to place the order in"),
+                                .help("Market to place the order in [default: preferred SOL/USD pair for the exchange]"),
                         )
                         .arg(
                             Arg::with_name("if_balance_exceeds")
@@ -5038,8 +5037,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .long("pair")
                                 .value_name("TRADING_PAIR")
                                 .takes_value(true)
-                                .default_value("SOLUSD")
-                                .help("Market to place the order in"),
+                                .help("Market to place the order in [default: preferred SOL/USD pair for the exchange]"),
                         )
                         .arg(
                             Arg::with_name("if_balance_exceeds")
@@ -6019,7 +6017,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
                 ("market", Some(arg_matches)) => {
-                    let pair = value_t_or_exit!(arg_matches, "pair", String);
+                    let exchange_client = exchange_client()?;
+
+                    let pair = value_t!(arg_matches, "pair", String)
+                        .unwrap_or_else(|_| exchange_client.preferred_solusd_pair().into());
                     let format = if arg_matches.is_present("weighted_24h_average_price") {
                         MarketInfoFormat::Weighted24hAveragePrice
                     } else if arg_matches.is_present("hourly") {
@@ -6029,7 +6030,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     } else {
                         MarketInfoFormat::All
                     };
-                    exchange_client()?.print_market_info(&pair, format).await?;
+                    exchange_client.print_market_info(&pair, format).await?;
                 }
                 ("deposit", Some(arg_matches)) => {
                     let token = MaybeToken::from(value_t!(arg_matches, "token", Token).ok());
@@ -6187,8 +6188,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .await?;
                 }
                 ("buy", Some(arg_matches)) => {
+                    let exchange_client = exchange_client()?;
                     let token = MaybeToken::SOL();
-                    let pair = value_t_or_exit!(arg_matches, "pair", String);
+                    let pair = value_t!(arg_matches, "pair", String)
+                        .unwrap_or_else(|_| exchange_client.preferred_solusd_pair().into());
                     let amount = match arg_matches.value_of("amount").unwrap() {
                         "ALL" => None,
                         amount => Some(str::parse::<f64>(amount).unwrap()),
@@ -6204,7 +6207,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         return Err("--at or --bid-minus argument required".into());
                     };
 
-                    let exchange_client = exchange_client()?;
                     process_exchange_buy(
                         &mut db,
                         exchange,
@@ -6227,8 +6229,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .await?;
                 }
                 ("sell", Some(arg_matches)) => {
+                    let exchange_client = exchange_client()?;
                     let token = MaybeToken::SOL();
-                    let pair = value_t_or_exit!(arg_matches, "pair", String);
+                    let pair = value_t!(arg_matches, "pair", String)
+                        .unwrap_or_else(|_| exchange_client.preferred_solusd_pair().into());
                     let amount = value_t_or_exit!(arg_matches, "amount", f64);
                     let if_balance_exceeds = value_t!(arg_matches, "if_balance_exceeds", f64)
                         .ok()
@@ -6247,7 +6251,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     } else {
                         return Err("--at or --ask-plus argument required".into());
                     };
-                    let exchange_client = exchange_client()?;
                     process_exchange_sell(
                         &mut db,
                         exchange,
