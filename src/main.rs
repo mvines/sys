@@ -5740,7 +5740,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let (signer, address) = signer_of(arg_matches, "address", &mut wallet_manager)?;
                 let from_token = value_t_or_exit!(arg_matches, "from_token", Token);
                 let to_token = value_t_or_exit!(arg_matches, "to_token", Token);
-                let ui_amount = match arg_matches.value_of("ui_amount").unwrap() {
+                let ui_amount = match arg_matches.value_of("amount").unwrap() {
                     "ALL" => None,
                     ui_amount => Some(ui_amount.parse::<f64>().unwrap()),
                 };
