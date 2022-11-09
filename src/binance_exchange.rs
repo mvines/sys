@@ -159,7 +159,6 @@ impl ExchangeClient for BinanceExchangeClient {
         price: f64,
         amount: f64,
     ) -> Result<OrderId, Box<dyn std::error::Error>> {
-
         // Minimum notional value for orders is $10 USD
         if price * amount < 10. {
             return Err("Total order amount must be 10 or greater".into());
