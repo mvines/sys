@@ -995,72 +995,109 @@ async fn process_jup_swap<T: Signers>(
     slippage: f64,
     lot_selection_method: LotSelectionMethod,
     signers: T,
+    existing_signature: Option<Signature>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let from_account = db
         .get_account(address, from_token.into())
         .ok_or_else(|| format!("{} account does not exist for {}", from_token, address))?;
 
-    let amount = match ui_amount {
-        Some(ui_amount) => from_token.amount(ui_amount),
-        None => from_account.last_update_balance,
-    };
-
-    if from_account.last_update_balance < amount {
-        return Err(format!(
-            "Insufficient {} balance in {}. Tracked balance is {}",
-            from_token,
-            address,
-            from_token.ui_amount(from_account.last_update_balance)
-        )
-        .into());
-    }
-
-    let _ = to_token.balance(rpc_client, &address).map_err(|err| {
-        format!(
-            "{} account does not exist for {}. \
-                To create it, run `spl-token create-account {} --owner {}: {}",
-            to_token,
-            address,
-            to_token.mint(),
-            address,
-            err
-        )
-    })?;
-
-    println!("Fetching best {}->{} quote...", from_token, to_token);
     let from_token_price = from_token.get_current_price(rpc_client).await?;
     let to_token_price = to_token.get_current_price(rpc_client).await?;
 
-    let quotes = jup_ag::quote(
-        from_token.mint(),
-        to_token.mint(),
-        amount,
-        false,
-        Some(slippage),
-        None,
-    )
-    .await?
-    .data;
+    if let Some(existing_signature) = existing_signature {
+        db.record_swap(
+            existing_signature,
+            0, /*last_valid_block_height*/
+            address,
+            from_token.into(),
+            from_token_price,
+            to_token.into(),
+            to_token_price,
+            lot_selection_method,
+        )?;
+    } else {
+        let amount = match ui_amount {
+            Some(ui_amount) => from_token.amount(ui_amount),
+            None => from_account.last_update_balance,
+        };
 
-    let quote = quotes
-        .get(0)
-        .ok_or_else(|| format!("No quotes found for {} to {}", from_token, to_token))?;
-    println_jup_quote(from_token, to_token, quote);
+        if from_account.last_update_balance < amount {
+            return Err(format!(
+                "Insufficient {} balance in {}. Tracked balance is {}",
+                from_token,
+                address,
+                from_token.ui_amount(from_account.last_update_balance)
+            )
+            .into());
+        }
 
-    println!("Generating swap transaction...");
-    let swap_transactions = jup_ag::swap_with_config(
-        quote.clone(),
-        address,
-        jup_ag::SwapConfig {
-            wrap_unwrap_sol: Some(false),
-            ..jup_ag::SwapConfig::default()
-        },
-    )
-    .await?;
-    if swap_transactions.cleanup.is_some() {
-        return Err("swap cleanup transaction not supported".into());
-    }
-    if let Some(mut transaction) = swap_transactions.setup {
+        let _ = to_token.balance(rpc_client, &address).map_err(|err| {
+            format!(
+                "{} account does not exist for {}. \
+                To create it, run `spl-token create-account {} --owner {}: {}",
+                to_token,
+                address,
+                to_token.mint(),
+                address,
+                err
+            )
+        })?;
+
+        println!("Fetching best {}->{} quote...", from_token, to_token);
+        let quotes = jup_ag::quote(
+            from_token.mint(),
+            to_token.mint(),
+            amount,
+            false,
+            Some(slippage),
+            None,
+        )
+        .await?
+        .data;
+
+        let quote = quotes
+            .get(0)
+            .ok_or_else(|| format!("No quotes found for {} to {}", from_token, to_token))?;
+        println_jup_quote(from_token, to_token, quote);
+
+        println!("Generating swap transaction...");
+        let swap_transactions = jup_ag::swap_with_config(
+            quote.clone(),
+            address,
+            jup_ag::SwapConfig {
+                wrap_unwrap_sol: Some(false),
+                ..jup_ag::SwapConfig::default()
+            },
+        )
+        .await?;
+        if swap_transactions.cleanup.is_some() {
+            return Err("swap cleanup transaction not supported".into());
+        }
+        if let Some(mut transaction) = swap_transactions.setup {
+            let (recent_blockhash, last_valid_block_height) =
+                rpc_client.get_latest_blockhash_with_commitment(rpc_client.commitment())?;
+            transaction.message.recent_blockhash = recent_blockhash;
+
+            let simulation_result = rpc_client.simulate_transaction(&transaction)?.value;
+            if simulation_result.err.is_some() {
+                return Err(format!(
+                    "Setup transaction simulation failure: {:?}",
+                    simulation_result
+                )
+                .into());
+            }
+
+            transaction.try_sign(&signers, recent_blockhash)?;
+            let signature = transaction.signatures[0];
+            println!("Setup transaction signature: {}", signature);
+
+            if !send_transaction_until_expired(rpc_client, &transaction, last_valid_block_height) {
+                return Err("Setup transaction failed".into());
+            }
+        }
+
+        let mut transaction = swap_transactions.swap;
+
         let (recent_blockhash, last_valid_block_height) =
             rpc_client.get_latest_blockhash_with_commitment(rpc_client.commitment())?;
         transaction.message.recent_blockhash = recent_blockhash;
@@ -1068,7 +1105,7 @@ async fn process_jup_swap<T: Signers>(
         let simulation_result = rpc_client.simulate_transaction(&transaction)?.value;
         if simulation_result.err.is_some() {
             return Err(format!(
-                "Setup transaction simulation failure: {:?}",
+                "Swap transaction simulation failure: {:?}",
                 simulation_result
             )
             .into());
@@ -1076,58 +1113,35 @@ async fn process_jup_swap<T: Signers>(
 
         transaction.try_sign(&signers, recent_blockhash)?;
         let signature = transaction.signatures[0];
-        println!("Setup transaction signature: {}", signature);
+        println!("Transaction signature: {}", signature);
+
+        if db.get_account(address, to_token.into()).is_none() {
+            let epoch = rpc_client.get_epoch_info()?.epoch;
+            db.add_account(TrackedAccount {
+                address,
+                token: to_token.into(),
+                description: from_account.description,
+                last_update_epoch: epoch,
+                last_update_balance: 0,
+                lots: vec![],
+                no_sync: None,
+            })?;
+        }
+        db.record_swap(
+            signature,
+            last_valid_block_height,
+            address,
+            from_token.into(),
+            from_token_price,
+            to_token.into(),
+            to_token_price,
+            lot_selection_method,
+        )?;
 
         if !send_transaction_until_expired(rpc_client, &transaction, last_valid_block_height) {
-            return Err("Setup transaction failed".into());
+            db.cancel_swap(signature)?;
+            return Err("Swap failed".into());
         }
-    }
-
-    let mut transaction = swap_transactions.swap;
-
-    let (recent_blockhash, last_valid_block_height) =
-        rpc_client.get_latest_blockhash_with_commitment(rpc_client.commitment())?;
-    transaction.message.recent_blockhash = recent_blockhash;
-
-    let simulation_result = rpc_client.simulate_transaction(&transaction)?.value;
-    if simulation_result.err.is_some() {
-        return Err(format!(
-            "Swap transaction simulation failure: {:?}",
-            simulation_result
-        )
-        .into());
-    }
-
-    transaction.try_sign(&signers, recent_blockhash)?;
-    let signature = transaction.signatures[0];
-    println!("Transaction signature: {}", signature);
-
-    if db.get_account(address, to_token.into()).is_none() {
-        let epoch = rpc_client.get_epoch_info()?.epoch;
-        db.add_account(TrackedAccount {
-            address,
-            token: to_token.into(),
-            description: from_account.description,
-            last_update_epoch: epoch,
-            last_update_balance: 0,
-            lots: vec![],
-            no_sync: None,
-        })?;
-    }
-    db.record_swap(
-        signature,
-        last_valid_block_height,
-        address,
-        from_token.into(),
-        from_token_price,
-        to_token.into(),
-        to_token_price,
-        lot_selection_method,
-    )?;
-
-    if !send_transaction_until_expired(rpc_client, &transaction, last_valid_block_height) {
-        db.cancel_swap(signature)?;
-        return Err("Swap failed".into());
     }
     Ok(())
 }
@@ -4556,6 +4570,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .help("Maximum slippage percent"),
                         )
                         .arg(lot_selection_arg())
+                        .arg(
+                            Arg::with_name("transaction")
+                                .long("transaction")
+                                .value_name("SIGNATURE")
+                                .takes_value(true)
+                                .validator(is_parsable::<Signature>)
+                                .help("Existing swap transaction signature that succeeded but \
+                                      due to RPC infrastructure limitations the local database \
+                                      considered it to have failed. Careful!")
+                        )
                 )
         )
         .subcommand(
@@ -5747,6 +5771,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let address = address.expect("address");
                 let lot_selection_method =
                     value_t_or_exit!(arg_matches, "lot_selection", LotSelectionMethod);
+                let signature = value_t!(arg_matches, "transaction", Signature).ok();
 
                 process_jup_swap(
                     &mut db,
@@ -5758,6 +5783,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     slippage,
                     lot_selection_method,
                     vec![signer],
+                    signature,
                 )
                 .await?;
                 process_sync_swaps(&mut db, &rpc_client, &notifier).await?;
