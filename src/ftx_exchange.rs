@@ -363,7 +363,7 @@ impl ExchangeClient for FtxExchangeClient {
         let mut fee_currency = None;
         for fill in fills {
             fee += fill.fee.to_f64().unwrap();
-            if fee_currency == None {
+            if fee_currency.is_none() {
                 fee_currency = Some(fill.fee_currency);
             } else {
                 assert_eq!(fee_currency, Some(fill.fee_currency));
