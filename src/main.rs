@@ -2565,6 +2565,15 @@ async fn process_account_merge<T: Signers>(
             .value
             .ok_or_else(|| format!("From account, {}, does not exist", from_address))?;
 
+        let from_tracked_account = db
+            .get_account(from_address, token)
+            .ok_or_else(|| format!("Account, {}, is not tracked", from_address))?;
+
+        let into_account = rpc_client
+            .get_account_with_commitment(&into_address, rpc_client.commitment())?
+            .value
+            .ok_or_else(|| format!("From account, {}, does not exist", into_address))?;
+
         let authority_account = if from_address == authority_address {
             from_account.clone()
         } else {
@@ -2576,11 +2585,28 @@ async fn process_account_merge<T: Signers>(
                 })?
         };
 
-        let instructions = if from_account.owner == solana_sdk::stake::program::id() {
+        let amount = from_tracked_account.last_update_balance;
+
+        let instructions = if from_account.owner == solana_sdk::stake::program::id()
+            && into_account.owner == solana_sdk::stake::program::id()
+        {
             solana_sdk::stake::instruction::merge(&into_address, &from_address, &authority_address)
+        } else if from_account.owner == solana_sdk::stake::program::id()
+            && into_account.owner == system_program::id()
+        {
+            vec![solana_sdk::stake::instruction::withdraw(
+                &from_address,
+                &authority_address,
+                &into_address,
+                amount,
+                None,
+            )]
         } else {
-            // TODO: Support merging two system accounts, tokens, and possibly other variations
-            return Err(format!("Unsupported `from` account owner: {}", from_account.owner).into());
+            return Err(format!(
+                "Unsupported merge from {} account to {} account",
+                from_account.owner, into_account.owner
+            )
+            .into());
         };
 
         println!("Merging {} into {}", from_address, into_address);
@@ -2607,7 +2633,7 @@ async fn process_account_merge<T: Signers>(
         db.record_transfer(
             signature,
             last_valid_block_height,
-            None,
+            Some(amount),
             from_address,
             token,
             into_address,
