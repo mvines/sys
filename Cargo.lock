@@ -417,7 +417,7 @@ checksum = "dea908e7347a8c64e378c17e30ef880ad73e3b4498346b055c2c00ea342f3179"
 [[package]]
 name = "binance-rs-async"
 version = "1.1.11"
-source = "git+https://github.com/mvines/binance-rs-async?rev=228755448a5210c4dd944fb60bd1a28562ff8c41#228755448a5210c4dd944fb60bd1a28562ff8c41"
+source = "git+https://github.com/mvines/binance-rs-async?rev=86fe60d40ceae5f7c73210e7600bc5c22efa4356#86fe60d40ceae5f7c73210e7600bc5c22efa4356"
 dependencies = [
  "boolinator",
  "chrono",

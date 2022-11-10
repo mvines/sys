@@ -224,6 +224,17 @@ impl ExchangeClient for BinanceExchangeClient {
             .date()
             .naive_local();
 
+        let trade_fees = self.wallet.trade_fees(Some(pair.to_string())).await?;
+
+        let fee = trade_fees.first().map(|trade_fee| {
+            assert_eq!(&trade_fee.symbol, pair);
+            // TODO: Fee may be off here, need to instead check the individual fills instead
+            (
+                trade_fee.maker_commission * (order.price * order.executed_qty),
+                "USD".into(),
+            )
+        });
+
         Ok(OrderStatus {
             open: matches!(
                 order.status,
@@ -238,7 +249,7 @@ impl ExchangeClient for BinanceExchangeClient {
             amount: order.orig_qty,
             filled_amount: order.executed_qty,
             last_update,
-            fee: None, // TODO
+            fee,
         })
     }
 
@@ -269,48 +280,59 @@ impl ExchangeClient for BinanceExchangeClient {
     }
 }
 
-fn new_with_url(
-    url: &str,
+fn _new(
     ExchangeCredentials {
         api_key,
         secret,
         subaccount,
     }: ExchangeCredentials,
-    preferred_solusd_pair: &'static str,
+    binance_us: bool,
 ) -> Result<BinanceExchangeClient, Box<dyn std::error::Error>> {
     if subaccount.is_some() {
         return Err("subaccounts not supported".into());
     }
 
     let config = binance::config::Config {
-        rest_api_endpoint: url.into(),
+        rest_api_endpoint: if binance_us {
+            "https://api.binance.us"
+        } else {
+            "https://api.binance.com"
+        }
+        .into(),
+        binance_us_api: binance_us,
         ..binance::config::Config::default()
     };
 
+    let account = binance::api::Binance::new_with_config(
+        Some(api_key.clone()),
+        Some(secret.clone()),
+        &config,
+    );
+
+    let market = binance::api::Binance::new_with_config(
+        Some(api_key.clone()),
+        Some(secret.clone()),
+        &config,
+    );
+    let wallet: binance::wallet::Wallet =
+        binance::api::Binance::new_with_config(Some(api_key), Some(secret), &config);
+
     Ok(BinanceExchangeClient {
-        account: binance::api::Binance::new_with_config(
-            Some(api_key.clone()),
-            Some(secret.clone()),
-            &config,
-        ),
-        market: binance::api::Binance::new_with_config(
-            Some(api_key.clone()),
-            Some(secret.clone()),
-            &config,
-        ),
-        wallet: binance::api::Binance::new_with_config(Some(api_key), Some(secret), &config),
-        preferred_solusd_pair,
+        account,
+        market,
+        wallet,
+        preferred_solusd_pair: if binance_us { "SOLUSD" } else { "SOLBUSD" },
     })
 }
 
 pub fn new(
     exchange_credentials: ExchangeCredentials,
 ) -> Result<BinanceExchangeClient, Box<dyn std::error::Error>> {
-    new_with_url("https://api.binance.com", exchange_credentials, "SOLBUSD")
+    _new(exchange_credentials, false)
 }
 
 pub fn new_us(
     exchange_credentials: ExchangeCredentials,
 ) -> Result<BinanceExchangeClient, Box<dyn std::error::Error>> {
-    new_with_url("https://api.binance.us", exchange_credentials, "SOLUSD")
+    _new(exchange_credentials, true)
 }
