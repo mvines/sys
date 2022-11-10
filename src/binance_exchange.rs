@@ -1,9 +1,13 @@
 use {
-    crate::{exchange::*, token::MaybeToken},
+    crate::{exchange::*, token::MaybeToken, token::Token},
     async_trait::async_trait,
     chrono::{Local, TimeZone},
     solana_sdk::pubkey::Pubkey,
-    std::collections::HashMap,
+    std::{
+        collections::HashMap,
+        str::FromStr,
+        time::{SystemTime, UNIX_EPOCH},
+    },
 };
 
 pub struct BinanceExchangeClient {
@@ -45,9 +49,8 @@ impl ExchangeClient for BinanceExchangeClient {
             .await?
             .into_iter()
             .filter_map(|dr| {
-                if dr.status == 1
-                /* (0 = pending, 6 = credited but cannot withdraw, 1 = success) */
-                {
+                /* status codes: 0 = pending, 6 = credited but cannot withdraw, 1 = success */
+                if dr.status == 1 {
                     Some(DepositInfo {
                         tx_id: dr.tx_id,
                         amount: dr.amount,
@@ -60,19 +63,63 @@ impl ExchangeClient for BinanceExchangeClient {
     }
 
     async fn recent_withdrawals(&self) -> Result<Vec<WithdrawalInfo>, Box<dyn std::error::Error>> {
-        // TODO: Not implemented yet
-        Ok(vec![])
+        Ok(self
+            .wallet
+            .withdraw_history(&binance::rest_model::WithdrawalHistoryQuery::default())
+            .await?
+            .into_iter()
+            .map(|wr| {
+                /* status codes: 0 = email sent, 1 = canceled,   2 =  awaiting approval,
+                3 = rejected,   4 = processing, 5 = failure,
+                6 = completed */
+                let (completed, tx_id) = match wr.status {
+                    6 => (true, Some(wr.tx_id)),
+                    1 => (true, None),
+                    _ => (false, None),
+                };
+
+                let token = if &wr.coin == "SOL" {
+                    None
+                } else {
+                    Token::from_str(&wr.coin).ok()
+                };
+                WithdrawalInfo {
+                    address: wr.address.parse::<Pubkey>().unwrap_or_default(),
+                    token: token.into(),
+                    amount: wr.amount,
+                    tag: wr.withdraw_order_id.unwrap_or_default(),
+                    completed,
+                    tx_id,
+                }
+            })
+            .collect())
     }
 
     async fn request_withdraw(
         &self,
-        _address: Pubkey,
-        _token: MaybeToken,
-        _amount: f64,
+        address: Pubkey,
+        token: MaybeToken,
+        amount: f64,
         _withdrawal_password: Option<String>,
         _withdrawal_code: Option<String>,
     ) -> Result<String, Box<dyn std::error::Error>> {
-        todo!();
+        let withdraw_order_id = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis()
+            .to_string();
+
+        self.wallet
+            .withdraw(binance::rest_model::CoinWithdrawalQuery {
+                coin: token.to_string(),
+                withdraw_order_id: Some(withdraw_order_id.clone()),
+                address: address.to_string(),
+                amount,
+                ..binance::rest_model::CoinWithdrawalQuery::default()
+            })
+            .await?;
+
+        Ok(withdraw_order_id)
     }
 
     async fn balances(
@@ -224,15 +271,24 @@ impl ExchangeClient for BinanceExchangeClient {
             .date()
             .naive_local();
 
+        let side = match order.side {
+            binance::rest_model::OrderSide::Sell => OrderSide::Sell,
+            binance::rest_model::OrderSide::Buy => OrderSide::Buy,
+        };
+
         let trade_fees = self.wallet.trade_fees(Some(pair.to_string())).await?;
 
         let fee = trade_fees.first().map(|trade_fee| {
             assert_eq!(&trade_fee.symbol, pair);
-            // TODO: Fee may be off here, need to instead check the individual fills instead
-            (
-                trade_fee.maker_commission * (order.price * order.executed_qty),
-                "USD".into(),
-            )
+            (trade_fee.maker_commission * order.executed_qty, {
+                // TODO: Avoid hard code and support pairs generically...
+                assert!(matches!(trade_fee.symbol.as_str(), "SOLUSD" | "SOLBUSD"));
+                if side == OrderSide::Sell {
+                    "USD".into()
+                } else {
+                    "SOL".into()
+                }
+            })
         });
 
         Ok(OrderStatus {
@@ -241,10 +297,7 @@ impl ExchangeClient for BinanceExchangeClient {
                 binance::rest_model::OrderStatus::New
                     | binance::rest_model::OrderStatus::PartiallyFilled
             ),
-            side: match order.side {
-                binance::rest_model::OrderSide::Sell => OrderSide::Sell,
-                binance::rest_model::OrderSide::Buy => OrderSide::Buy,
-            },
+            side,
             price: order.price,
             amount: order.orig_qty,
             filled_amount: order.executed_qty,

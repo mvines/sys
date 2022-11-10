@@ -754,12 +754,12 @@ async fn process_exchange_buy(
     let price = match price {
         LimitOrderPrice::At(price) => price,
         LimitOrderPrice::AmountOverAsk(_) => panic!("Bug: AmountOverAsk invalid for a buy order"),
-        LimitOrderPrice::AmountUnderBid(extra) => bid_ask.ask_price - extra,
+        LimitOrderPrice::AmountUnderBid(extra) => bid_ask.bid_price - extra,
     };
-    let price = (price * 100.).round() / 100.; // Round to two decimal places
+    let price = (price * 10_000.).round() / 10_000.; // Round to four decimal places
 
     if price > bid_ask.bid_price {
-        return Err("Order price is greater than bid price".into());
+        return Err(format!("Order price, {}, is greater than bid price", price).into());
     }
 
     let amount = match amount {
