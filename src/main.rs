@@ -153,7 +153,7 @@ async fn verify_exchange_balance(
 
     if exchange_balance < total_lot_balance {
         eprintln!(
-            "{0:?} {4} actual balance is less than local database amount. Actual {3}{1}, expected {3}{2}",
+            "Error: {0:?} {4} actual balance is less than local database amount. Actual {3}{1}, expected {3}{2}",
             exchange, exchange_balance, total_lot_balance,
             token.symbol(),
             token,
@@ -217,7 +217,7 @@ async fn process_sync_exchange(
                 );
                 println!("{}", msg);
 
-                db.confirm_withdrawal(pending_withdrawal)?;
+                db.confirm_withdrawal(pending_withdrawal, today())?;
                 notifier.send(&format!("{:?}: {}", exchange, msg)).await;
             } else {
                 println!("Pending {} withdrawal to {} cancelled", token, wi.address);
@@ -647,7 +647,7 @@ async fn process_exchange_withdraw(
 
     let amount = amount.unwrap_or(deposit_account.last_update_balance);
 
-    let tag = exchange_client
+    let (tag, fee_as_ui_amount) = exchange_client
         .request_withdraw(
             to_address,
             token,
@@ -657,11 +657,13 @@ async fn process_exchange_withdraw(
         )
         .await?;
 
+    let fee = token.amount(fee_as_ui_amount);
     db.record_withdrawal(
         exchange,
         tag,
         token,
         amount,
+        fee,
         deposit_address,
         to_address,
         lot_selection_method,

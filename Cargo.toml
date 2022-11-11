@@ -11,7 +11,7 @@ async-recursion = "1.0.0"
 async-trait = "0.1.50"
 #binance-rs-async = { version = "1.2.0", features = ["wallet_api"]}
 #binance-rs-async = { path = "../binance-rs-async", features = ["wallet_api"]}
-binance-rs-async = { git = "https://github.com/mvines/binance-rs-async", rev = "86fe60d40ceae5f7c73210e7600bc5c22efa4356", features = ["wallet_api"]}
+binance-rs-async = { git = "https://github.com/mvines/binance-rs-async", rev = "bca0331675f39924a06c4c1fbfacc143d3774735", features = ["wallet_api"]}
 bincode = "1.3"
 chrono = "0.4"
 chrono-humanize = "0.2.1"

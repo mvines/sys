@@ -155,7 +155,8 @@ impl ExchangeClient for FtxExchangeClient {
         amount: f64,
         password: Option<String>,
         code: Option<String>,
-    ) -> Result<String, Box<dyn std::error::Error>> {
+    ) -> Result<(/* withdraw_id: */ String, /*withdraw_fee: */ f64), Box<dyn std::error::Error>>
+    {
         let coin = token.to_string();
         let size = FromPrimitive::from_f64(amount).unwrap();
 
@@ -175,7 +176,7 @@ impl ExchangeClient for FtxExchangeClient {
         assert_eq!(wd.coin, coin);
         assert_eq!(wd.address, Some(address.to_string()));
         assert_eq!(wd.size, size);
-        Ok(wd.time) // `time` field is used as a tag
+        Ok((wd.time, 0.)) // `time` field is used as a tag
     }
 
     async fn print_market_info(

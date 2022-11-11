@@ -115,6 +115,7 @@ pub struct PendingWithdrawal {
     pub tag: String,
     pub token: MaybeToken,
     pub amount: u64, // lamports/tokens
+    pub fee: u64,    // in same lamports/tokens as `amount`
 
     #[serde(with = "field_as_string")]
     pub from_address: Pubkey,
@@ -345,6 +346,10 @@ pub enum LotDisposalKind {
         amount: Option<u64>,
     },
     Fiat,
+    WithdrawalFee {
+        exchange: Exchange,
+        tag: String,
+    },
 }
 
 impl LotDisposalKind {
@@ -353,6 +358,7 @@ impl LotDisposalKind {
             LotDisposalKind::Usd { fee, .. } => fee.as_ref(),
             LotDisposalKind::Other { .. }
             | LotDisposalKind::Swap { .. }
+            | LotDisposalKind::WithdrawalFee { .. }
             | LotDisposalKind::Fiat { .. } => None,
         }
     }
@@ -378,6 +384,9 @@ impl fmt::Display for LotDisposalKind {
                 }
             ),
             LotDisposalKind::Other { description } => write!(f, "{}", description),
+            LotDisposalKind::WithdrawalFee { exchange, tag } => {
+                write!(f, "{} withdrawal fee [{}])", exchange, tag)
+            }
             LotDisposalKind::Swap {
                 token,
                 amount,
@@ -982,6 +991,7 @@ impl Db {
         tag: String,
         token: MaybeToken,
         amount: u64,
+        fee: u64,
         from_address: Pubkey,
         to_address: Pubkey,
         lot_selection_method: LotSelectionMethod,
@@ -990,6 +1000,8 @@ impl Db {
         if self.data.pending_withdrawals.iter().any(|pw| pw.tag == tag) {
             panic!("Withdrawal tag already present in database: {}", tag);
         }
+
+        assert!(amount > fee);
 
         let mut from_account = self
             .get_account(from_address, token)
@@ -1020,7 +1032,8 @@ impl Db {
             exchange,
             tag,
             token,
-            amount,
+            amount: amount - fee,
+            fee,
             from_address,
             to_address,
             lots,
@@ -1059,14 +1072,35 @@ impl Db {
     pub fn confirm_withdrawal(
         &mut self,
         PendingWithdrawal {
+            exchange,
             tag,
             to_address,
             token,
-            lots,
+            mut lots,
+            fee,
             ..
         }: PendingWithdrawal,
+        when: NaiveDate,
     ) -> DbResult<()> {
         self.remove_pending_withdrawal(&tag);
+
+        if fee > 0 {
+            assert!(lots[0].amount > fee); // TODO: handle a fee that's split across multiple lots
+            let fee_price = lots[0].acquisition.price(); // Assume no gain/lost on the fee disposal for simplicity
+            lots[0].amount -= fee;
+            let fee_lot = Lot {
+                lot_number: self.next_lot_number(),
+                acquisition: lots[0].acquisition.clone(),
+                amount: fee,
+            };
+            let _ = self.record_lots_disposal(
+                token,
+                vec![fee_lot],
+                LotDisposalKind::WithdrawalFee { exchange, tag },
+                when,
+                fee_price,
+            );
+        }
 
         let mut to_account = self
             .get_account(to_address, token)

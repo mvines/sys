@@ -73,7 +73,7 @@ impl ExchangeClient for BinanceExchangeClient {
                 3 = rejected,   4 = processing, 5 = failure,
                 6 = completed */
                 let (completed, tx_id) = match wr.status {
-                    6 => (true, Some(wr.tx_id)),
+                    6 => (true, Some(wr.tx_id.expect("transaction id"))),
                     1 => (true, None),
                     _ => (false, None),
                 };
@@ -102,7 +102,55 @@ impl ExchangeClient for BinanceExchangeClient {
         amount: f64,
         _withdrawal_password: Option<String>,
         _withdrawal_code: Option<String>,
-    ) -> Result<String, Box<dyn std::error::Error>> {
+    ) -> Result<(/* withdraw_id: */ String, /*withdraw_fee: */ f64), Box<dyn std::error::Error>>
+    {
+        if token != MaybeToken::SOL() {
+            return Err(format!("{} deposits are not supported", token).into());
+        }
+
+        let sol_info = self
+            .wallet
+            .all_coin_info()
+            .await?
+            .into_iter()
+            .find(|ci| ci.coin == "SOL")
+            .ok_or("SOL not found in Binance coin list")?;
+
+        if !sol_info.deposit_all_enable {
+            return Err("SOL deposits not enabled".into());
+        }
+
+        let sol_network_info = &sol_info.network_list[0];
+        assert_eq!(&sol_network_info.network, "SOL");
+        assert_eq!(&sol_network_info.name, "Solana");
+        assert_eq!(&sol_network_info.coin, "SOL");
+
+        if !sol_network_info.deposit_enable {
+            return Err(format!(
+                "Binance deposits disabled: {}",
+                sol_network_info.deposit_desc
+            )
+            .into());
+        }
+
+        if !sol_network_info.withdraw_enable {
+            return Err(format!(
+                "Binance withdrawals disabled: {}",
+                sol_network_info.withdraw_desc
+            )
+            .into());
+        }
+
+        if amount < sol_network_info.withdraw_min {
+            return Err(format!(
+                "Withdrawal request is below the minimum of {} SOL",
+                sol_network_info.withdraw_min
+            )
+            .into());
+        }
+
+        let withdraw_fee = sol_network_info.withdraw_fee;
+
         let withdraw_order_id = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -112,6 +160,7 @@ impl ExchangeClient for BinanceExchangeClient {
         self.wallet
             .withdraw(binance::rest_model::CoinWithdrawalQuery {
                 coin: token.to_string(),
+                network: Some("SOL".into()),
                 withdraw_order_id: Some(withdraw_order_id.clone()),
                 address: address.to_string(),
                 amount,
@@ -119,7 +168,7 @@ impl ExchangeClient for BinanceExchangeClient {
             })
             .await?;
 
-        Ok(withdraw_order_id)
+        Ok((withdraw_order_id, withdraw_fee))
     }
 
     async fn balances(

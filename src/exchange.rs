@@ -146,7 +146,7 @@ pub trait ExchangeClient {
         amount: f64,
         withdrawal_password: Option<String>,
         withdrawal_code: Option<String>,
-    ) -> Result<String, Box<dyn std::error::Error>>;
+    ) -> Result<(/* withdraw_id: */ String, /*withdraw_fee: */ f64), Box<dyn std::error::Error>>;
     async fn balances(
         &self,
     ) -> Result<HashMap<String, ExchangeBalance>, Box<dyn std::error::Error>>;
