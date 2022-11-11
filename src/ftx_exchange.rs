@@ -7,10 +7,9 @@ use {
     chrono::{prelude::*, Duration},
     ftx::rest::{
         CancelOrder, GetFills, GetHistoricalPrices, GetLendingInfo, GetLendingRates, GetMarket,
-        GetMyLendingHistory, GetOrder, GetWalletBalances, GetWalletDepositAddress,
-        GetWalletDeposits, GetWalletWithdrawals, MyLendingHistory, OrderStatus as FtxOrderStatus,
-        OrderType, PlaceOrder, RequestWithdrawal, Rest, Side as FtxOrderSide, SubmitLendingOffer,
-        WithdrawStatus,
+        GetMyLendingHistory, GetOrder, GetWalletBalances, GetWalletDeposits, GetWalletWithdrawals,
+        MyLendingHistory, OrderStatus as FtxOrderStatus, OrderType, PlaceOrder, RequestWithdrawal,
+        Rest, Side as FtxOrderSide, SubmitLendingOffer, WithdrawStatus,
     },
     rust_decimal::prelude::*,
     solana_sdk::pubkey::Pubkey,
@@ -44,11 +43,13 @@ fn ftx_to_binance_pair(ftx_pair: &str) -> Result<&'static str, Box<dyn std::erro
 impl ExchangeClient for FtxExchangeClient {
     async fn deposit_address(
         &self,
-        token: MaybeToken,
+        _token: MaybeToken,
     ) -> Result<Pubkey, Box<dyn std::error::Error>> {
+        Err("RIP".into())
+        /*
         Ok(self
             .rest
-            .request(GetWalletDepositAddress {
+            .request(ftx::rest::GetWalletDepositAddress {
                 coin: &token.to_string(),
                 method: Some("sol"),
             })
@@ -56,6 +57,7 @@ impl ExchangeClient for FtxExchangeClient {
             .map_err(|err| format!("{:?}", err))?
             .address
             .parse::<Pubkey>()?)
+        */
     }
 
     async fn balances(
