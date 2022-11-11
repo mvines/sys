@@ -952,7 +952,7 @@ fn println_jup_quote(from_token: Token, to_token: Token, quote: &jup_ag::Quote) 
         .map(|market_info| market_info.label.clone())
         .join(", ");
     println!(
-        "{}{} for {}{} (max slippage {}{}) via {}",
+        "Swap {}{} for {}{} (max slippage {}{}) via {}",
         from_token.symbol(),
         from_token.ui_amount(quote.in_amount),
         to_token.symbol(),
@@ -968,6 +968,7 @@ async fn process_jup_quote(
     to_token: Token,
     ui_amount: f64,
     slippage: f64,
+    max_quotes: usize,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let quotes = jup_ag::quote(
         from_token.mint(),
@@ -980,7 +981,7 @@ async fn process_jup_quote(
     .await?
     .data;
 
-    for quote in quotes {
+    for quote in quotes.into_iter().take(max_quotes) {
         println_jup_quote(from_token, to_token, &quote);
     }
     Ok(())
@@ -4551,6 +4552,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .validator(is_parsable::<f64>)
                                 .default_value("1")
                                 .help("Maximum slippage percent"),
+                        )
+                        .arg(
+                            Arg::with_name("max_quotes")
+                                .short("n")
+                                .value_name("LIMIT")
+                                .takes_value(true)
+                                .validator(is_parsable::<usize>)
+                                .help("Limit to this number of quotes [default: all quotes]"),
                         ),
                 )
                 .subcommand(
@@ -5783,8 +5792,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let to_token = value_t_or_exit!(arg_matches, "to_token", Token);
                 let ui_amount = value_t_or_exit!(arg_matches, "amount", f64);
                 let slippage = value_t_or_exit!(arg_matches, "slippage", f64);
+                let max_quotes = value_t!(arg_matches, "max_quotes", usize)
+                    .ok()
+                    .unwrap_or(usize::MAX);
 
-                process_jup_quote(from_token, to_token, ui_amount, slippage).await?;
+                process_jup_quote(from_token, to_token, ui_amount, slippage, max_quotes).await?;
             }
             ("swap", Some(arg_matches)) => {
                 let (signer, address) = signer_of(arg_matches, "address", &mut wallet_manager)?;
