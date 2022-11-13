@@ -25,6 +25,9 @@ influxdb-client = "0.1.4"
 itertools = "0.10.0"
 jup-ag = "0.2.4"
 #jup-ag = { path = "../jup_ag" }
+#kraken_sdk_rest = { path = "../kraken_sdk_rust/kraken_sdk_rest" }
+kraken_sdk_rest = { git = "https://github.com/mvines/kraken_sdk_rust", rev = "c2a306296672868885ef97efdd5514114d08ef6c" }
+#kraken_sdk_rest = "0.18.0"
 lazy_static = "1.4.0"
 log = "0.4.17"
 pickledb = { git = "https://github.com/seladb/pickledb-rs.git", rev = "0.5.0" }

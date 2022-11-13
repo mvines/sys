@@ -1,5 +1,5 @@
 use {
-    crate::{binance_exchange, ftx_exchange, token::MaybeToken},
+    crate::{binance_exchange, ftx_exchange, kraken_exchange, token::MaybeToken},
     async_trait::async_trait,
     chrono::NaiveDate,
     serde::{Deserialize, Serialize},
@@ -14,6 +14,7 @@ pub enum Exchange {
     BinanceUs,
     Ftx,
     FtxUs,
+    Kraken,
 }
 
 impl std::fmt::Display for Exchange {
@@ -22,7 +23,7 @@ impl std::fmt::Display for Exchange {
     }
 }
 
-pub const USD_COINS: &[&str] = &["USD", "USDC", "USDT", "BUSD"];
+pub const USD_COINS: &[&str] = &["USD", "USDC", "USDT", "BUSD", "ZUSD"];
 
 impl FromStr for Exchange {
     type Err = ParseExchangeError;
@@ -33,6 +34,7 @@ impl FromStr for Exchange {
             "BinanceUs" | "binanceus" => Ok(Exchange::BinanceUs),
             "Ftx" | "ftx" => Ok(Exchange::Ftx),
             "FtxUs" | "ftxus" => Ok(Exchange::FtxUs),
+            "Kraken" | "kraken" => Ok(Exchange::Kraken),
             _ => Err(ParseExchangeError::Invalid),
         }
     }
@@ -200,6 +202,7 @@ pub fn exchange_client_new(
         Exchange::BinanceUs => Box::new(binance_exchange::new_us(exchange_credentials)?),
         Exchange::Ftx => Box::new(ftx_exchange::new(exchange_credentials)?),
         Exchange::FtxUs => Box::new(ftx_exchange::new_us(exchange_credentials)?),
+        Exchange::Kraken => Box::new(kraken_exchange::new(exchange_credentials)?),
     };
     Ok(exchange_client)
 }

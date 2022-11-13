@@ -20,7 +20,7 @@ Aggregator for when you're not quite ready to part with your SOL yet.
 You can also run `./fetch-release.sh` to download the latest Linux and macOS binary produced by Github Actions.
 
 ## Features
-* Exchange integration with FTX, FTX US, Binance and Binance US
+* Exchange integration with Kraken, Binance and Binance US
   * Fetch market info, SOL balance and sell order status
   * Deposit from a vote, stake or system account
   * Initiate and cancel basic limit orders

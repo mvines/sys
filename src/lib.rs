@@ -4,6 +4,7 @@ pub mod binance_exchange;
 pub mod coin_gecko;
 pub mod exchange;
 pub mod ftx_exchange;
+pub mod kraken_exchange;
 pub mod metrics;
 pub mod token;
 pub mod tulip;
