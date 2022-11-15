@@ -3398,6 +3398,7 @@ async fn process_account_wrap<T: Signers>(
     rpc_client: &RpcClient,
     address: Pubkey,
     amount: Option<u64>,
+    if_source_balance_exceeds: Option<u64>,
     lot_selection_method: LotSelectionMethod,
     lot_numbers: Option<HashSet<usize>>,
     authority_address: Pubkey,
@@ -3411,6 +3412,18 @@ async fn process_account_wrap<T: Signers>(
         .get_account(address, sol)
         .ok_or_else(|| format!("SOL account does not exist for {}", address))?;
     let amount = amount.unwrap_or(from_account.last_update_balance);
+
+    if let Some(if_source_balance_exceeds) = if_source_balance_exceeds {
+        if from_account.last_update_balance < if_source_balance_exceeds {
+            println!(
+                "wrap declined because {} balance is less than {}{}",
+                address,
+                sol.symbol(),
+                sol.ui_amount(if_source_balance_exceeds)
+            );
+            return Ok(());
+        }
+    }
 
     if amount == 0 {
         println!("Nothing to wrap");
@@ -4457,6 +4470,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .takes_value(true)
                                 .validator(is_valid_signer)
                                 .help("Optional authority for the wrap"),
+                        )
+                        .arg(
+                            Arg::with_name("if_source_balance_exceeds")
+                                .long("if-source-balance-exceeds")
+                                .value_name("AMOUNT")
+                                .takes_value(true)
+                                .validator(is_amount)
+                                .help(
+                                    "Exit successfully without wrapping if the \
+                                       source account balance is less than this amount",
+                                ),
                         )
                         .arg(lot_selection_arg())
                         .arg(lot_numbers_arg())
@@ -5788,6 +5812,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "ALL" => None,
                     amount => Some(MaybeToken::SOL().amount(amount.parse::<f64>().unwrap())),
                 };
+                let if_source_balance_exceeds =
+                    value_t!(arg_matches, "if_source_balance_exceeds", f64)
+                        .ok()
+                        .map(|x| MaybeToken::SOL().amount(x));
                 let lot_numbers = lot_numbers_of(arg_matches, "lot_numbers");
                 let lot_selection_method =
                     value_t_or_exit!(arg_matches, "lot_selection", LotSelectionMethod);
@@ -5811,6 +5839,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     &rpc_client,
                     address,
                     amount,
+                    if_source_balance_exceeds,
                     lot_selection_method,
                     lot_numbers,
                     authority_address,
