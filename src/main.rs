@@ -1533,7 +1533,7 @@ async fn process_sync_swaps(
                     let from_amount = token_amount_diff(address, from_token.mint());
                     let to_amount = token_amount_diff(address, to_token.mint());
                     let msg = format!(
-                        "Swapped {}{} into {}{} at {}{} per {}",
+                        "Swapped {}{} into {}{} at {}{} per {}1",
                         from_token.symbol(),
                         from_token
                             .ui_amount(from_amount)
