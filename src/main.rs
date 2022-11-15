@@ -999,6 +999,7 @@ async fn process_jup_swap<T: Signers>(
     lot_selection_method: LotSelectionMethod,
     signers: T,
     existing_signature: Option<Signature>,
+    if_from_balance_exceeds: Option<u64>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let from_account = db
         .get_account(address, from_token.into())
@@ -1032,6 +1033,20 @@ async fn process_jup_swap<T: Signers>(
                 from_token.ui_amount(from_account.last_update_balance)
             )
             .into());
+        }
+
+        if let Some(if_from_balance_exceeds) = if_from_balance_exceeds {
+            if from_account.last_update_balance < if_from_balance_exceeds {
+                println!(
+                    "Swap to {} declined because {} ({}) balance is less than {}{}",
+                    to_token,
+                    address,
+                    from_token.name(),
+                    from_token.symbol(),
+                    from_token.ui_amount(if_from_balance_exceeds)
+                );
+                return Ok(());
+            }
         }
 
         let _ = to_token.balance(rpc_client, &address).map_err(|err| {
@@ -4606,6 +4621,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .default_value("1")
                                 .help("Maximum slippage percent"),
                         )
+                        .arg(
+                            Arg::with_name("if_from_balance_exceeds")
+                                .long("if-source-balance-exceeds")
+                                .value_name("AMOUNT")
+                                .takes_value(true)
+                                .validator(is_amount)
+                                .help(
+                                    "Exit successfully without placing a swap if the \
+                                       source account balance is less than this amount",
+                                ),
+                        )
                         .arg(lot_selection_arg())
                         .arg(
                             Arg::with_name("transaction")
@@ -5812,6 +5838,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let lot_selection_method =
                     value_t_or_exit!(arg_matches, "lot_selection", LotSelectionMethod);
                 let signature = value_t!(arg_matches, "transaction", Signature).ok();
+                let if_from_balance_exceeds = value_t!(arg_matches, "if_from_balance_exceeds", f64)
+                    .ok()
+                    .map(|x| from_token.amount(x));
 
                 process_jup_swap(
                     &mut db,
@@ -5824,6 +5853,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     lot_selection_method,
                     vec![signer],
                     signature,
+                    if_from_balance_exceeds,
                 )
                 .await?;
                 process_sync_swaps(&mut db, &rpc_client, &notifier).await?;
