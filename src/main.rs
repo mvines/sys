@@ -1000,6 +1000,7 @@ async fn process_jup_swap<T: Signers>(
     signers: T,
     existing_signature: Option<Signature>,
     if_from_balance_exceeds: Option<u64>,
+    max_coingecko_value_percentage_loss: f64,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let from_account = db
         .get_account(address, from_token.into())
@@ -1077,6 +1078,25 @@ async fn process_jup_swap<T: Signers>(
             .get(0)
             .ok_or_else(|| format!("No quotes found for {} to {}", from_token, to_token))?;
         println_jup_quote(from_token, to_token, quote);
+
+        let from_value =
+            from_token_price * Decimal::from_f64(from_token.ui_amount(quote.in_amount)).unwrap();
+        let to_value = to_token_price
+            * Decimal::from_f64(to_token.ui_amount(quote.out_amount_with_slippage)).unwrap();
+
+        let swap_value_percentage_loss = Decimal::from_usize(100).unwrap()
+            - to_value / from_value * Decimal::from_usize(100).unwrap();
+
+        println!("Coingecko value loss: {:.2}%", swap_value_percentage_loss);
+        if swap_value_percentage_loss
+            > Decimal::from_f64(max_coingecko_value_percentage_loss).unwrap()
+        {
+            return Err(format!(
+                "Swap exceeds the max value loss ({:2}%) relative to CoinGecko token price",
+                max_coingecko_value_percentage_loss
+            )
+            .into());
+        }
 
         println!("Generating swap transaction...");
         let swap_transactions = jup_ag::swap_with_config(
@@ -4632,6 +4652,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                        source account balance is less than this amount",
                                 ),
                         )
+                        .arg(
+                            Arg::with_name("max_coingecko_value_percentage_loss")
+                                .long("max-coingecko-value-percentage-loss")
+                                .value_name("PERCENT")
+                                .takes_value(true)
+                                .validator(is_parsable::<f64>)
+                                .default_value("5")
+                                .help("Reject if the value lost relative to CoinGecko token
+                                      price exceeds this percentage"),
+                        )
                         .arg(lot_selection_arg())
                         .arg(
                             Arg::with_name("transaction")
@@ -5841,6 +5871,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let if_from_balance_exceeds = value_t!(arg_matches, "if_from_balance_exceeds", f64)
                     .ok()
                     .map(|x| from_token.amount(x));
+                let max_coingecko_value_percentage_loss =
+                    value_t_or_exit!(arg_matches, "max_coingecko_value_percentage_loss", f64);
 
                 process_jup_swap(
                     &mut db,
@@ -5854,6 +5886,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     vec![signer],
                     signature,
                     if_from_balance_exceeds,
+                    max_coingecko_value_percentage_loss,
                 )
                 .await?;
                 process_sync_swaps(&mut db, &rpc_client, &notifier).await?;
