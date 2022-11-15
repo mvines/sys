@@ -3412,9 +3412,23 @@ async fn process_account_wrap<T: Signers>(
         .ok_or_else(|| format!("SOL account does not exist for {}", address))?;
     let amount = amount.unwrap_or(from_account.last_update_balance);
 
-    let _to_account = db
-        .get_account(address, wsol.into())
-        .ok_or_else(|| format!("Wrapped SOL account does not exist for {}", address))?;
+    if amount == 0 {
+        println!("Nothing to wrap");
+        return Ok(());
+    }
+
+    if db.get_account(address, wsol.into()).is_none() {
+        let epoch = rpc_client.get_epoch_info()?.epoch;
+        db.add_account(TrackedAccount {
+            address,
+            token: wsol.into(),
+            description: from_account.description,
+            last_update_epoch: epoch,
+            last_update_balance: 0,
+            lots: vec![],
+            no_sync: None,
+        })?;
+    }
 
     let (recent_blockhash, last_valid_block_height) =
         rpc_client.get_latest_blockhash_with_commitment(rpc_client.commitment())?;
