@@ -1533,7 +1533,7 @@ async fn process_sync_swaps(
                     let from_amount = token_amount_diff(address, from_token.mint());
                     let to_amount = token_amount_diff(address, to_token.mint());
                     let msg = format!(
-                        "Swapped {}{} for {}{}",
+                        "Swapped {}{} into {}{} at {}{} per {}",
                         from_token.symbol(),
                         from_token
                             .ui_amount(from_amount)
@@ -1542,6 +1542,10 @@ async fn process_sync_swaps(
                         to_token
                             .ui_amount(to_amount)
                             .separated_string_with_fixed_place(2),
+                        to_token.symbol(),
+                        (to_token.ui_amount(to_amount) / from_token.ui_amount(from_amount))
+                            .separated_string_with_fixed_place(2),
+                        from_token.symbol(),
                     );
                     db.confirm_swap(signature, when, from_amount, to_amount)?;
                     notifier.send(&msg).await;
