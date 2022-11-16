@@ -179,6 +179,14 @@ impl Token {
     }
 }
 
+pub fn is_valid_token_or_sol(value: String) -> Result<(), String> {
+    if value == "SOL" {
+        Ok(())
+    } else {
+        is_valid_token(value)
+    }
+}
+
 pub fn is_valid_token(value: String) -> Result<(), String> {
     Token::from_str(&value)
         .map(|_| ())

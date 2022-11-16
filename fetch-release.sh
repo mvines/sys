@@ -4,7 +4,7 @@ set -e
 
 BINS=(
   sys
-  sys-tulip-sol-deposit
+  sys-tulip-deposit
 )
 REPO=https://github.com/mvines/sys
 DEFAULT_TO_MASTER=1

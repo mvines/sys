@@ -3816,14 +3816,6 @@ async fn process_account_sync_sweep(
     Ok(())
 }
 
-fn is_valid_token_or_sol(value: String) -> Result<(), String> {
-    if value == "SOL" {
-        Ok(())
-    } else {
-        is_valid_token(value)
-    }
-}
-
 fn lot_numbers_of(matches: &ArgMatches<'_>, name: &str) -> Option<HashSet<usize>> {
     values_t!(matches, name, usize)
         .ok()

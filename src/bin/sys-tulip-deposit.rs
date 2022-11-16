@@ -35,6 +35,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .help("Account holding the SOL to deposit"),
         )
         .arg(
+            Arg::with_name("token")
+                .value_name("tuSOL or SPL Token")
+                .takes_value(true)
+                .required(true)
+                .validator(is_valid_token_or_sol)
+                .default_value("tuSOL")
+                .help("Tulip token type"),
+        )
+        .arg(
             Arg::with_name("retain")
                 .short("r")
                 .long("retain")
@@ -57,10 +66,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let address = address.expect("address");
     let signer = signer.expect("signer");
 
-    let sol = MaybeToken::SOL();
-    let retain_amount = sol.amount(value_t_or_exit!(matches, "retain", f64));
+    let collateral_token = value_t_or_exit!(matches, "token", Token);
+    let token = collateral_token
+        .liquidity_token()
+        .ok_or_else(|| format!("{} is not a collateral token", collateral_token))?;
+    let retain_amount = token.amount(value_t_or_exit!(matches, "retain", f64));
 
-    let balance = rpc_client.get_balance(&address)?;
+    let balance = token.balance(&rpc_client, &address)?;
 
     let deposit_amount = balance.saturating_sub(retain_amount);
 
@@ -68,9 +80,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("Nothing to deposit");
         return Ok(());
     }
-    println!("Depositing {}", sol.format_amount(deposit_amount));
+    println!("Depositing {}", token.format_amount(deposit_amount));
 
-    let instructions = tulip::deposit(&rpc_client, address, sol, Token::tuSOL, deposit_amount)?;
+    let instructions = tulip::deposit(
+        &rpc_client,
+        address,
+        token,
+        collateral_token,
+        deposit_amount,
+    )?;
 
     let (recent_blockhash, last_valid_block_height) =
         rpc_client.get_latest_blockhash_with_commitment(rpc_client.commitment())?;
