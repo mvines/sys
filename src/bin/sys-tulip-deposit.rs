@@ -12,8 +12,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let default_json_rpc_url = "https://api.mainnet-beta.solana.com";
 
     let app_version = &*app_version();
-    let app = App::new("sys-tulip-sol-deposit")
-        .about("Deposit all SOL from the provided account into Tulip")
+    let app = App::new("sys-tulip-deposit")
+        .about("Deposit into Tulip")
         .version(app_version)
         .arg(
             Arg::with_name("json_rpc_url")
