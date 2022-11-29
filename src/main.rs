@@ -5893,7 +5893,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .ok()
                     .unwrap_or(usize::MAX);
 
-                process_jup_quote(from_token, to_token, ui_amount, slippage_bps, max_quotes).await?;
+                process_jup_quote(from_token, to_token, ui_amount, slippage_bps, max_quotes)
+                    .await?;
             }
             ("swap", Some(arg_matches)) => {
                 let (signer, address) = signer_of(arg_matches, "address", &mut wallet_manager)?;
