@@ -23,7 +23,7 @@ ftx = { git = "https://github.com/fabianboesiger/ftx", rev = "bb98235d356dd1a2be
 #ftx = { path = "../ftx" }
 influxdb-client = "0.1.4"
 itertools = "0.10.0"
-jup-ag = "0.2.4"
+jup-ag = "0.3.0"
 #jup-ag = { path = "../jup_ag" }
 #kraken_sdk_rest = { path = "../kraken_sdk_rust/kraken_sdk_rest" }
 kraken_sdk_rest = { git = "https://github.com/mvines/kraken_sdk_rust", rev = "c2a306296672868885ef97efdd5514114d08ef6c" }

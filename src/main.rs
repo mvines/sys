@@ -952,13 +952,13 @@ fn println_jup_quote(from_token: Token, to_token: Token, quote: &jup_ag::Quote) 
         .map(|market_info| market_info.label.clone())
         .join(", ");
     println!(
-        "Swap {}{} for {}{} (max slippage {}{}) via {}",
+        "Swap {}{} for {}{} (min: {}{}) via {}",
         from_token.symbol(),
         from_token.ui_amount(quote.in_amount),
         to_token.symbol(),
         to_token.ui_amount(quote.out_amount),
         to_token.symbol(),
-        to_token.ui_amount(quote.out_amount_with_slippage),
+        to_token.ui_amount(quote.other_amount_threshold),
         route,
     );
 }
@@ -967,7 +967,7 @@ async fn process_jup_quote(
     from_token: Token,
     to_token: Token,
     ui_amount: f64,
-    slippage: f64,
+    slippage_bps: f64,
     max_quotes: usize,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let quotes = jup_ag::quote(
@@ -975,14 +975,15 @@ async fn process_jup_quote(
         to_token.mint(),
         from_token.amount(ui_amount),
         false,
-        Some(slippage),
+        false,
+        Some(slippage_bps),
         None,
     )
     .await?
     .data;
 
     for quote in quotes.into_iter().take(max_quotes) {
-        println_jup_quote(from_token, to_token, &quote);
+        println_jup_quote(from_token, to_token, dbg!(&quote));
     }
     Ok(())
 }
@@ -995,7 +996,7 @@ async fn process_jup_swap<T: Signers>(
     from_token: Token,
     to_token: Token,
     ui_amount: Option<f64>,
-    slippage: f64,
+    slippage_bps: f64,
     lot_selection_method: LotSelectionMethod,
     signers: T,
     existing_signature: Option<Signature>,
@@ -1068,7 +1069,8 @@ async fn process_jup_swap<T: Signers>(
             to_token.mint(),
             amount,
             false,
-            Some(slippage),
+            false,
+            Some(slippage_bps),
             None,
         )
         .await?
@@ -1081,11 +1083,11 @@ async fn process_jup_swap<T: Signers>(
 
         let from_value =
             from_token_price * Decimal::from_f64(from_token.ui_amount(quote.in_amount)).unwrap();
-        let to_value = to_token_price
-            * Decimal::from_f64(to_token.ui_amount(quote.out_amount_with_slippage)).unwrap();
+        let min_to_value = to_token_price
+            * Decimal::from_f64(to_token.ui_amount(quote.other_amount_threshold)).unwrap();
 
         let swap_value_percentage_loss = Decimal::from_usize(100).unwrap()
-            - to_value / from_value * Decimal::from_usize(100).unwrap();
+            - min_to_value / from_value * Decimal::from_usize(100).unwrap();
 
         println!("Coingecko value loss: {:.2}%", swap_value_percentage_loss);
         if swap_value_percentage_loss
@@ -5886,12 +5888,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let from_token = value_t_or_exit!(arg_matches, "from_token", Token);
                 let to_token = value_t_or_exit!(arg_matches, "to_token", Token);
                 let ui_amount = value_t_or_exit!(arg_matches, "amount", f64);
-                let slippage = value_t_or_exit!(arg_matches, "slippage", f64);
+                let slippage_bps = value_t_or_exit!(arg_matches, "slippage", f64) * 100.;
                 let max_quotes = value_t!(arg_matches, "max_quotes", usize)
                     .ok()
                     .unwrap_or(usize::MAX);
 
-                process_jup_quote(from_token, to_token, ui_amount, slippage, max_quotes).await?;
+                process_jup_quote(from_token, to_token, ui_amount, slippage_bps, max_quotes).await?;
             }
             ("swap", Some(arg_matches)) => {
                 let (signer, address) = signer_of(arg_matches, "address", &mut wallet_manager)?;
@@ -5901,7 +5903,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "ALL" => None,
                     ui_amount => Some(ui_amount.parse::<f64>().unwrap()),
                 };
-                let slippage = value_t_or_exit!(arg_matches, "slippage", f64);
+                let slippage_bps = value_t_or_exit!(arg_matches, "slippage", f64) * 100.;
                 let signer = signer.expect("signer");
                 let address = address.expect("address");
                 let lot_selection_method =
@@ -5920,7 +5922,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     from_token,
                     to_token,
                     ui_amount,
-                    slippage,
+                    slippage_bps,
                     lot_selection_method,
                     vec![signer],
                     signature,
