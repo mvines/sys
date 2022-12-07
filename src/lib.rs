@@ -2,6 +2,7 @@ use {solana_client::rpc_client::RpcClient, solana_sdk::transaction::Transaction}
 
 pub mod binance_exchange;
 pub mod coin_gecko;
+pub mod coinbase_exchange;
 pub mod exchange;
 pub mod ftx_exchange;
 pub mod kraken_exchange;

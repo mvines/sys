@@ -16,11 +16,14 @@ bincode = "1.3"
 chrono = "0.4"
 chrono-humanize = "0.2.1"
 clap = "2.33"
+#coinbase-rs = { path = "../coinbase-rs" }
+coinbase-rs = { git = "https://github.com/mvines/coinbase-rs.git", rev = "806abc1d1d388b581c9a601b1184c1f8ee7e04d6" }
 console = "0.14.1"
 fd-lock = "3.0.0"
 ftx = { git = "https://github.com/fabianboesiger/ftx", rev = "bb98235d356dd1a2becc5bdf32a4b738311ed434" }
 #ftx = { git = "https://github.com/mvines/ftx", rev = "22dea8cf63269645eb220c9ce5ffdd0b746a9ceb" }
 #ftx = { path = "../ftx" }
+futures = "0.3.25"
 influxdb-client = "0.1.4"
 itertools = "0.10.0"
 jup-ag = "0.3.0"

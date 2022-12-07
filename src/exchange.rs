@@ -1,5 +1,7 @@
 use {
-    crate::{binance_exchange, ftx_exchange, kraken_exchange, token::MaybeToken},
+    crate::{
+        binance_exchange, coinbase_exchange, ftx_exchange, kraken_exchange, token::MaybeToken,
+    },
     async_trait::async_trait,
     chrono::NaiveDate,
     serde::{Deserialize, Serialize},
@@ -12,6 +14,7 @@ use {
 pub enum Exchange {
     Binance,
     BinanceUs,
+    Coinbase,
     Ftx,
     FtxUs,
     Kraken,
@@ -32,18 +35,19 @@ impl FromStr for Exchange {
         match s {
             "Binance" | "binance" => Ok(Exchange::Binance),
             "BinanceUs" | "binanceus" => Ok(Exchange::BinanceUs),
+            "Coinbase" | "coinbase" => Ok(Exchange::Coinbase),
             "Ftx" | "ftx" => Ok(Exchange::Ftx),
             "FtxUs" | "ftxus" => Ok(Exchange::FtxUs),
             "Kraken" | "kraken" => Ok(Exchange::Kraken),
-            _ => Err(ParseExchangeError::Invalid),
+            _ => Err(ParseExchangeError::InvalidExchange),
         }
     }
 }
 
 #[derive(Error, Debug)]
 pub enum ParseExchangeError {
-    #[error("invalid variant")]
-    Invalid,
+    #[error("invalid exchange")]
+    InvalidExchange,
 }
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -200,6 +204,7 @@ pub fn exchange_client_new(
     let exchange_client: Box<dyn ExchangeClient> = match exchange {
         Exchange::Binance => Box::new(binance_exchange::new(exchange_credentials)?),
         Exchange::BinanceUs => Box::new(binance_exchange::new_us(exchange_credentials)?),
+        Exchange::Coinbase => Box::new(coinbase_exchange::new(exchange_credentials)?),
         Exchange::Ftx => Box::new(ftx_exchange::new(exchange_credentials)?),
         Exchange::FtxUs => Box::new(ftx_exchange::new_us(exchange_credentials)?),
         Exchange::Kraken => Box::new(kraken_exchange::new(exchange_credentials)?),
