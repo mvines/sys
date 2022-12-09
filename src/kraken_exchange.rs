@@ -34,22 +34,18 @@ impl ExchangeClient for KrakenExchangeClient {
         &self,
         token: MaybeToken,
     ) -> Result<Pubkey, Box<dyn std::error::Error>> {
-        dbg!("hi");
         let deposit_method = *deposit_methods().get(token.name()).ok_or_else(|| {
             //dbg!(self.client.get_deposit_methods(token.to_string()).send().await?);
             format!("Unsupported deposit token: {}", token.name())
         })?;
 
-        dbg!("hi2");
         let deposit_addresses = self
             .client
-            .get_deposit_addresses(dbg!(token.to_string()), dbg!(deposit_method))
+            .get_deposit_addresses(token.to_string(), deposit_method)
             .send()
             .await?;
 
         assert_eq!(deposit_addresses.len(), 1); // TODO: Consider what to do with multiple deposit addresses
-
-        panic!("hi3");
 
         Ok(deposit_addresses[0].address.parse::<Pubkey>()?)
     }
