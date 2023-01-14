@@ -974,10 +974,10 @@ async fn process_jup_quote(
         from_token.mint(),
         to_token.mint(),
         from_token.amount(ui_amount),
-        false,
-        false,
-        Some(slippage_bps),
-        None,
+        jup_ag::QuoteConfig {
+            slippage_bps: Some(slippage_bps),
+            ..jup_ag::QuoteConfig::default()
+        },
     )
     .await?
     .data;
@@ -1002,6 +1002,7 @@ async fn process_jup_swap<T: Signers>(
     existing_signature: Option<Signature>,
     if_from_balance_exceeds: Option<u64>,
     max_coingecko_value_percentage_loss: f64,
+    compute_unit_price_micro_lamports: Option<usize>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let from_account = db
         .get_account(address, from_token.into())
@@ -1068,10 +1069,10 @@ async fn process_jup_swap<T: Signers>(
             from_token.mint(),
             to_token.mint(),
             amount,
-            false,
-            false,
-            Some(slippage_bps),
-            None,
+            jup_ag::QuoteConfig {
+                slippage_bps: Some(slippage_bps),
+                ..jup_ag::QuoteConfig::default()
+            },
         )
         .await?
         .data;
@@ -1106,6 +1107,8 @@ async fn process_jup_swap<T: Signers>(
             address,
             jup_ag::SwapConfig {
                 wrap_unwrap_sol: Some(false),
+                as_legacy_transaction: true,
+                compute_unit_price_micro_lamports,
                 ..jup_ag::SwapConfig::default()
             },
         )
@@ -4698,6 +4701,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .help("Reject if the value lost relative to CoinGecko token
                                       price exceeds this percentage"),
                         )
+                        .arg(
+                            Arg::with_name("compute_unit_price_micro_lamports")
+                                .long("compute-unit-price")
+                                .value_name("MICROLAMPORTS")
+                                .takes_value(true)
+                                .validator(is_parsable::<usize>)
+                                .help("Set a compute unit price in micro-lamports to pay \
+                                      a higher transaction fee for higher transaction \
+                                      prioritization"),
+                        )
                         .arg(lot_selection_arg())
                         .arg(
                             Arg::with_name("transaction")
@@ -5915,6 +5928,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .map(|x| from_token.amount(x));
                 let max_coingecko_value_percentage_loss =
                     value_t_or_exit!(arg_matches, "max_coingecko_value_percentage_loss", f64);
+                let compute_unit_price_micro_lamports =
+                    value_t!(arg_matches, "compute_unit_price_micro_lamports", usize).ok();
 
                 process_jup_swap(
                     &mut db,
@@ -5929,6 +5944,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     signature,
                     if_from_balance_exceeds,
                     max_coingecko_value_percentage_loss,
+                    compute_unit_price_micro_lamports,
                 )
                 .await?;
                 process_sync_swaps(&mut db, &rpc_client, &notifier).await?;
