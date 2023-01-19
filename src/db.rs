@@ -1744,7 +1744,13 @@ impl Db {
 
             let (mut lot2, mut account2) = tracked_accounts.pop().unwrap();
 
-            if account2.token != disposed_lot.token {
+            if account2.token != disposed_lot.token
+                && [account2.token, disposed_lot.token]
+                    .iter()
+                    .filter(|t| t.is_sol() || t.token() == Some(Token::wSOL))
+                    .count()
+                    != 2
+            {
                 return Err(DbError::LotSwapFailed(format!(
                     "Token mismatch ({} != {})",
                     account2.token, disposed_lot.token
@@ -1796,7 +1802,13 @@ impl Db {
             let (mut lot1, mut account1) = tracked_accounts.pop().unwrap();
             let (mut lot2, mut account2) = tracked_accounts.pop().unwrap();
 
-            if account2.token != account1.token {
+            if account2.token != account1.token
+                && [account1.token, account2.token]
+                    .iter()
+                    .filter(|t| t.is_sol() || t.token() == Some(Token::wSOL))
+                    .count()
+                    != 2
+            {
                 return Err(DbError::LotSwapFailed(format!(
                     "Token mismatch ({} != {})",
                     account2.token, account1.token
