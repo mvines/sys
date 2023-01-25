@@ -136,29 +136,31 @@ async fn verify_exchange_balance(
     token: MaybeToken,
     deposit_address: &Pubkey,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let exchange_balance = {
-        let balances = exchange_client.balances().await?;
-        balances
-            .get(&token.to_string())
-            .cloned()
-            .unwrap_or_default()
-            .total
-    };
-
     let exchange_account = db
         .get_account(*deposit_address, token)
         .expect("exchange deposit address does not exist in database");
     let total_lot_balance =
         token.ui_amount(exchange_account.lots.iter().map(|lot| lot.amount).sum());
 
-    if exchange_balance < total_lot_balance {
-        eprintln!(
-            "Error: {0:?} {4} actual balance is less than local database amount. Actual {3}{1}, expected {3}{2}",
-            exchange, exchange_balance, total_lot_balance,
-            token.symbol(),
-            token,
-        );
-        exit(1);
+    if total_lot_balance > 0. {
+        let exchange_balance = {
+            let balances = exchange_client.balances().await?;
+            balances
+                .get(&token.to_string())
+                .cloned()
+                .unwrap_or_default()
+                .total
+        };
+
+        if exchange_balance < total_lot_balance {
+            eprintln!(
+                "Error: {0:?} {4} actual balance is less than local database amount. Actual {3}{1}, expected {3}{2}",
+                exchange, exchange_balance, total_lot_balance,
+                token.symbol(),
+                token,
+            );
+            exit(1);
+        }
     }
     Ok(())
 }

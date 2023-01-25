@@ -97,7 +97,8 @@ impl Token {
     }
 
     pub fn fiat_fungible(&self) -> bool {
-        // Treat USDC as fully fungible for USD (following FTX's lead)
+        // Treat USDC as fully fungible for USD. It can always be redeemed
+        // for exactly $1 from Coinbase and Circle
         *self == Self::USDC
     }
 
