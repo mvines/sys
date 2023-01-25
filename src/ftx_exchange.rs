@@ -84,29 +84,32 @@ impl ExchangeClient for FtxExchangeClient {
         Ok(balances)
     }
 
-    async fn recent_deposits(&self) -> Result<Vec<DepositInfo>, Box<dyn std::error::Error>> {
-        Ok(self
-            .rest
-            .request(GetWalletDeposits {
-                limit: None,
-                start_time: None,
-                end_time: None,
-            })
-            .await
-            .map_err(|err| format!("{:?}", err))?
-            .into_iter()
-            .filter_map(|wd| {
-                if wd.status == ftx::rest::DepositStatus::Confirmed {
-                    if let Some(tx_id) = wd.txid {
-                        return Some(DepositInfo {
-                            tx_id,
-                            amount: wd.size.unwrap().to_f64().unwrap(),
-                        });
+    async fn recent_deposits(
+        &self,
+    ) -> Result<Option<Vec<DepositInfo>>, Box<dyn std::error::Error>> {
+        Ok(Some(
+            self.rest
+                .request(GetWalletDeposits {
+                    limit: None,
+                    start_time: None,
+                    end_time: None,
+                })
+                .await
+                .map_err(|err| format!("{:?}", err))?
+                .into_iter()
+                .filter_map(|wd| {
+                    if wd.status == ftx::rest::DepositStatus::Confirmed {
+                        if let Some(tx_id) = wd.txid {
+                            return Some(DepositInfo {
+                                tx_id,
+                                amount: wd.size.unwrap().to_f64().unwrap(),
+                            });
+                        }
                     }
-                }
-                None
-            })
-            .collect())
+                    None
+                })
+                .collect(),
+        ))
     }
 
     async fn recent_withdrawals(&self) -> Result<Vec<WithdrawalInfo>, Box<dyn std::error::Error>> {

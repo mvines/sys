@@ -250,54 +250,7 @@ async fn process_sync_exchange(
         );
         let token = pending_deposit.transfer.to_token;
 
-        if let Some(deposit_info) = recent_deposits.iter().find(|deposit_info| {
-            deposit_info.tx_id == pending_deposit.transfer.signature.to_string()
-        }) {
-            let missing_tokens =
-                (token.amount(deposit_info.amount) as i64 - (pending_deposit.amount as i64)).abs();
-            if missing_tokens >= 10 {
-                let msg = format!(
-                    "Error! {} deposit amount mismatch for {}! Actual amount: ◎{}, expected amount: ◎{}",
-                    token,
-                    pending_deposit.transfer.signature, deposit_info.amount, pending_deposit.amount
-                );
-                println!("{}", msg);
-                notifier.send(&format!("{:?}: {}", exchange, msg)).await;
-
-                // TODO: Do something more here...?
-            } else {
-                if missing_tokens != 0 {
-                    // Binance will occasionally steal a lamport or two...
-                    let msg = format!(
-                        "{:?} just stole {} tokens from your deposit!",
-                        exchange, missing_tokens
-                    );
-                    println!("{}", msg);
-                    notifier.send(&format!("{:?}: {}", exchange, msg)).await;
-                }
-
-                let when =
-                    get_signature_date(rpc_client, pending_deposit.transfer.signature).await?;
-                db.confirm_deposit(pending_deposit.transfer.signature, when)?;
-
-                let msg = format!(
-                    "{} {}{} deposit successful ({})",
-                    token,
-                    token.symbol(),
-                    token.ui_amount(pending_deposit.amount),
-                    pending_deposit.transfer.signature
-                );
-                println!("{}", msg);
-                notifier.send(&format!("{:?}: {}", exchange, msg)).await;
-            }
-        } else if !confirmed && block_height > pending_deposit.transfer.last_valid_block_height {
-            println!(
-                "Pending {} deposit cancelled: {}",
-                token, pending_deposit.transfer.signature
-            );
-            db.cancel_deposit(pending_deposit.transfer.signature)
-                .expect("cancel_deposit");
-        } else if confirmed {
+        if confirmed {
             metrics::push(dp::exchange_deposit(
                 exchange,
                 token,
@@ -311,6 +264,79 @@ async fn process_sync_exchange(
                 token.ui_amount(pending_deposit.amount),
                 pending_deposit.transfer.signature,
             );
+            match recent_deposits.as_ref() {
+                None => {
+                    if token.fiat_fungible() {
+                        db.drop_deposit(pending_deposit.transfer.signature)?;
+
+                        let msg = format!(
+                            "{} {}{} BLIND deposit successful ({})",
+                            token,
+                            token.symbol(),
+                            token.ui_amount(pending_deposit.amount),
+                            pending_deposit.transfer.signature
+                        );
+                        println!("{}", msg);
+                        notifier.send(&format!("{:?}: {}", exchange, msg)).await;
+                    } else {
+                        // Refuse to forget these lots, there may be a tax implication with doing
+                        // so.
+                        panic!("Fix exchange implementation");
+                    }
+                }
+                Some(recent_deposits) => {
+                    if let Some(deposit_info) = recent_deposits.iter().find(|deposit_info| {
+                        deposit_info.tx_id == pending_deposit.transfer.signature.to_string()
+                    }) {
+                        let missing_tokens = (token.amount(deposit_info.amount) as i64
+                            - (pending_deposit.amount as i64))
+                            .abs();
+                        if missing_tokens >= 10 {
+                            let msg = format!(
+                                "Error! {} deposit amount mismatch for {}! Actual amount: ◎{}, expected amount: ◎{}",
+                                token,
+                                pending_deposit.transfer.signature, deposit_info.amount, pending_deposit.amount
+                            );
+                            println!("{}", msg);
+                            notifier.send(&format!("{:?}: {}", exchange, msg)).await;
+
+                            // TODO: Do something more here...?
+                        } else {
+                            if missing_tokens != 0 {
+                                // Binance will occasionally steal a lamport or two...
+                                let msg = format!(
+                                    "{:?} just stole {} tokens from your deposit!",
+                                    exchange, missing_tokens
+                                );
+                                println!("{}", msg);
+                                notifier.send(&format!("{:?}: {}", exchange, msg)).await;
+                            }
+
+                            let when =
+                                get_signature_date(rpc_client, pending_deposit.transfer.signature)
+                                    .await?;
+                            db.confirm_deposit(pending_deposit.transfer.signature, when)?;
+
+                            let msg = format!(
+                                "{} {}{} deposit successful ({})",
+                                token,
+                                token.symbol(),
+                                token.ui_amount(pending_deposit.amount),
+                                pending_deposit.transfer.signature
+                            );
+                            println!("{}", msg);
+                            notifier.send(&format!("{:?}: {}", exchange, msg)).await;
+                        }
+                    }
+                }
+            }
+        } else if block_height > pending_deposit.transfer.last_valid_block_height {
+            println!(
+                "Pending {} deposit cancelled: {}",
+                token, pending_deposit.transfer.signature
+            );
+            db.cancel_deposit(pending_deposit.transfer.signature)
+                .expect("cancel_deposit");
         } else {
             println!(
                 "{} {}{} deposit pending for at most {} blocks ({} unconfirmed)",

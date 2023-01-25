@@ -63,8 +63,11 @@ impl ExchangeClient for CoinbaseExchangeClient {
         Err("Balances not supported".into())
     }
 
-    async fn recent_deposits(&self) -> Result<Vec<DepositInfo>, Box<dyn std::error::Error>> {
-        Ok(vec![])
+    async fn recent_deposits(
+        &self,
+    ) -> Result<Option<Vec<DepositInfo>>, Box<dyn std::error::Error>> {
+        Ok(None) // TODO: Return actual recent deposits. By returning `None`, deposited lots are dropped
+                 // once the transaction is confirmed (see `db::drop_deposit()`).
     }
 
     async fn recent_withdrawals(&self) -> Result<Vec<WithdrawalInfo>, Box<dyn std::error::Error>> {

@@ -116,7 +116,9 @@ impl ExchangeClient for KrakenExchangeClient {
             .collect())
     }
 
-    async fn recent_deposits(&self) -> Result<Vec<DepositInfo>, Box<dyn std::error::Error>> {
+    async fn recent_deposits(
+        &self,
+    ) -> Result<Option<Vec<DepositInfo>>, Box<dyn std::error::Error>> {
         let mut successful_deposits = vec![];
 
         for coin in deposit_methods().keys() {
@@ -130,7 +132,7 @@ impl ExchangeClient for KrakenExchangeClient {
                 }
             }
         }
-        Ok(successful_deposits)
+        Ok(Some(successful_deposits))
     }
 
     async fn recent_withdrawals(&self) -> Result<Vec<WithdrawalInfo>, Box<dyn std::error::Error>> {

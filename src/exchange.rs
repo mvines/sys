@@ -143,7 +143,8 @@ pub trait ExchangeClient {
         &self,
         token: MaybeToken,
     ) -> Result<Pubkey, Box<dyn std::error::Error>>;
-    async fn recent_deposits(&self) -> Result<Vec<DepositInfo>, Box<dyn std::error::Error>>;
+    async fn recent_deposits(&self)
+        -> Result<Option<Vec<DepositInfo>>, Box<dyn std::error::Error>>;
     async fn recent_withdrawals(&self) -> Result<Vec<WithdrawalInfo>, Box<dyn std::error::Error>>;
     async fn request_withdraw(
         &self,

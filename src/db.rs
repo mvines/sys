@@ -845,6 +845,20 @@ impl Db {
         self.complete_deposit(signature, Some(when))
     }
 
+    // Careful!
+    pub fn drop_deposit(&mut self, signature: Signature) -> DbResult<()> {
+        let _ = self
+            .data
+            .pending_deposits
+            .iter()
+            .find(|pd| pd.transfer.signature == signature)
+            .ok_or(DbError::PendingDepositDoesNotExist(signature))?;
+        self.data
+            .pending_deposits
+            .retain(|pd| pd.transfer.signature != signature);
+        self.save()
+    }
+
     pub fn pending_deposits(&self, exchange: Option<Exchange>) -> Vec<PendingDeposit> {
         self.data
             .pending_deposits

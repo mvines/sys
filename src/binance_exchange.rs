@@ -42,24 +42,27 @@ impl ExchangeClient for BinanceExchangeClient {
             .parse::<Pubkey>()?)
     }
 
-    async fn recent_deposits(&self) -> Result<Vec<DepositInfo>, Box<dyn std::error::Error>> {
-        Ok(self
-            .wallet
-            .deposit_history(&binance::rest_model::DepositHistoryQuery::default())
-            .await?
-            .into_iter()
-            .filter_map(|dr| {
-                /* status codes: 0 = pending, 6 = credited but cannot withdraw, 1 = success */
-                if dr.status == 1 {
-                    Some(DepositInfo {
-                        tx_id: dr.tx_id,
-                        amount: dr.amount,
-                    })
-                } else {
-                    None
-                }
-            })
-            .collect())
+    async fn recent_deposits(
+        &self,
+    ) -> Result<Option<Vec<DepositInfo>>, Box<dyn std::error::Error>> {
+        Ok(Some(
+            self.wallet
+                .deposit_history(&binance::rest_model::DepositHistoryQuery::default())
+                .await?
+                .into_iter()
+                .filter_map(|dr| {
+                    /* status codes: 0 = pending, 6 = credited but cannot withdraw, 1 = success */
+                    if dr.status == 1 {
+                        Some(DepositInfo {
+                            tx_id: dr.tx_id,
+                            amount: dr.amount,
+                        })
+                    } else {
+                        None
+                    }
+                })
+                .collect(),
+        ))
     }
 
     async fn recent_withdrawals(&self) -> Result<Vec<WithdrawalInfo>, Box<dyn std::error::Error>> {
