@@ -185,7 +185,7 @@ async fn process_sync_exchange(
     let recent_deposits = exchange_client.recent_deposits().await?;
     let recent_withdrawals = exchange_client.recent_withdrawals().await?;
     let block_height = rpc_client
-        .get_epoch_info_with_commitment(CommitmentConfig::finalized())?
+        .get_epoch_info_with_commitment(rpc_client.commitment())?
         .block_height;
 
     for pending_withdrawal in db.pending_withdrawals(Some(exchange)) {
@@ -240,7 +240,7 @@ async fn process_sync_exchange(
         let confirmed = rpc_client
             .confirm_transaction_with_commitment(
                 &pending_deposit.transfer.signature,
-                CommitmentConfig::finalized(),
+                rpc_client.commitment(),
             )?
             .value;
 
