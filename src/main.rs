@@ -650,7 +650,6 @@ async fn process_exchange_deposit<T: Signers>(
         lot_numbers,
     )?;
     if !send_transaction_until_expired(rpc_client, &transaction, last_valid_block_height) {
-        db.cancel_deposit(signature).expect("cancel_deposit");
         return Err("Deposit failed".into());
     }
     Ok(())
