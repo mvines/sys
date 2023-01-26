@@ -465,7 +465,11 @@ async fn process_exchange_deposit<T: Signers>(
         }
     }
 
-    let from_account_balance = token.balance(rpc_client, &from_address)?;
+    let from_tracked_account = db
+        .get_account(from_address, token)
+        .ok_or_else(|| format!("Account, {}, is not tracked", from_address))?;
+    let from_account_balance = from_tracked_account.last_update_balance;
+
     if let Some(if_source_balance_exceeds) = if_source_balance_exceeds {
         if from_account_balance < if_source_balance_exceeds {
             println!(
