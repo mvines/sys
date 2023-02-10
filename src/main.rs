@@ -184,9 +184,8 @@ async fn process_sync_exchange(
 
     let recent_deposits = exchange_client.recent_deposits().await?;
     let recent_withdrawals = exchange_client.recent_withdrawals().await?;
-    let block_height = rpc_client
-        .get_epoch_info_with_commitment(rpc_client.commitment())?
-        .block_height;
+
+    let epoch_info = rpc_client.get_epoch_info_with_commitment(rpc_client.commitment())?;
 
     for pending_withdrawal in db.pending_withdrawals(Some(exchange)) {
         let wi = recent_withdrawals
@@ -237,12 +236,19 @@ async fn process_sync_exchange(
     }
 
     for pending_deposit in db.pending_deposits(Some(exchange)) {
-        let confirmed = rpc_client
-            .confirm_transaction_with_commitment(
-                &pending_deposit.transfer.signature,
-                rpc_client.commitment(),
-            )?
-            .value;
+        let response = rpc_client.confirm_transaction_with_commitment(
+            &pending_deposit.transfer.signature,
+            rpc_client.commitment(),
+        )?;
+
+        if response.context.slot < epoch_info.absolute_slot {
+            // TODO: Recover gracefully, probably by just skipping this pending deposit
+            panic!(
+                "RPC node is acting weird. Broken load balancer? ({} < {})",
+                response.context.slot, epoch_info.absolute_slot
+            );
+        }
+        let confirmed = response.value;
 
         assert_eq!(
             pending_deposit.transfer.from_token,
@@ -330,7 +336,7 @@ async fn process_sync_exchange(
                     }
                 }
             }
-        } else if block_height > pending_deposit.transfer.last_valid_block_height {
+        } else if epoch_info.block_height > pending_deposit.transfer.last_valid_block_height {
             println!(
                 "Pending {} deposit cancelled: {}",
                 token, pending_deposit.transfer.signature
@@ -346,7 +352,7 @@ async fn process_sync_exchange(
                 pending_deposit
                     .transfer
                     .last_valid_block_height
-                    .saturating_sub(block_height),
+                    .saturating_sub(epoch_info.block_height),
                 pending_deposit.transfer.signature,
             );
         }
