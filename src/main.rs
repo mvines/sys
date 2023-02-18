@@ -236,11 +236,8 @@ async fn process_sync_exchange(
     }
 
     for pending_deposit in db.pending_deposits(Some(exchange)) {
-        let response = rpc_client.confirm_transaction_with_commitment(
-            &pending_deposit.transfer.signature,
-            rpc_client.commitment(),
-        )?;
-
+        let response = rpc_client
+            .get_signature_statuses_with_history(&[pending_deposit.transfer.signature])?;
         if response.context.slot < epoch_info.absolute_slot {
             // TODO: Recover gracefully, probably by just skipping this pending deposit
             panic!(
@@ -248,7 +245,10 @@ async fn process_sync_exchange(
                 response.context.slot, epoch_info.absolute_slot
             );
         }
-        let confirmed = response.value;
+        let confirmed = response.value[0]
+            .as_ref()
+            .map(|status| status.satisfies_commitment(rpc_client.commitment()))
+            .unwrap_or_default();
 
         assert_eq!(
             pending_deposit.transfer.from_token,
