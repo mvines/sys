@@ -67,10 +67,10 @@ impl ExchangeClient for KrakenExchangeClient {
                 let vol = open_order
                     .vol
                     .parse::<f64>()
-                    .map_err(|err| format!("Invalid open order `vol` field: {}", err))?;
+                    .map_err(|err| format!("Invalid open order `vol` field: {err}"))?;
                 let price =
                     open_order.descr.price.parse::<f64>().map_err(|err| {
-                        format!("Invalid open order `descr.price` field: {}", err)
+                        format!("Invalid open order `descr.price` field: {err}")
                     })?;
                 if open_order.descr.orderside == "sell" {
                     in_order_sol += vol
@@ -243,7 +243,7 @@ impl ExchangeClient for KrakenExchangeClient {
                 }
             }
             MarketInfoFormat::Weighted24hAveragePrice => {
-                println!("{:.4}", weighted_24h_avg_price);
+                println!("{weighted_24h_avg_price:.4}");
             }
         }
 
@@ -283,7 +283,7 @@ impl ExchangeClient for KrakenExchangeClient {
         if pair != self.preferred_solusd_pair() {
             // Currently only the `preferred_solusd_pair` is supported due to limitations in how
             // the `available` token balances are computed in `Self::balances()`
-            return Err(format!("Unsupported trading pair: {}", pair).into());
+            return Err(format!("Unsupported trading pair: {pair}").into());
         }
 
         let side = match side {
@@ -322,7 +322,7 @@ impl ExchangeClient for KrakenExchangeClient {
 
         let order = orders
             .get(order_id)
-            .ok_or_else(|| format!("Unknown order id: {}", order_id))?;
+            .ok_or_else(|| format!("Unknown order id: {order_id}"))?;
         //dbg!(&order);
 
         assert_eq!(order.descr.ordertype, "limit");
@@ -352,7 +352,7 @@ impl ExchangeClient for KrakenExchangeClient {
             side: match order.descr.orderside.as_str() {
                 "sell" => OrderSide::Sell,
                 "buy" => OrderSide::Buy,
-                side => panic!("Invalid order side: {}", side),
+                side => panic!("Invalid order side: {side}"),
             },
             price: order.descr.price.parse::<f64>().unwrap(),
             amount: order.vol.parse::<f64>().unwrap(),

@@ -28,7 +28,7 @@ pub fn get_transaction_balance_change(
         .block_time
         .map(|block_time| {
             NaiveDateTime::from_timestamp_opt(block_time, 0)
-                .ok_or_else(|| format!("Invalid block time for slot {}", slot))
+                .ok_or_else(|| format!("Invalid block time for slot {slot}"))
         })
         .transpose()?;
 
@@ -52,7 +52,7 @@ pub fn get_transaction_balance_change(
         .static_account_keys()
         .iter()
         .position(|k| k == address)
-        .ok_or_else(|| format!("Address {} not referenced in transaction", address))?;
+        .ok_or_else(|| format!("Address {address} not referenced in transaction"))?;
 
     let pre_amount = if address_is_token {
         u64::from_str(

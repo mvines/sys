@@ -49,8 +49,7 @@ fn token_to_coin(token: &MaybeToken) -> Result<&'static str, Box<dyn std::error:
 pub async fn get_current_price(token: &MaybeToken) -> Result<Decimal, Box<dyn std::error::Error>> {
     let coin = token_to_coin(token)?;
     let url = format!(
-        "https://api.coingecko.com/api/v3/simple/price?ids={}&vs_currencies=usd",
-        coin
+        "https://api.coingecko.com/api/v3/simple/price?ids={coin}&vs_currencies=usd"
     );
 
     #[derive(Debug, Serialize, Deserialize)]
@@ -67,7 +66,7 @@ pub async fn get_current_price(token: &MaybeToken) -> Result<Decimal, Box<dyn st
         .solana
         .or(coins.msol)
         .or(coins.stsol)
-        .ok_or_else(|| format!("Simple price data not available for {}", coin).into())
+        .ok_or_else(|| format!("Simple price data not available for {coin}").into())
         .map(|price| Decimal::from_f64(price.usd).unwrap())
 }
 
@@ -90,6 +89,6 @@ pub async fn get_historical_price(
         .json::<HistoryResponse>()
         .await?
         .market_data
-        .ok_or_else(|| format!("Market data not available for {}", when).into())
+        .ok_or_else(|| format!("Market data not available for {when}").into())
         .map(|market_data| Decimal::from_f64(market_data.current_price.usd).unwrap())
 }

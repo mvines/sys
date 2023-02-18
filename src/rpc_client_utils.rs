@@ -37,8 +37,7 @@ pub fn get_stake_authorized(
         StakeActivationState::Active | StakeActivationState::Activating => {}
         state => {
             return Err(format!(
-                "Stake account {} must be Active or Activating: {:?}",
-                stake_account_address, state
+                "Stake account {stake_account_address} must be Active or Activating: {state:?}"
             )
             .into());
         }
@@ -46,7 +45,7 @@ pub fn get_stake_authorized(
 
     match stake_account.state() {
         Ok(StakeState::Stake(meta, stake)) => Ok((meta.authorized, stake.delegation.voter_pubkey)),
-        _ => Err(format!("Invalid stake account: {}", stake_account_address).into()),
+        _ => Err(format!("Invalid stake account: {stake_account_address}").into()),
     }
 }
 
@@ -57,9 +56,9 @@ pub fn stake_accounts_have_same_credits_observed(
     use solana_sdk::stake::state::Stake;
 
     let stake_state1 = bincode::deserialize(stake_account1.data.as_slice())
-        .map_err(|err| format!("Invalid stake account 1: {}", err))?;
+        .map_err(|err| format!("Invalid stake account 1: {err}"))?;
     let stake_state2 = bincode::deserialize(stake_account2.data.as_slice())
-        .map_err(|err| format!("Invalid stake account 2: {}", err))?;
+        .map_err(|err| format!("Invalid stake account 2: {err}"))?;
 
     if let (
         StakeState::Stake(
@@ -92,6 +91,6 @@ pub async fn get_signature_date(
         let block_date = get_block_date(rpc_client, ts.slot).await?;
         Ok(block_date)
     } else {
-        Err(format!("Unknown signature: {}", signature).into())
+        Err(format!("Unknown signature: {signature}").into())
     }
 }

@@ -69,7 +69,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let collateral_token = value_t_or_exit!(matches, "token", Token);
     let token = collateral_token
         .liquidity_token()
-        .ok_or_else(|| format!("{} is not a collateral token", collateral_token))?;
+        .ok_or_else(|| format!("{collateral_token} is not a collateral token"))?;
     let retain_amount = token.amount(value_t_or_exit!(matches, "retain", f64));
 
     let balance = token.balance(&rpc_client, &address)?;
@@ -99,12 +99,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut transaction = Transaction::new_unsigned(message);
     let simulation_result = rpc_client.simulate_transaction(&transaction)?.value;
     if simulation_result.err.is_some() {
-        return Err(format!("Simulation failure: {:?}", simulation_result).into());
+        return Err(format!("Simulation failure: {simulation_result:?}").into());
     }
 
     transaction.try_sign(&vec![signer], recent_blockhash)?;
     let signature = transaction.signatures[0];
-    println!("Transaction signature: {}", signature);
+    println!("Transaction signature: {signature}");
 
     if !send_transaction_until_expired(&rpc_client, &transaction, last_valid_block_height) {
         return Err("Deposit failed".into());

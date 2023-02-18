@@ -42,13 +42,12 @@ pub fn send_transaction_until_expired(
                     );
                 }
                 Err(err) => {
-                    println!("Failed to get epoch info: {:?}", err);
+                    println!("Failed to get epoch info: {err:?}");
                 }
             },
             Err(err) => {
                 println!(
-                    "Unable to determine if transaction was confirmed: {:?}",
-                    err
+                    "Unable to determine if transaction was confirmed: {err:?}"
                 );
             }
         }
@@ -56,7 +55,7 @@ pub fn send_transaction_until_expired(
         match rpc_client.send_and_confirm_transaction_with_spinner(transaction) {
             Ok(_signature) => return true,
             Err(err) => {
-                println!("Transaction failed to send: {:?}", err);
+                println!("Transaction failed to send: {err:?}");
             }
         }
     }

@@ -24,7 +24,7 @@ impl ExchangeClient for BinanceExchangeClient {
         token: MaybeToken,
     ) -> Result<Pubkey, Box<dyn std::error::Error>> {
         if token != MaybeToken::SOL() {
-            return Err(format!("{} deposits are not supported", token).into());
+            return Err(format!("{token} deposits are not supported").into());
         }
 
         if !self.account.get_account().await?.can_deposit {
@@ -108,7 +108,7 @@ impl ExchangeClient for BinanceExchangeClient {
     ) -> Result<(/* withdraw_id: */ String, /*withdraw_fee: */ f64), Box<dyn std::error::Error>>
     {
         if token != MaybeToken::SOL() {
-            return Err(format!("{} deposits are not supported", token).into());
+            return Err(format!("{token} deposits are not supported").into());
         }
 
         let sol_info = self
@@ -201,7 +201,7 @@ impl ExchangeClient for BinanceExchangeClient {
 
         match format {
             MarketInfoFormat::All => {
-                println!("Pair: {}", pair);
+                println!("Pair: {pair}");
                 println!(
                     "Ask: ${}, Bid: ${}, High: ${}, Low: ${}, ",
                     ticker_price.ask_price,

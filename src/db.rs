@@ -208,14 +208,14 @@ impl fmt::Display for LotAcquistionKind {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             LotAcquistionKind::EpochReward { epoch, slot } => {
-                write!(f, "epoch {} reward (slot {})", epoch, slot)
+                write!(f, "epoch {epoch} reward (slot {slot})")
             }
-            LotAcquistionKind::Transaction { signature, .. } => write!(f, "{}", signature),
+            LotAcquistionKind::Transaction { signature, .. } => write!(f, "{signature}"),
             LotAcquistionKind::Exchange {
                 exchange,
                 pair,
                 order_id,
-            } => write!(f, "{:?} {}, order {}", exchange, pair, order_id),
+            } => write!(f, "{exchange:?} {pair}, order {order_id}"),
             LotAcquistionKind::Fiat => {
                 write!(f, "post tax")
             }
@@ -243,7 +243,7 @@ impl fmt::Display for LotAcquistionKind {
                     write!(f, "Swap from {}, {}", token, signature)
                 }
                 */
-                write!(f, "Swap from {}, {}", token, signature)
+                write!(f, "Swap from {token}, {signature}")
             }
         }
     }
@@ -379,13 +379,13 @@ impl fmt::Display for LotDisposalKind {
                 pair,
                 order_id,
                 match fee {
-                    Some((amount, coin)) if *amount > 0. => format!(" (fee: {} {})", amount, coin),
+                    Some((amount, coin)) if *amount > 0. => format!(" (fee: {amount} {coin})"),
                     _ => "".into(),
                 }
             ),
-            LotDisposalKind::Other { description } => write!(f, "{}", description),
+            LotDisposalKind::Other { description } => write!(f, "{description}"),
             LotDisposalKind::WithdrawalFee { exchange, tag } => {
-                write!(f, "{} withdrawal fee [{}])", exchange, tag)
+                write!(f, "{exchange} withdrawal fee [{tag}])")
             }
             LotDisposalKind::Swap {
                 token,
@@ -403,7 +403,7 @@ impl fmt::Display for LotDisposalKind {
                         signature
                     )
                 } else {
-                    write!(f, "Swap to {}, {}", token, signature)
+                    write!(f, "Swap to {token}, {signature}")
                 }
             }
             LotDisposalKind::Fiat => write!(f, "fiat"),
@@ -515,8 +515,7 @@ impl TrackedAccount {
         let lot_balance: u64 = self.lots.iter().map(|lot| lot.amount).sum();
         assert_eq!(
             lot_balance, self.last_update_balance,
-            "Lot balance mismatch: {:?}",
-            self
+            "Lot balance mismatch: {self:?}"
         );
     }
 
@@ -684,7 +683,7 @@ impl DbData {
         serde_json::from_str(std::str::from_utf8(&bytes).expect("invalid utf8")).map_err(|err| {
             io::Error::new(
                 io::ErrorKind::Other,
-                format!("JSON parse failed: {:?}", err),
+                format!("JSON parse failed: {err:?}"),
             )
         })
     }
@@ -717,19 +716,19 @@ impl Db {
         self.clear_exchange_credentials(exchange)?;
 
         self.credentials_db
-            .set(&format!("{:?}", exchange), &exchange_credentials)
+            .set(&format!("{exchange:?}"), &exchange_credentials)
             .unwrap();
 
         Ok(self.credentials_db.dump()?)
     }
 
     pub fn get_exchange_credentials(&self, exchange: Exchange) -> Option<ExchangeCredentials> {
-        self.credentials_db.get(&format!("{:?}", exchange))
+        self.credentials_db.get(&format!("{exchange:?}"))
     }
 
     pub fn clear_exchange_credentials(&mut self, exchange: Exchange) -> DbResult<()> {
         if self.get_exchange_credentials(exchange).is_some() {
-            self.credentials_db.rem(&format!("{:?}", exchange)).ok();
+            self.credentials_db.rem(&format!("{exchange:?}")).ok();
             self.credentials_db.dump()?;
         }
         Ok(())
@@ -1012,7 +1011,7 @@ impl Db {
         lot_numbers: Option<HashSet<usize>>,
     ) -> DbResult<()> {
         if self.data.pending_withdrawals.iter().any(|pw| pw.tag == tag) {
-            panic!("Withdrawal tag already present in database: {}", tag);
+            panic!("Withdrawal tag already present in database: {tag}");
         }
 
         assert!(amount > fee);
@@ -1867,7 +1866,7 @@ impl Db {
                     .iter()
                     .any(|lot| lot.lot_number == lot_number)
             })
-            .ok_or_else(|| DbError::LotDeleteFailed(format!("Unknown lot: {}", lot_number)))?;
+            .ok_or_else(|| DbError::LotDeleteFailed(format!("Unknown lot: {lot_number}")))?;
 
         let lot = account
             .lots
@@ -1894,7 +1893,7 @@ impl Db {
                     .iter()
                     .any(|lot| lot.lot_number == lot_number)
             })
-            .ok_or_else(|| DbError::LotMoveFailed(format!("Unknown lot: {}", lot_number)))?;
+            .ok_or_else(|| DbError::LotMoveFailed(format!("Unknown lot: {lot_number}")))?;
 
         let mut to_account = self
             .get_accounts()
@@ -1903,7 +1902,7 @@ impl Db {
                 tracked_account.address == to_address && tracked_account.token == from_account.token
             })
             .ok_or_else(|| {
-                DbError::LotMoveFailed(format!("Unknown destination account: {}", to_address))
+                DbError::LotMoveFailed(format!("Unknown destination account: {to_address}"))
             })?;
 
         if to_account.token != from_account.token {

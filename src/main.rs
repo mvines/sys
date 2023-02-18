@@ -85,14 +85,14 @@ fn format_filled_amount(filled_amount: f64) -> String {
     } else {
         Style::new().bold()
     }
-    .apply_to(format!(" [◎{} filled]", filled_amount))
+    .apply_to(format!(" [◎{filled_amount} filled]"))
     .to_string()
 }
 
 fn naivedate_of(string: &str) -> Result<NaiveDate, String> {
     NaiveDate::parse_from_str(string, "%y/%m/%d")
         .or_else(|_| NaiveDate::parse_from_str(string, "%Y/%m/%d"))
-        .map_err(|err| format!("error parsing '{}': {}", string, err))
+        .map_err(|err| format!("error parsing '{string}': {err}"))
 }
 
 async fn get_block_date_and_price(
@@ -119,7 +119,7 @@ fn add_exchange_deposit_address_to_db(
         db.add_account(TrackedAccount {
             address: deposit_address,
             token,
-            description: format!("{:?}", exchange),
+            description: format!("{exchange:?}"),
             last_update_epoch: epoch,
             last_update_balance: 0,
             lots: vec![],
@@ -216,10 +216,10 @@ async fn process_sync_exchange(
                     wi.address,
                     tx_id,
                 );
-                println!("{}", msg);
+                println!("{msg}");
 
                 db.confirm_withdrawal(pending_withdrawal, today())?;
-                notifier.send(&format!("{:?}: {}", exchange, msg)).await;
+                notifier.send(&format!("{exchange:?}: {msg}")).await;
             } else {
                 println!("Pending {} withdrawal to {} cancelled", token, wi.address);
                 db.cancel_withdrawal(pending_withdrawal)?;
@@ -282,8 +282,8 @@ async fn process_sync_exchange(
                             token.ui_amount(pending_deposit.amount),
                             pending_deposit.transfer.signature
                         );
-                        println!("{}", msg);
-                        notifier.send(&format!("{:?}: {}", exchange, msg)).await;
+                        println!("{msg}");
+                        notifier.send(&format!("{exchange:?}: {msg}")).await;
                     } else {
                         // Refuse to forget these lots, there may be a tax implication with doing
                         // so.
@@ -303,19 +303,18 @@ async fn process_sync_exchange(
                                 token,
                                 pending_deposit.transfer.signature, deposit_info.amount, pending_deposit.amount
                             );
-                            println!("{}", msg);
-                            notifier.send(&format!("{:?}: {}", exchange, msg)).await;
+                            println!("{msg}");
+                            notifier.send(&format!("{exchange:?}: {msg}")).await;
 
                             // TODO: Do something more here...?
                         } else {
                             if missing_tokens != 0 {
                                 // Binance will occasionally steal a lamport or two...
                                 let msg = format!(
-                                    "{:?} just stole {} tokens from your deposit!",
-                                    exchange, missing_tokens
+                                    "{exchange:?} just stole {missing_tokens} tokens from your deposit!"
                                 );
-                                println!("{}", msg);
-                                notifier.send(&format!("{:?}: {}", exchange, msg)).await;
+                                println!("{msg}");
+                                notifier.send(&format!("{exchange:?}: {msg}")).await;
                             }
 
                             let when =
@@ -330,8 +329,8 @@ async fn process_sync_exchange(
                                 token.ui_amount(pending_deposit.amount),
                                 pending_deposit.transfer.signature
                             );
-                            println!("{}", msg);
-                            notifier.send(&format!("{:?}: {}", exchange, msg)).await;
+                            println!("{msg}");
+                            notifier.send(&format!("{exchange:?}: {msg}")).await;
                         }
                     }
                 }
@@ -382,15 +381,15 @@ async fn process_sync_exchange(
 
         if order_status.open {
             if order_status.filled_amount > 0. {
-                let msg = format!("Partial {}", order_summary);
-                println!("{}", msg);
-                notifier.send(&format!("{:?}: {}", exchange, msg)).await;
+                let msg = format!("Partial {order_summary}");
+                println!("{msg}");
+                notifier.send(&format!("{exchange:?}: {msg}")).await;
             } else {
-                println!("   Open {}", order_summary);
+                println!("   Open {order_summary}");
             }
         } else {
             let fee_summary = match &order_status.fee {
-                Some((amount, coin)) if *amount > 0. => format!(" (fee: {} {})", amount, coin),
+                Some((amount, coin)) if *amount > 0. => format!(" (fee: {amount} {coin})"),
                 _ => "".into(),
             };
             db.close_order(
@@ -415,14 +414,14 @@ async fn process_sync_exchange(
             }
 
             let msg = if (order_status.amount - order_status.filled_amount).abs() < f64::EPSILON {
-                format!(" Filled {}{}", order_summary, fee_summary)
+                format!(" Filled {order_summary}{fee_summary}")
             } else if order_status.filled_amount < f64::EPSILON {
-                format!(" Cancel {}{}", order_summary, fee_summary)
+                format!(" Cancel {order_summary}{fee_summary}")
             } else {
-                format!("Partial {}{}", order_summary, fee_summary)
+                format!("Partial {order_summary}{fee_summary}")
             };
-            println!("{}", msg);
-            notifier.send(&format!("{:?}: {}", exchange, msg)).await;
+            println!("{msg}");
+            notifier.send(&format!("{exchange:?}: {msg}")).await;
         }
     }
 
@@ -473,7 +472,7 @@ async fn process_exchange_deposit<T: Signers>(
 
     let from_tracked_account = db
         .get_account(from_address, token)
-        .ok_or_else(|| format!("Account, {}, is not tracked", from_address))?;
+        .ok_or_else(|| format!("Account, {from_address}, is not tracked"))?;
     let from_account_balance = from_tracked_account.last_update_balance;
 
     if let Some(if_source_balance_exceeds) = if_source_balance_exceeds {
@@ -496,7 +495,7 @@ async fn process_exchange_deposit<T: Signers>(
     let from_account = rpc_client
         .get_account_with_commitment(&from_address, rpc_client.commitment())?
         .value
-        .ok_or_else(|| format!("From account, {}, does not exist", from_address))?;
+        .ok_or_else(|| format!("From account, {from_address}, does not exist"))?;
 
     let authority_account = if from_address == authority_address {
         from_account.clone()
@@ -504,7 +503,7 @@ async fn process_exchange_deposit<T: Signers>(
         rpc_client
             .get_account_with_commitment(&authority_address, rpc_client.commitment())?
             .value
-            .ok_or_else(|| format!("Authority account, {}, does not exist", authority_address))?
+            .ok_or_else(|| format!("Authority account, {authority_address}, does not exist"))?
     };
 
     if authority_account.lamports < fee_calculator.lamports_per_signature {
@@ -618,14 +617,13 @@ async fn process_exchange_deposit<T: Signers>(
         return Err("From account has insufficient funds".into());
     }
 
-    println!("From address: {} ({})", from_address, token);
+    println!("From address: {from_address} ({token})");
     if from_address != authority_address {
-        println!("Authority address: {}", authority_address);
+        println!("Authority address: {authority_address}");
     }
     println!("Amount: {}{}", token.symbol(), token.ui_amount(amount));
     println!(
-        "{} {:?} deposit address: {}",
-        token, exchange, deposit_address
+        "{token} {exchange:?} deposit address: {deposit_address}"
     );
 
     let mut message = Message::new(&instructions, Some(&authority_address));
@@ -637,12 +635,12 @@ async fn process_exchange_deposit<T: Signers>(
     let mut transaction = Transaction::new_unsigned(message);
     let simulation_result = rpc_client.simulate_transaction(&transaction)?.value;
     if simulation_result.err.is_some() {
-        return Err(format!("Simulation failure: {:?}", simulation_result).into());
+        return Err(format!("Simulation failure: {simulation_result:?}").into());
     }
 
     transaction.try_sign(&signers, recent_blockhash)?;
     let signature = transaction.signatures[0];
-    println!("Transaction signature: {}", signature);
+    println!("Transaction signature: {signature}");
 
     db.record_deposit(
         signature,
@@ -743,11 +741,11 @@ async fn process_exchange_cancel(
             exchange_client
                 .cancel_order(&order_info.pair, &order_info.order_id)
                 .await
-                .unwrap_or_else(|err| eprintln!("{:?}", err));
+                .unwrap_or_else(|err| eprintln!("{err:?}"));
         }
     }
 
-    println!("{} orders cancelled", cancelled_count);
+    println!("{cancelled_count} orders cancelled");
     Ok(())
 }
 
@@ -772,8 +770,7 @@ async fn process_exchange_buy(
     let deposit_address = exchange_client.deposit_address(token).await?;
     let deposit_account = db.get_account(deposit_address, token).ok_or_else(|| {
         format!(
-            "Exchange deposit account does not exist, run `sync` first: {} ({})",
-            deposit_address, token,
+            "Exchange deposit account does not exist, run `sync` first: {deposit_address} ({token})",
         )
     })?;
 
@@ -783,8 +780,7 @@ async fn process_exchange_buy(
     if let Some(if_balance_exceeds) = if_balance_exceeds {
         if usd_balance < if_balance_exceeds {
             println!(
-                "Order declined because {:?} available balance is less than ${}",
-                exchange, if_balance_exceeds
+                "Order declined because {exchange:?} available balance is less than ${if_balance_exceeds}"
             );
             return Ok(());
         }
@@ -798,7 +794,7 @@ async fn process_exchange_buy(
     let price = (price * 10_000.).round() / 10_000.; // Round to four decimal places
 
     if price > bid_ask.bid_price {
-        return Err(format!("Order price, {}, is greater than bid price", price).into());
+        return Err(format!("Order price, {price}, is greater than bid price").into());
     }
 
     let amount = match amount {
@@ -806,7 +802,7 @@ async fn process_exchange_buy(
         Some(amount) => amount,
     };
 
-    println!("Placing buy order for ◎{} at ${}", amount, price);
+    println!("Placing buy order for ◎{amount} at ${price}");
 
     let order_id = exchange_client
         .place_order(&pair, OrderSide::Buy, price, amount)
@@ -829,8 +825,8 @@ async fn process_exchange_buy(
         vec![],
         Some(amount),
     )?;
-    println!("{}", msg);
-    notifier.send(&format!("{:?}: {}", exchange, msg)).await;
+    println!("{msg}");
+    notifier.send(&format!("{exchange:?}: {msg}")).await;
     Ok(())
 }
 
@@ -860,8 +856,7 @@ async fn process_exchange_sell(
     let deposit_address = exchange_client.deposit_address(token).await?;
     let mut deposit_account = db.get_account(deposit_address, token).ok_or_else(|| {
         format!(
-            "Exchange deposit account does not exist, run `sync` first: {} ({})",
-            deposit_address, token,
+            "Exchange deposit account does not exist, run `sync` first: {deposit_address} ({token})",
         )
     })?;
 
@@ -888,11 +883,10 @@ async fn process_exchange_sell(
     if let Some(if_price_over) = if_price_over {
         if price <= if_price_over {
             let msg = format!(
-                "Order declined because price, ${}, is not greater than ${}",
-                price, if_price_over,
+                "Order declined because price, ${price}, is not greater than ${if_price_over}",
             );
-            println!("{}", msg);
-            notifier.send(&format!("{:?}: {}", exchange, msg)).await;
+            println!("{msg}");
+            notifier.send(&format!("{exchange:?}: {msg}")).await;
             return Ok(());
         }
     }
@@ -900,12 +894,11 @@ async fn process_exchange_sell(
     if let Some(price_floor) = price_floor {
         if price < price_floor {
             let msg = format!(
-                "Proposed price, ${}, is beneath price floor. Adjusting upwards",
-                price
+                "Proposed price, ${price}, is beneath price floor. Adjusting upwards"
             );
             price = price_floor;
-            println!("{}", msg);
-            notifier.send(&format!("{:?}: {}", exchange, msg)).await;
+            println!("{msg}");
+            notifier.send(&format!("{exchange:?}: {msg}")).await;
         }
     }
 
@@ -925,11 +918,10 @@ async fn process_exchange_sell(
             }
         }) {
             let msg = format!(
-                "Order declined because price, ${}, is less than basis ${}",
-                price, basis,
+                "Order declined because price, ${price}, is less than basis ${basis}",
             );
-            println!("{}", msg);
-            notifier.send(&format!("{:?}: {}", exchange, msg)).await;
+            println!("{msg}");
+            notifier.send(&format!("{exchange:?}: {msg}")).await;
             return Ok(());
         }
     }
@@ -938,7 +930,7 @@ async fn process_exchange_sell(
         return Err("Order price is less than ask price".into());
     }
 
-    println!("Placing sell order for ◎{} at ${}", amount, price);
+    println!("Placing sell order for ◎{amount} at ${price}");
     println!("Lots");
     for lot in &order_lots {
         println_lot(
@@ -977,8 +969,8 @@ async fn process_exchange_sell(
         order_lots,
         None,
     )?;
-    println!("{}", msg);
-    notifier.send(&format!("{:?}: {}", exchange, msg)).await;
+    println!("{msg}");
+    notifier.send(&format!("{exchange:?}: {msg}")).await;
     Ok(())
 }
 
@@ -1043,7 +1035,7 @@ async fn process_jup_swap<T: Signers>(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let from_account = db
         .get_account(address, from_token.into())
-        .ok_or_else(|| format!("{} account does not exist for {}", from_token, address))?;
+        .ok_or_else(|| format!("{from_token} account does not exist for {address}"))?;
 
     let from_token_price = from_token.get_current_price(rpc_client).await?;
     let to_token_price = to_token.get_current_price(rpc_client).await?;
@@ -1101,7 +1093,7 @@ async fn process_jup_swap<T: Signers>(
             )
         })?;
 
-        println!("Fetching best {}->{} quote...", from_token, to_token);
+        println!("Fetching best {from_token}->{to_token} quote...");
         let quotes = jup_ag::quote(
             from_token.mint(),
             to_token.mint(),
@@ -1116,7 +1108,7 @@ async fn process_jup_swap<T: Signers>(
 
         let quote = quotes
             .get(0)
-            .ok_or_else(|| format!("No quotes found for {} to {}", from_token, to_token))?;
+            .ok_or_else(|| format!("No quotes found for {from_token} to {to_token}"))?;
         println_jup_quote(from_token, to_token, quote);
 
         let from_value =
@@ -1127,13 +1119,12 @@ async fn process_jup_swap<T: Signers>(
         let swap_value_percentage_loss = Decimal::from_usize(100).unwrap()
             - min_to_value / from_value * Decimal::from_usize(100).unwrap();
 
-        println!("Coingecko value loss: {:.2}%", swap_value_percentage_loss);
+        println!("Coingecko value loss: {swap_value_percentage_loss:.2}%");
         if swap_value_percentage_loss
             > Decimal::from_f64(max_coingecko_value_percentage_loss).unwrap()
         {
             return Err(format!(
-                "Swap exceeds the max value loss ({:2}%) relative to CoinGecko token price",
-                max_coingecko_value_percentage_loss
+                "Swap exceeds the max value loss ({max_coingecko_value_percentage_loss:2}%) relative to CoinGecko token price"
             )
             .into());
         }
@@ -1161,15 +1152,14 @@ async fn process_jup_swap<T: Signers>(
             let simulation_result = rpc_client.simulate_transaction(&transaction)?.value;
             if simulation_result.err.is_some() {
                 return Err(format!(
-                    "Setup transaction simulation failure: {:?}",
-                    simulation_result
+                    "Setup transaction simulation failure: {simulation_result:?}"
                 )
                 .into());
             }
 
             transaction.try_sign(&signers, recent_blockhash)?;
             let signature = transaction.signatures[0];
-            println!("Setup transaction signature: {}", signature);
+            println!("Setup transaction signature: {signature}");
 
             if !send_transaction_until_expired(rpc_client, &transaction, last_valid_block_height) {
                 return Err("Setup transaction failed".into());
@@ -1185,15 +1175,14 @@ async fn process_jup_swap<T: Signers>(
         let simulation_result = rpc_client.simulate_transaction(&transaction)?.value;
         if simulation_result.err.is_some() {
             return Err(format!(
-                "Swap transaction simulation failure: {:?}",
-                simulation_result
+                "Swap transaction simulation failure: {simulation_result:?}"
             )
             .into());
         }
 
         transaction.try_sign(&signers, recent_blockhash)?;
         let signature = transaction.signatures[0];
-        println!("Transaction signature: {}", signature);
+        println!("Transaction signature: {signature}");
 
         if db.get_account(address, to_token.into()).is_none() {
             let epoch = rpc_client.get_epoch_info()?.epoch;
@@ -1253,7 +1242,7 @@ async fn process_tulip_deposit<T: Signers>(
 
     let liquidity_tracked_account = db
         .get_account(address, liquidity_token)
-        .ok_or_else(|| format!("Unknown account {} ({})", address, liquidity_token))?;
+        .ok_or_else(|| format!("Unknown account {address} ({liquidity_token})"))?;
     let liquidity_account_balance = liquidity_tracked_account.last_update_balance;
 
     let max_liquidity_amount = if liquidity_token.is_sol() {
@@ -1280,7 +1269,7 @@ async fn process_tulip_deposit<T: Signers>(
     let collateral_token_price = collateral_token.get_current_price(rpc_client).await?;
     let liquidity_token_ui_amount = liquidity_token.ui_amount(liquidity_amount);
 
-    println!("{}: {} -> {}", address, liquidity_token, collateral_token);
+    println!("{address}: {liquidity_token} -> {collateral_token}");
     println!(
         "Estimated deposit amount: {}{} (${})",
         liquidity_token.symbol(),
@@ -1330,12 +1319,12 @@ async fn process_tulip_deposit<T: Signers>(
         let mut transaction = Transaction::new_unsigned(message);
         let simulation_result = rpc_client.simulate_transaction(&transaction)?.value;
         if simulation_result.err.is_some() {
-            return Err(format!("Simulation failure: {:?}", simulation_result).into());
+            return Err(format!("Simulation failure: {simulation_result:?}").into());
         }
 
         transaction.try_sign(&signers, recent_blockhash)?;
         let signature = transaction.signatures[0];
-        println!("Transaction signature: {}", signature);
+        println!("Transaction signature: {signature}");
 
         db.record_swap(
             signature,
@@ -1369,7 +1358,7 @@ async fn process_tulip_withdraw<T: Signers>(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let collateral_tracked_account = db
         .get_account(address, collateral_token.into())
-        .ok_or_else(|| format!("Unknown account {} ({})", address, collateral_token))?;
+        .ok_or_else(|| format!("Unknown account {address} ({collateral_token})"))?;
     let collateral_account_balance = collateral_tracked_account.last_update_balance;
 
     let collateral_amount = match liquidity_amount {
@@ -1401,7 +1390,7 @@ async fn process_tulip_withdraw<T: Signers>(
     let collateral_token_price = collateral_token.get_current_price(rpc_client).await?;
     let collateral_token_ui_amount = collateral_token.ui_amount(collateral_amount);
 
-    println!("{}: {} -> {}", address, collateral_token, liquidity_token);
+    println!("{address}: {collateral_token} -> {liquidity_token}");
     println!(
         "Estimated withdraw amount: {}{} (${})",
         collateral_token.symbol(),
@@ -1426,12 +1415,12 @@ async fn process_tulip_withdraw<T: Signers>(
     let mut transaction = Transaction::new_unsigned(message);
     let simulation_result = rpc_client.simulate_transaction(&transaction)?.value;
     if simulation_result.err.is_some() {
-        return Err(format!("Simulation failure: {:?}", simulation_result).into());
+        return Err(format!("Simulation failure: {simulation_result:?}").into());
     }
 
     transaction.try_sign(&signers, recent_blockhash)?;
     let signature = transaction.signatures[0];
-    println!("Transaction signature: {}", signature);
+    println!("Transaction signature: {signature}");
 
     db.record_swap(
         signature,
@@ -1468,7 +1457,7 @@ async fn process_sync_swaps(
         ..
     } in db.pending_swaps()
     {
-        let swap = format!("swap ({}: {} -> {})", address, from_token, to_token);
+        let swap = format!("swap ({address}: {from_token} -> {to_token})");
 
         let status = rpc_client.get_signature_status_with_commitment_and_history(
             &signature,
@@ -1478,7 +1467,7 @@ async fn process_sync_swaps(
         match status {
             Some(result) => {
                 if result.is_ok() {
-                    println!("Pending {} confirmed: {}", swap, signature);
+                    println!("Pending {swap} confirmed: {signature}");
                     let result = rpc_client.get_transaction_with_config(
                         &signature,
                         RpcTransactionConfig {
@@ -1540,8 +1529,7 @@ async fn process_sync_swaps(
                             .next()
                             .unwrap_or_else(|| {
                                 panic!(
-                                    "pre_token_balance not found for owner {}, mint {}",
-                                    address, mint
+                                    "pre_token_balance not found for owner {address}, mint {mint}"
                                 )
                             });
                         let post = post_token_balances
@@ -1565,8 +1553,7 @@ async fn process_sync_swaps(
                             .next()
                             .unwrap_or_else(|| {
                                 panic!(
-                                    "post_token_balance not found for owner {},  mint {}",
-                                    address, mint
+                                    "post_token_balance not found for owner {address},  mint {mint}"
                                 )
                             });
                         (post as i64 - pre as i64).unsigned_abs()
@@ -1591,15 +1578,15 @@ async fn process_sync_swaps(
                     );
                     db.confirm_swap(signature, when, from_amount, to_amount)?;
                     notifier.send(&msg).await;
-                    println!("{}", msg);
+                    println!("{msg}");
                 } else {
-                    println!("Pending {} failed with {:?}: {}", swap, result, signature);
+                    println!("Pending {swap} failed with {result:?}: {signature}");
                     db.cancel_swap(signature)?;
                 }
             }
             None => {
                 if block_height > last_valid_block_height {
-                    println!("Pending {} cancelled: {}", swap, signature);
+                    println!("Pending {swap} cancelled: {signature}");
                     db.cancel_swap(signature)?;
                 } else {
                     println!(
@@ -1646,7 +1633,7 @@ fn liquidity_token_ui_amount(
                         liquidity_token.format_ui_amount(liquidity_ui_amount),
                         match current_apr {
                             Some(current_apr) if include_apr =>
-                                format!(", {:.2}% APR", current_apr),
+                                format!(", {current_apr:.2}% APR"),
                             _ => String::new(),
                         }
                     ),
@@ -1753,7 +1740,7 @@ async fn println_lot(
         notifier.send(&msg).await;
     }
 
-    println!("{}", msg);
+    println!("{msg}");
 }
 
 fn format_disposed_lot(
@@ -1836,8 +1823,7 @@ async fn process_account_add(
 
             let when = block_time.map(|dt| dt.date()).or_else(|| {
                 println!(
-                    "Block time not available for slot {}, using `--when` argument instead",
-                    slot
+                    "Block time not available for slot {slot}, using `--when` argument instead"
                 );
                 when
             });
@@ -1875,7 +1861,7 @@ async fn process_account_add(
         }
     };
 
-    println!("Adding {} (token: {})", address, token);
+    println!("Adding {address} (token: {token})");
 
     let current_price = token.get_current_price(rpc_client).await?;
     let decimal_price = match price {
@@ -2085,7 +2071,7 @@ async fn process_account_list(
                 liquidity_ui_amount,
                 account.description
             );
-            println!("{}", msg);
+            println!("{msg}");
             if ui_amount > 0.01 {
                 notifier.send(&msg).await;
             }
@@ -2236,13 +2222,13 @@ async fn process_account_list(
                 );
 
                 if show_all_disposed_lots {
-                    println!("{}", msg);
+                    println!("{msg}");
                 } else {
                     if disposed_lots.len() > 5 && i == disposed_lots.len().saturating_sub(5) {
                         println!("...");
                     }
                     if i > disposed_lots.len().saturating_sub(5) {
-                        println!("{}", msg);
+                        println!("{msg}");
                     }
                 }
 
@@ -2391,16 +2377,16 @@ async fn process_account_list(
             println!();
         }
         if pending_deposits > 0 {
-            println!("  !! Pending deposits: {}", pending_deposits);
+            println!("  !! Pending deposits: {pending_deposits}");
         }
         if pending_withdrawals > 0 {
-            println!("  !! Pending withdrawals: {}", pending_withdrawals);
+            println!("  !! Pending withdrawals: {pending_withdrawals}");
         }
         if pending_transfers > 0 {
-            println!("  !! Pending transfers: {}", pending_transfers);
+            println!("  !! Pending transfers: {pending_transfers}");
         }
         if pending_swaps > 0 {
-            println!("  !! Pending swaps: {}", pending_swaps);
+            println!("  !! Pending swaps: {pending_swaps}");
         }
     }
 
@@ -2417,7 +2403,7 @@ async fn process_account_xls(
     let mut workbook = Workbook::create(outfile);
 
     let mut sheet = workbook.create_sheet(&match filter_by_year {
-        Some(year) => format!("Disposed in {}", year),
+        Some(year) => format!("Disposed in {year}"),
         None => "Disposed".into(),
     });
     sheet.add_column(Column { width: 12. });
@@ -2605,14 +2591,14 @@ async fn process_account_xls(
     };
     if let Some(year) = filter_by_year {
         write_holdings(
-            format!("Holdings acquired in {}", year),
+            format!("Holdings acquired in {year}"),
             current_holdings_by_year_rows,
         )?;
     }
     write_holdings("All Holdings".to_string(), current_holdings_rows)?;
 
     workbook.close()?;
-    println!("Wrote {}", outfile);
+    println!("Wrote {outfile}");
 
     Ok(())
 }
@@ -2647,16 +2633,16 @@ async fn process_account_merge<T: Signers>(
         let from_account = rpc_client
             .get_account_with_commitment(&from_address, rpc_client.commitment())?
             .value
-            .ok_or_else(|| format!("From account, {}, does not exist", from_address))?;
+            .ok_or_else(|| format!("From account, {from_address}, does not exist"))?;
 
         let from_tracked_account = db
             .get_account(from_address, token)
-            .ok_or_else(|| format!("Account, {}, is not tracked", from_address))?;
+            .ok_or_else(|| format!("Account, {from_address}, is not tracked"))?;
 
         let into_account = rpc_client
             .get_account_with_commitment(&into_address, rpc_client.commitment())?
             .value
-            .ok_or_else(|| format!("From account, {}, does not exist", into_address))?;
+            .ok_or_else(|| format!("From account, {into_address}, does not exist"))?;
 
         let authority_account = if from_address == authority_address {
             from_account.clone()
@@ -2665,7 +2651,7 @@ async fn process_account_merge<T: Signers>(
                 .get_account_with_commitment(&authority_address, rpc_client.commitment())?
                 .value
                 .ok_or_else(|| {
-                    format!("Authority account, {}, does not exist", authority_address)
+                    format!("Authority account, {authority_address}, does not exist")
                 })?
         };
 
@@ -2693,9 +2679,9 @@ async fn process_account_merge<T: Signers>(
             .into());
         };
 
-        println!("Merging {} into {}", from_address, into_address);
+        println!("Merging {from_address} into {into_address}");
         if from_address != authority_address {
-            println!("Authority address: {}", authority_address);
+            println!("Authority address: {authority_address}");
         }
 
         let mut message = Message::new(&instructions, Some(&authority_address));
@@ -2707,12 +2693,12 @@ async fn process_account_merge<T: Signers>(
         let mut transaction = Transaction::new_unsigned(message);
         let simulation_result = rpc_client.simulate_transaction(&transaction)?.value;
         if simulation_result.err.is_some() {
-            return Err(format!("Simulation failure: {:?}", simulation_result).into());
+            return Err(format!("Simulation failure: {simulation_result:?}").into());
         }
 
         transaction.try_sign(&signers, recent_blockhash)?;
         let signature = transaction.signatures[0];
-        println!("Transaction signature: {}", signature);
+        println!("Transaction signature: {signature}");
 
         db.record_transfer(
             signature,
@@ -2758,11 +2744,11 @@ async fn process_account_sweep<T: Signers>(
     let from_account = rpc_client
         .get_account_with_commitment(&from_address, rpc_client.commitment())?
         .value
-        .ok_or_else(|| format!("Account, {}, does not exist", from_address))?;
+        .ok_or_else(|| format!("Account, {from_address}, does not exist"))?;
 
     let from_tracked_account = db
         .get_account(from_address, token)
-        .ok_or_else(|| format!("Account, {}, is not tracked", from_address))?;
+        .ok_or_else(|| format!("Account, {from_address}, is not tracked"))?;
 
     if from_account.lamports < from_tracked_account.last_update_balance {
         return Err(format!(
@@ -2782,8 +2768,7 @@ async fn process_account_sweep<T: Signers>(
             .value
             .ok_or_else(|| {
                 format!(
-                    "Authority account, {}, does not exist",
-                    from_authority_address
+                    "Authority account, {from_authority_address}, does not exist"
                 )
             })?
     };
@@ -2793,7 +2778,7 @@ async fn process_account_sweep<T: Signers>(
     let (to_address, via_transitory_stake) = if let Some(to_address) = to_address {
         let _ = db
             .get_account(to_address, token)
-            .ok_or_else(|| format!("Account {} ({}) does not exist", to_address, token))?;
+            .ok_or_else(|| format!("Account {to_address} ({token}) does not exist"))?;
         (to_address, None)
     } else {
         let transitory_stake_account = Keypair::new();
@@ -2899,18 +2884,18 @@ async fn process_account_sweep<T: Signers>(
             token.ui_amount(sweep_amount)
         );
         return if no_sweep_ok {
-            println!("{}", msg);
+            println!("{msg}");
             Ok(())
         } else {
             Err(msg.into())
         };
     }
 
-    println!("From address: {}", from_address);
+    println!("From address: {from_address}");
     if from_address != from_authority_address {
-        println!("Authority address: {}", from_authority_address);
+        println!("Authority address: {from_authority_address}");
     }
-    println!("Destination address: {}", to_address);
+    println!("Destination address: {to_address}");
     println!(
         "Sweep amount: {}{}",
         token.symbol(),
@@ -2979,7 +2964,7 @@ async fn process_account_sweep<T: Signers>(
     let mut transaction = Transaction::new_unsigned(message);
     let simulation_result = rpc_client.simulate_transaction(&transaction)?.value;
     if simulation_result.err.is_some() {
-        return Err(format!("Simulation failure: {:?}", simulation_result).into());
+        return Err(format!("Simulation failure: {simulation_result:?}").into());
     }
 
     transaction.partial_sign(&signers, recent_blockhash);
@@ -2993,7 +2978,7 @@ async fn process_account_sweep<T: Signers>(
     }
 
     let signature = transaction.signatures[0];
-    println!("Transaction signature: {}", signature);
+    println!("Transaction signature: {signature}");
 
     let epoch = rpc_client.get_epoch_info()?.epoch;
     if let Some((transitory_stake_account, ..)) = via_transitory_stake.as_ref() {
@@ -3018,12 +3003,12 @@ async fn process_account_sweep<T: Signers>(
         }
         return Err("Sweep failed".into());
     }
-    println!("Confirming sweep: {}", signature);
+    println!("Confirming sweep: {signature}");
     let when = get_signature_date(rpc_client, signature).await?;
     db.confirm_transfer(signature, when)?;
 
     notifier.send(&msg).await;
-    println!("{}", msg);
+    println!("{msg}");
     Ok(())
 }
 
@@ -3059,7 +3044,7 @@ async fn process_account_split<T: Signers>(
 
     let from_account = db
         .get_account(from_address, MaybeToken::SOL())
-        .ok_or_else(|| format!("SOL account does not exist for {}", from_address))?;
+        .ok_or_else(|| format!("SOL account does not exist for {from_address}"))?;
 
     let (split_all, amount, description) = match amount {
         None => (
@@ -3098,7 +3083,7 @@ async fn process_account_split<T: Signers>(
     transaction.message.recent_blockhash = recent_blockhash;
     let simulation_result = rpc_client.simulate_transaction(&transaction)?.value;
     if simulation_result.err.is_some() {
-        return Err(format!("Simulation failure: {:?}", simulation_result).into());
+        return Err(format!("Simulation failure: {simulation_result:?}").into());
     }
 
     println!(
@@ -3112,7 +3097,7 @@ async fn process_account_split<T: Signers>(
     transaction.try_sign(&[&into_keypair], recent_blockhash)?;
 
     let signature = transaction.signatures[0];
-    println!("Transaction signature: {}", signature);
+    println!("Transaction signature: {signature}");
 
     let epoch = rpc_client.get_epoch_info()?.epoch;
     db.add_account(TrackedAccount {
@@ -3141,7 +3126,7 @@ async fn process_account_split<T: Signers>(
         db.remove_account(into_keypair.pubkey(), MaybeToken::SOL())?;
         return Err("Split failed".into());
     }
-    println!("Split confirmed: {}", signature);
+    println!("Split confirmed: {signature}");
     let when = get_signature_date(rpc_client, signature).await?;
     db.confirm_transfer(signature, when)?;
     if split_all {
@@ -3186,7 +3171,7 @@ async fn process_account_redelegate<T: Signers>(
 
     let from_account = db
         .get_account(from_address, MaybeToken::SOL())
-        .ok_or_else(|| format!("SOL account does not exist for {}", from_address))?;
+        .ok_or_else(|| format!("SOL account does not exist for {from_address}"))?;
 
     if from_account.last_update_balance < minimum_stake_account_balance * 2 {
         return Err(format!(
@@ -3211,7 +3196,7 @@ async fn process_account_redelegate<T: Signers>(
     transaction.message.recent_blockhash = recent_blockhash;
     let simulation_result = rpc_client.simulate_transaction(&transaction)?.value;
     if simulation_result.err.is_some() {
-        return Err(format!("Simulation failure: {:?}", simulation_result).into());
+        return Err(format!("Simulation failure: {simulation_result:?}").into());
     }
 
     println!(
@@ -3225,7 +3210,7 @@ async fn process_account_redelegate<T: Signers>(
     transaction.try_sign(&[&into_keypair], recent_blockhash)?;
 
     let signature = transaction.signatures[0];
-    println!("Transaction signature: {}", signature);
+    println!("Transaction signature: {signature}");
 
     let epoch = rpc_client.get_epoch_info()?.epoch;
     db.add_account(TrackedAccount {
@@ -3254,7 +3239,7 @@ async fn process_account_redelegate<T: Signers>(
         db.remove_account(into_keypair.pubkey(), MaybeToken::SOL())?;
         return Err("Redelegate failed".into());
     }
-    println!("Redelegation confirmed: {}", signature);
+    println!("Redelegation confirmed: {signature}");
     let when = get_signature_date(rpc_client, signature).await?;
     db.confirm_transfer(signature, when)?;
 
@@ -3276,7 +3261,7 @@ async fn process_account_sync(
             // sync all tokens for the given address...
             let accounts = db.get_account_tokens(address);
             if accounts.is_empty() {
-                return Err(format!("{} does not exist", address).into());
+                return Err(format!("{address} does not exist").into());
             }
             accounts
         }
@@ -3308,7 +3293,7 @@ async fn process_account_sync(
         + 1;
 
     if start_epoch > stop_epoch {
-        println!("Processed up to epoch {}", stop_epoch);
+        println!("Processed up to epoch {stop_epoch}");
         return Ok(());
     }
 
@@ -3321,9 +3306,9 @@ async fn process_account_sync(
 
     // Look for inflationary rewards
     for epoch in start_epoch..=stop_epoch {
-        let msg = format!("Processing epoch: {}", epoch);
+        let msg = format!("Processing epoch: {epoch}");
         notifier.send(&msg).await;
-        println!("{}", msg);
+        println!("{msg}");
 
         let inflation_rewards = rpc_client.get_inflation_reward(&addresses, Some(epoch))?;
 
@@ -3356,7 +3341,7 @@ async fn process_account_sync(
 
                 let msg = format!("{}: {}", account.address, account.description);
                 notifier.send(&msg).await;
-                println!("{}", msg);
+                println!("{msg}");
 
                 println_lot(
                     account.token,
@@ -3413,7 +3398,7 @@ async fn process_account_sync(
                 account.address, account.token, account.description
             );
             notifier.send(&msg).await;
-            println!("{}", msg);
+            println!("{msg}");
 
             println_lot(
                 account.token,
@@ -3456,7 +3441,7 @@ async fn process_account_wrap<T: Signers>(
 
     let from_account = db
         .get_account(address, sol)
-        .ok_or_else(|| format!("SOL account does not exist for {}", address))?;
+        .ok_or_else(|| format!("SOL account does not exist for {address}"))?;
     let amount = amount.unwrap_or(from_account.last_update_balance);
 
     if let Some(if_source_balance_exceeds) = if_source_balance_exceeds {
@@ -3522,7 +3507,7 @@ async fn process_account_wrap<T: Signers>(
     transaction.message.recent_blockhash = recent_blockhash;
     let simulation_result = rpc_client.simulate_transaction(&transaction)?.value;
     if simulation_result.err.is_some() {
-        return Err(format!("Simulation failure: {:?}", simulation_result).into());
+        return Err(format!("Simulation failure: {simulation_result:?}").into());
     }
 
     println!("Wrapping {} for {}", wsol.ui_amount(amount), address);
@@ -3530,7 +3515,7 @@ async fn process_account_wrap<T: Signers>(
     transaction.try_sign(&signers, recent_blockhash)?;
 
     let signature = transaction.signatures[0];
-    println!("Transaction signature: {}", signature);
+    println!("Transaction signature: {signature}");
 
     db.record_transfer(
         signature,
@@ -3548,7 +3533,7 @@ async fn process_account_wrap<T: Signers>(
         db.cancel_transfer(signature)?;
         return Err("Wrap failed".into());
     }
-    println!("Wrap confirmed: {}", signature);
+    println!("Wrap confirmed: {signature}");
     let when = get_signature_date(rpc_client, signature).await?;
     db.confirm_transfer(signature, when)?;
 
@@ -3571,12 +3556,12 @@ async fn process_account_unwrap<T: Signers>(
 
     let from_account = db
         .get_account(address, wsol.into())
-        .ok_or_else(|| format!("Wrapped SOL account does not exist for {}", address))?;
+        .ok_or_else(|| format!("Wrapped SOL account does not exist for {address}"))?;
     let amount = amount.unwrap_or(from_account.last_update_balance);
 
     let _to_account = db
         .get_account(address, sol)
-        .ok_or_else(|| format!("SOL account does not exist for {}", address))?;
+        .ok_or_else(|| format!("SOL account does not exist for {address}"))?;
 
     let (recent_blockhash, last_valid_block_height) =
         rpc_client.get_latest_blockhash_with_commitment(rpc_client.commitment())?;
@@ -3617,7 +3602,7 @@ async fn process_account_unwrap<T: Signers>(
     transaction.message.recent_blockhash = recent_blockhash;
     let simulation_result = rpc_client.simulate_transaction(&transaction)?.value;
     if simulation_result.err.is_some() {
-        return Err(format!("Simulation failure: {:?}", simulation_result).into());
+        return Err(format!("Simulation failure: {simulation_result:?}").into());
     }
 
     println!("Unwrapping {} for {}", wsol.ui_amount(amount), address);
@@ -3626,7 +3611,7 @@ async fn process_account_unwrap<T: Signers>(
     transaction.try_sign(&[&ephemeral_token_account], recent_blockhash)?;
 
     let signature = transaction.signatures[0];
-    println!("Transaction signature: {}", signature);
+    println!("Transaction signature: {signature}");
 
     db.record_transfer(
         signature,
@@ -3644,7 +3629,7 @@ async fn process_account_unwrap<T: Signers>(
         db.cancel_transfer(signature)?;
         return Err("Wrap failed".into());
     }
-    println!("Unwrap confirmed: {}", signature);
+    println!("Unwrap confirmed: {signature}");
     let when = get_signature_date(rpc_client, signature).await?;
     db.confirm_transfer(signature, when)?;
 
@@ -3669,17 +3654,17 @@ async fn process_account_sync_pending_transfers(
         match status {
             Some(result) => {
                 if result.is_ok() {
-                    println!("Pending transfer confirmed: {}", signature);
+                    println!("Pending transfer confirmed: {signature}");
                     let when = get_signature_date(rpc_client, signature).await?;
                     db.confirm_transfer(signature, when)?;
                 } else {
-                    println!("Pending transfer failed with {:?}: {}", result, signature);
+                    println!("Pending transfer failed with {result:?}: {signature}");
                     db.cancel_transfer(signature)?;
                 }
             }
             None => {
                 if block_height > last_valid_block_height {
-                    println!("Pending transfer cancelled: {}", signature);
+                    println!("Pending transfer cancelled: {signature}");
                     db.cancel_transfer(signature)?;
                 } else {
                     println!(
@@ -3735,16 +3720,14 @@ async fn process_account_sync_sweep(
 
     if sweep_stake_activation.state != StakeActivationState::Active {
         println!(
-            "Sweep stake account is not active, unable to continue: {:?}",
-            sweep_stake_activation
+            "Sweep stake account is not active, unable to continue: {sweep_stake_activation:?}"
         );
         return Ok(());
     }
 
     for transitory_sweep_stake_address in transitory_sweep_stake_addresses {
         println!(
-            "Considering merging transitory stake {}",
-            transitory_sweep_stake_address
+            "Considering merging transitory stake {transitory_sweep_stake_address}"
         );
 
         let transitory_sweep_stake_account = match rpc_client
@@ -3753,14 +3736,13 @@ async fn process_account_sync_sweep(
         {
             None => {
                 println!(
-                    "  Transitory sweep stake account does not exist, removing it: {}",
-                    transitory_sweep_stake_address
+                    "  Transitory sweep stake account does not exist, removing it: {transitory_sweep_stake_address}"
                 );
 
                 if let Some(tracked_account) = db.get_account(transitory_sweep_stake_address, token)
                 {
                     if tracked_account.last_update_balance > 0 || !tracked_account.lots.is_empty() {
-                        panic!("Tracked account is not empty: {:?}", tracked_account);
+                        panic!("Tracked account is not empty: {tracked_account:?}");
 
                         // TODO: Simulate a transfer to move the lots into the sweep account in
                         // this case?
@@ -3787,15 +3769,13 @@ async fn process_account_sync_sweep(
             .get_stake_activation(transitory_sweep_stake_address, None)
             .map_err(|err| {
                 format!(
-                    "Unable to get activation information for transient stake: {}: {}",
-                    transitory_sweep_stake_address, err
+                    "Unable to get activation information for transient stake: {transitory_sweep_stake_address}: {err}"
                 )
             })?;
 
         if transient_stake_activation.state != StakeActivationState::Active {
             println!(
-                "  Transitory stake is not yet active: {:?}",
-                transient_stake_activation
+                "  Transitory stake is not yet active: {transient_stake_activation:?}"
             );
             continue;
         }
@@ -3805,8 +3785,7 @@ async fn process_account_sync_sweep(
             &transitory_sweep_stake_account,
         )? {
             println!(
-                "  Transitory stake credits observed mismatch with sweep stake account: {}",
-                transitory_sweep_stake_address
+                "  Transitory stake credits observed mismatch with sweep stake account: {transitory_sweep_stake_address}"
             );
             continue;
         }
@@ -3828,13 +3807,13 @@ async fn process_account_sync_sweep(
         transaction.message.recent_blockhash = recent_blockhash;
         let simulation_result = rpc_client.simulate_transaction(&transaction)?.value;
         if simulation_result.err.is_some() {
-            return Err(format!("Simulation failure: {:?}", simulation_result).into());
+            return Err(format!("Simulation failure: {simulation_result:?}").into());
         }
 
         transaction.sign(&[&sweep_stake_account_authority_keypair], recent_blockhash);
 
         let signature = transaction.signatures[0];
-        println!("Transaction signature: {}", signature);
+        println!("Transaction signature: {signature}");
         db.record_transfer(
             signature,
             last_valid_block_height,
@@ -3891,7 +3870,7 @@ fn is_tax_rate(s: String) -> Result<(), String> {
     if (0. ..=1.).contains(&f) {
         Ok(())
     } else {
-        Err(format!("rate must be in the range [0,1]: {}", f))
+        Err(format!("rate must be in the range [0,1]: {f}"))
     }
 }
 
@@ -5427,17 +5406,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let (price, verbose_msg) = if let Some(when) = when {
                 (
                     token.get_historical_price(&rpc_client, when).await?,
-                    format!("Historical {} price on {}", token, when),
+                    format!("Historical {token} price on {when}"),
                 )
             } else {
                 (
                     token.get_current_price(&rpc_client).await?,
-                    format!("Current {} price", token),
+                    format!("Current {token} price"),
                 )
             };
 
             if verbose {
-                println!("{}: ${:.2}", verbose_msg, price);
+                println!("{verbose_msg}: ${price:.2}");
 
                 if let Some(liquidity_token) = token.liquidity_token() {
                     let rate = token.get_current_liquidity_token_rate(&rpc_client).await?;
@@ -5449,14 +5428,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     );
                 }
             } else {
-                println!("{:.2}", price);
+                println!("{price:.2}");
             }
         }
         ("sync", Some(arg_matches)) => {
             let max_epochs_to_process = value_t!(arg_matches, "max_epochs_to_process", u64).ok();
             process_sync_swaps(&mut db, &rpc_client, &notifier).await?;
             for (exchange, exchange_credentials) in db.get_configured_exchanges() {
-                println!("Synchronizing {:?}...", exchange);
+                println!("Synchronizing {exchange:?}...");
                 let exchange_client = exchange_client_new(exchange, exchange_credentials)?;
                 process_sync_exchange(
                     &mut db,
@@ -5515,10 +5494,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     org_id,
                     bucket,
                 }) => {
-                    println!("Url: {}", url);
+                    println!("Url: {url}");
                     println!("Token: ********");
-                    println!("Organization Id: {}", org_id);
-                    println!("Bucket: {}", bucket);
+                    println!("Organization Id: {org_id}");
+                    println!("Bucket: {bucket}");
                 }
             },
             ("set", Some(arg_matches)) => {
@@ -5537,7 +5516,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ("swap", Some(arg_matches)) => {
                     let lot_number1 = value_t_or_exit!(arg_matches, "lot_number1", usize);
                     let lot_number2 = value_t_or_exit!(arg_matches, "lot_number2", usize);
-                    println!("Swapping lots {} and {}", lot_number1, lot_number2);
+                    println!("Swapping lots {lot_number1} and {lot_number2}");
                     db.swap_lots(lot_number1, lot_number2)?;
                 }
                 ("move", Some(arg_matches)) => {
@@ -5552,7 +5531,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let confirm = arg_matches.is_present("confirm");
 
                     if !confirm {
-                        println!("Add --confirm to remove lot {}", lot_number);
+                        println!("Add --confirm to remove lot {lot_number}");
                         return Ok(());
                     }
                     db.delete_lot(lot_number)?;
@@ -5646,18 +5625,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 let account = db
                     .get_account(address, token)
-                    .ok_or_else(|| format!("Account {} ({}) does not exist", address, token))?;
+                    .ok_or_else(|| format!("Account {address} ({token}) does not exist"))?;
                 if !account.lots.is_empty() {
-                    return Err(format!("Account {} ({}) is not empty", address, token).into());
+                    return Err(format!("Account {address} ({token}) is not empty").into());
                 }
 
                 if !confirm {
-                    println!("Add --confirm to remove {} ({})", address, token);
+                    println!("Add --confirm to remove {address} ({token})");
                     return Ok(());
                 }
 
                 db.remove_account(address, token)?;
-                println!("Removed {} ({})", address, token);
+                println!("Removed {address} ({token})");
             }
             ("set-sweep-stake-account", Some(arg_matches)) => {
                 let address = pubkey_of(arg_matches, "address").unwrap();
@@ -5683,7 +5662,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     stake_authority,
                 })?;
 
-                println!("Sweep stake account set to {}", address);
+                println!("Sweep stake account set to {address}");
             }
             ("set-tax-rate", Some(arg_matches)) => {
                 let income = arg_matches
@@ -5702,9 +5681,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .parse::<f64>()
                     .unwrap();
 
-                println!("Income tax rate: {:.2}", income);
-                println!("Short-term gain rate: {:.2}", short_term_gain);
-                println!("Long-term gain rate: {:.2}", long_term_gain);
+                println!("Income tax rate: {income:.2}");
+                println!("Short-term gain rate: {short_term_gain:.2}");
+                println!("Long-term gain rate: {long_term_gain:.2}");
 
                 db.set_tax_rate(TaxRate {
                     income,
@@ -5721,8 +5700,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 } else {
                     signer_of(arg_matches, "from_address", &mut wallet_manager).map_err(|err| {
                         format!(
-                            "Authority not found, consider using the `--by` argument): {}",
-                            err
+                            "Authority not found, consider using the `--by` argument): {err}"
                         )
                     })?
                 };
@@ -5783,8 +5761,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 } else {
                     signer_of(arg_matches, "from_address", &mut wallet_manager).map_err(|err| {
                         format!(
-                            "Authority not found, consider using the `--by` argument): {}",
-                            err
+                            "Authority not found, consider using the `--by` argument): {err}"
                         )
                     })?
                 };
@@ -5820,8 +5797,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 } else {
                     signer_of(arg_matches, "from_address", &mut wallet_manager).map_err(|err| {
                         format!(
-                            "Authority not found, consider using the `--by` argument): {}",
-                            err
+                            "Authority not found, consider using the `--by` argument): {err}"
                         )
                     })?
                 };
@@ -5873,8 +5849,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 } else {
                     signer_of(arg_matches, "address", &mut wallet_manager).map_err(|err| {
                         format!(
-                            "Authority not found, consider using the `--by` argument): {}",
-                            err
+                            "Authority not found, consider using the `--by` argument): {err}"
                         )
                     })?
                 };
@@ -5910,8 +5885,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 } else {
                     signer_of(arg_matches, "address", &mut wallet_manager).map_err(|err| {
                         format!(
-                            "Authority not found, consider using the `--by` argument): {}",
-                            err
+                            "Authority not found, consider using the `--by` argument): {err}"
                         )
                     })?
                 };
@@ -6046,7 +6020,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .map(|t| t.into())
                     .or_else(|_| {
                         collateral_token.liquidity_token().ok_or_else(|| {
-                            format!("{} is not a collateral token", collateral_token)
+                            format!("{collateral_token} is not a collateral token")
                         })
                     })?;
                 let liquidity_amount = match arg_matches.value_of("amount").unwrap() {
@@ -6057,8 +6031,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let (signer, address) = signer_of(arg_matches, "from", &mut wallet_manager)
                     .map_err(|err| {
                         format!(
-                            "Authority not found, consider using the `--by` argument): {}",
-                            err
+                            "Authority not found, consider using the `--by` argument): {err}"
                         )
                     })?;
                 let address = address.expect("address");
@@ -6085,7 +6058,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let collateral_token = value_t_or_exit!(arg_matches, "collateral_token", Token);
                 let liquidity_token = collateral_token
                     .liquidity_token()
-                    .ok_or_else(|| format!("{} is not a collateral token", collateral_token))?;
+                    .ok_or_else(|| format!("{collateral_token} is not a collateral token"))?;
                 let liquidity_amount = match arg_matches.value_of("amount").unwrap() {
                     "ALL" => None,
                     amount => Some(liquidity_token.amount(amount.parse().unwrap())),
@@ -6093,8 +6066,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let (signer, address) =
                     signer_of(arg_matches, "to", &mut wallet_manager).map_err(|err| {
                         format!(
-                            "Authority not found, consider using the `--by` argument): {}",
-                            err
+                            "Authority not found, consider using the `--by` argument): {err}"
                         )
                     })?;
                 let address = address.expect("address");
@@ -6124,7 +6096,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let exchange_client = || {
                 let exchange_credentials = db
                     .get_exchange_credentials(exchange)
-                    .ok_or_else(|| format!("No API key set for {:?}", exchange))?;
+                    .ok_or_else(|| format!("No API key set for {exchange:?}"))?;
                 exchange_client_new(exchange, exchange_credentials)
             };
 
@@ -6132,7 +6104,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ("address", Some(arg_matches)) => {
                     let token = MaybeToken::from(value_t!(arg_matches, "token", Token).ok());
                     let deposit_address = exchange_client()?.deposit_address(token).await?;
-                    println!("{} deposit address: {}", token, deposit_address);
+                    println!("{token} deposit address: {deposit_address}");
                 }
                 ("pending-deposits", Some(arg_matches)) => {
                     let quiet = arg_matches.is_present("quiet");
@@ -6223,11 +6195,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         );
 
                         if available_only {
-                            println!("{} {}", coin, available_balance);
+                            println!("{coin} {available_balance}");
                         } else if total_only {
-                            println!("{} {}", coin, total_balance);
+                            println!("{coin} {total_balance}");
                         } else {
-                            println!("{} {:>20} {:>20}", coin, total_balance, available_balance);
+                            println!("{coin} {total_balance:>20} {available_balance:>20}");
                         }
                     };
 
@@ -6281,8 +6253,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     } else {
                         signer_of(arg_matches, "from", &mut wallet_manager).map_err(|err| {
                             format!(
-                                "Authority not found, consider using the `--by` argument): {}",
-                                err
+                                "Authority not found, consider using the `--by` argument): {err}"
                             )
                         })?
                     };
@@ -6511,7 +6482,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let lending_info = exchange_client
                         .get_lending_info(&coin)
                         .await?
-                        .ok_or_else(|| format!("Lending not available for {}", coin))?;
+                        .ok_or_else(|| format!("Lending not available for {coin}"))?;
 
                     if let Some(amount) = amount {
                         let amount = if available {
@@ -6538,8 +6509,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 lending_info.estimate_rate,
                             );
                             exchange_client.submit_lending_offer(&coin, amount).await?;
-                            println!("{}", msg);
-                            notifier.send(&format!("{:?}: {}", exchange, msg)).await;
+                            println!("{msg}");
+                            notifier.send(&format!("{exchange:?}: {msg}")).await;
                         } else {
                             println!(
                                 "Lending offer unchanged: {}",
@@ -6611,14 +6582,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             subaccount,
                             ..
                         }) => {
-                            println!("API Key: {}", api_key);
+                            println!("API Key: {api_key}");
                             println!("Secret: ********");
                             if let Some(subaccount) = subaccount {
-                                println!("Subaccount: {}", subaccount);
+                                println!("Subaccount: {subaccount}");
                             }
                         }
                         None => {
-                            println!("No API key set for {:?}", exchange);
+                            println!("No API key set for {exchange:?}");
                         }
                     },
                     ("set", Some(arg_matches)) => {
@@ -6633,11 +6604,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 subaccount,
                             },
                         )?;
-                        println!("API key set for {:?}", exchange);
+                        println!("API key set for {exchange:?}");
                     }
                     ("clear", Some(_arg_matches)) => {
                         db.clear_exchange_credentials(exchange)?;
-                        println!("Cleared API key for {:?}", exchange);
+                        println!("Cleared API key for {exchange:?}");
                     }
                     _ => unreachable!(),
                 },

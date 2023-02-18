@@ -105,7 +105,7 @@ impl TulipLending {
 
         let _ = rpc_client
             .get_token_account_balance(&ata)
-            .map_err(|err| format!("Could not get balance for account {}: {}", address, err))?;
+            .map_err(|err| format!("Could not get balance for account {address}: {err}"))?;
 
         Ok(ata)
     }
@@ -327,7 +327,7 @@ where
         } else {
             (
                 TulipLending::get_ata(rpc_client, address, &liquidity_token.mint())
-                    .map_err(|err| format!("Liquidity token may not exist: {}", err))?,
+                    .map_err(|err| format!("Liquidity token may not exist: {err}"))?,
                 vec![],
                 vec![],
             )

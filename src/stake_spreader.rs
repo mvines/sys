@@ -32,7 +32,7 @@ fn get_epoch_commissions(
     epoch: Epoch,
 ) -> Result<BTreeMap<Pubkey, u8>, Box<dyn std::error::Error>> {
     if epoch > epoch_info.epoch {
-        return Err(format!("Future epoch, {}, requested", epoch).into());
+        return Err(format!("Future epoch, {epoch}, requested").into());
     }
 
     let first_slot_in_epoch = epoch_info
@@ -75,8 +75,7 @@ fn get_epoch_commissions(
                         continue;
                     }
                 return Err(format!(
-                    "Failed to fetch the block for slot {}: {:?}",
-                    first_block_in_epoch, err
+                    "Failed to fetch the block for slot {first_block_in_epoch}: {err:?}"
                 )
                 .into());
             }
@@ -166,20 +165,18 @@ pub async fn run<T: Signers>(
         // If a longer history is desired, epoch credits must be extracted from the validator vote
         // accounts directory instead of using the `get_vote_accounts` RPC method...
         return Err(format!(
-            "Epoch history must be less than {}",
-            MAX_RPC_VOTE_ACCOUNT_INFO_EPOCH_CREDITS_HISTORY
+            "Epoch history must be less than {MAX_RPC_VOTE_ACCOUNT_INFO_EPOCH_CREDITS_HISTORY}"
         )
         .into());
     }
 
     for epoch in current_epoch.saturating_sub(epoch_history)..current_epoch {
         if !db.contains_validator_credit_scores(epoch) {
-            println!("Computing validator credit scores for epoch {}", epoch);
+            println!("Computing validator credit scores for epoch {epoch}");
             let validator_credit_scores =
                 get_validator_credit_scores(rpc_client, &epoch_info, epoch).map_err(|err| {
                     format!(
-                        "Failed to get validator credit score for epoch {}: {:?}",
-                        epoch, err
+                        "Failed to get validator credit score for epoch {epoch}: {err:?}"
                     )
                 })?;
             db.set_validator_credit_scores(epoch, validator_credit_scores)?;
@@ -350,7 +347,7 @@ pub async fn run<T: Signers>(
             let from_address = *merge_candidate_address;
             let into_address = **peer_address;
 
-            println!("Merging {} into {}", from_address, into_address);
+            println!("Merging {from_address} into {into_address}");
             merged_from_stake_account_adddresses.insert(from_address);
             merged_into_stake_account_adddresses.insert(into_address);
 
@@ -360,7 +357,7 @@ pub async fn run<T: Signers>(
                 .get_account_with_commitment(&authority_address, rpc_client.commitment())?
                 .value
                 .ok_or_else(|| {
-                    format!("Authority account, {}, does not exist", authority_address)
+                    format!("Authority account, {authority_address}, does not exist")
                 })?;
 
             let mut message = Message::new(
@@ -380,13 +377,13 @@ pub async fn run<T: Signers>(
             let mut transaction = Transaction::new_unsigned(message);
             let simulation_result = rpc_client.simulate_transaction(&transaction)?.value;
             if simulation_result.err.is_some() {
-                eprintln!("Simulation failure: {:?}", simulation_result);
+                eprintln!("Simulation failure: {simulation_result:?}");
                 continue;
             }
 
             transaction.try_sign(&signers, recent_blockhash)?;
             let signature = transaction.signatures[0];
-            println!("Transaction signature: {}", signature);
+            println!("Transaction signature: {signature}");
 
             db.record_transfer(
                 signature,
@@ -475,7 +472,7 @@ pub async fn run<T: Signers>(
 
     println!("Selected validator vote accounts:");
     for selected_validator in &selected_validators {
-        println!("* {}", selected_validator);
+        println!("* {selected_validator}");
     }
 
     // Determine the amount of stake for each validator
@@ -570,11 +567,10 @@ pub async fn run<T: Signers>(
     for (vote_account_address, new_stake) in redelegations {
         for (stake_account_address, _) in new_stake {
             let sai = stake_accounts.get(&stake_account_address).unwrap();
-            assert!(!sai.busy, "{} should not be busy", stake_account_address);
+            assert!(!sai.busy, "{stake_account_address} should not be busy");
             if sai.vote_account_address == Pubkey::default() {
                 println!(
-                    "Delegate {} to {}",
-                    stake_account_address, vote_account_address
+                    "Delegate {stake_account_address} to {vote_account_address}"
                 );
 
                 let (recent_blockhash, last_valid_block_height) =
@@ -593,14 +589,14 @@ pub async fn run<T: Signers>(
                 let mut transaction = Transaction::new_unsigned(message);
                 let simulation_result = rpc_client.simulate_transaction(&transaction)?.value;
                 if simulation_result.err.is_some() {
-                    eprintln!("Simulation failure: {:?}", simulation_result);
+                    eprintln!("Simulation failure: {simulation_result:?}");
                     transaction_failures += 1;
                     continue;
                 }
 
                 transaction.try_sign(&signers, recent_blockhash)?;
                 let signature = transaction.signatures[0];
-                println!("Transaction signature: {}", signature);
+                println!("Transaction signature: {signature}");
 
                 if !send_transaction_until_expired(
                     rpc_client,
@@ -623,7 +619,7 @@ pub async fn run<T: Signers>(
                 )
                 .await
                 .unwrap_or_else(|err| {
-                    eprintln!("Redelegation failed: {:?}", err);
+                    eprintln!("Redelegation failed: {err:?}");
                     transaction_failures += 1;
                 });
             }
@@ -632,11 +628,10 @@ pub async fn run<T: Signers>(
 
     if transaction_failures > 0 {
         let msg = format!(
-            "stake spreader: {} transactions failed",
-            transaction_failures
+            "stake spreader: {transaction_failures} transactions failed"
         );
         notifier.send(&msg).await;
-        println!("{}", msg);
+        println!("{msg}");
     }
 
     Ok(())

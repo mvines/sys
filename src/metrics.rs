@@ -35,7 +35,7 @@ pub async fn send(config: Option<MetricsConfig>) {
                 influxdb_client::TimestampOptions::FromPoint,
             )
             .await
-            .unwrap_or_else(|err| eprintln!("Failed to send metrics: {:?}", err));
+            .unwrap_or_else(|err| eprintln!("Failed to send metrics: {err:?}"));
     }
 }
 

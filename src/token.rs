@@ -191,7 +191,7 @@ pub fn is_valid_token_or_sol(value: String) -> Result<(), String> {
 pub fn is_valid_token(value: String) -> Result<(), String> {
     Token::from_str(&value)
         .map(|_| ())
-        .map_err(|_| format!("Invalid token {}", value))
+        .map_err(|_| format!("Invalid token {value}"))
 }
 
 #[derive(Debug, PartialEq, Eq, Hash, Copy, Clone, Serialize, Deserialize, Ord, PartialOrd)]

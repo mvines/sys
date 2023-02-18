@@ -19,7 +19,7 @@ impl Notifier {
             let data = json!({ "text": msg });
 
             if let Err(err) = self.client.post(slack_webhook).json(&data).send().await {
-                eprintln!("Failed to send Slack message: {:?}", err);
+                eprintln!("Failed to send Slack message: {err:?}");
             }
         }
     }

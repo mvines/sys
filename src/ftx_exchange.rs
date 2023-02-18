@@ -27,7 +27,7 @@ fn binance_to_ftx_pair(binance_pair: &str) -> Result<&'static str, Box<dyn std::
     match binance_pair {
         "SOLUSDT" => Ok("SOL/USDT"),
         "SOLUSD" => Ok("SOL/USD"),
-        _ => Err(format!("Unknown pair: {}", binance_pair).into()),
+        _ => Err(format!("Unknown pair: {binance_pair}").into()),
     }
 }
 
@@ -35,7 +35,7 @@ fn ftx_to_binance_pair(ftx_pair: &str) -> Result<&'static str, Box<dyn std::erro
     match ftx_pair {
         "SOL/USDT" => Ok("SOLUSDT"),
         "SOL/USD" => Ok("SOLUSD"),
-        _ => Err(format!("Unknown pair: {}", ftx_pair).into()),
+        _ => Err(format!("Unknown pair: {ftx_pair}").into()),
     }
 }
 
@@ -67,7 +67,7 @@ impl ExchangeClient for FtxExchangeClient {
             .rest
             .request(GetWalletBalances {})
             .await
-            .map_err(|err| format!("{:?}", err))?;
+            .map_err(|err| format!("{err:?}"))?;
 
         let mut balances = HashMap::new();
         for coin in ["SOL"].iter().chain(USD_COINS) {
@@ -95,7 +95,7 @@ impl ExchangeClient for FtxExchangeClient {
                     end_time: None,
                 })
                 .await
-                .map_err(|err| format!("{:?}", err))?
+                .map_err(|err| format!("{err:?}"))?
                 .into_iter()
                 .filter_map(|wd| {
                     if wd.status == ftx::rest::DepositStatus::Confirmed {
@@ -121,7 +121,7 @@ impl ExchangeClient for FtxExchangeClient {
                 end_time: None,
             })
             .await
-            .map_err(|err| format!("{:?}", err))?
+            .map_err(|err| format!("{err:?}"))?
             .into_iter()
             .filter_map(|wd| {
                 if let Some(address) = wd.address {
@@ -229,7 +229,7 @@ impl ExchangeClient for FtxExchangeClient {
             .rest
             .request(GetMarket::new(ftx_pair))
             .await
-            .map_err(|err| format!("{:?}", err))?;
+            .map_err(|err| format!("{err:?}"))?;
 
         match format {
             MarketInfoFormat::All => {
@@ -259,7 +259,7 @@ impl ExchangeClient for FtxExchangeClient {
                 }
             }
             MarketInfoFormat::Weighted24hAveragePrice => {
-                println!("{:.4}", weighted_24h_avg_price);
+                println!("{weighted_24h_avg_price:.4}");
             }
         }
 
@@ -272,7 +272,7 @@ impl ExchangeClient for FtxExchangeClient {
             .rest
             .request(GetMarket::new(pair))
             .await
-            .map_err(|err| format!("{:?}", err))?;
+            .map_err(|err| format!("{err:?}"))?;
 
         Ok(BidAsk {
             bid_price: market.bid.unwrap().to_f64().unwrap(),
@@ -307,7 +307,7 @@ impl ExchangeClient for FtxExchangeClient {
                 reject_on_price_band: false,
             })
             .await
-            .map_err(|err| format!("{:?}", err))?;
+            .map_err(|err| format!("{err:?}"))?;
 
         Ok(order_info.id.to_string())
     }
@@ -323,9 +323,9 @@ impl ExchangeClient for FtxExchangeClient {
             .rest
             .request(CancelOrder::new(order_id))
             .await
-            .map_err(|err| format!("{:?}", err))?;
+            .map_err(|err| format!("{err:?}"))?;
 
-        println!("Result: {}", result);
+        println!("Result: {result}");
         Ok(())
     }
 
@@ -340,7 +340,7 @@ impl ExchangeClient for FtxExchangeClient {
             .rest
             .request(GetOrder::new(order_id))
             .await
-            .map_err(|err| format!("{:?}", err))?;
+            .map_err(|err| format!("{err:?}"))?;
 
         let side = match order_info.side {
             FtxOrderSide::Sell => OrderSide::Sell,
@@ -363,7 +363,7 @@ impl ExchangeClient for FtxExchangeClient {
                 ..GetFills::default()
             })
             .await
-            .map_err(|err| format!("{:?}", err))?;
+            .map_err(|err| format!("{err:?}"))?;
 
         let mut fee = 0.;
         let mut fee_currency = None;
@@ -399,7 +399,7 @@ impl ExchangeClient for FtxExchangeClient {
             .unwrap()
             .into_iter()
             .find(|rate| rate.coin == coin)
-            .ok_or_else(|| format!("No lending rate available for {}", coin))?;
+            .ok_or_else(|| format!("No lending rate available for {coin}"))?;
 
         const HOURS_PER_YEAR: f64 = 24. * 356.;
         Ok(lending_info
@@ -442,16 +442,15 @@ impl ExchangeClient for FtxExchangeClient {
             }
         };
 
-        println!("Start date: {}", start_time);
-        println!("End date:   {}", end_time);
+        println!("Start date: {start_time}");
+        println!("End date:   {end_time}");
 
         let mut all_proceeds = HashMap::<String, f64>::default();
         while start_time < end_time {
             let page_end_time = std::cmp::min(start_time + one_day, end_time);
 
             println!(
-                "(Fetching history from {} to {})",
-                start_time, page_end_time
+                "(Fetching history from {start_time} to {page_end_time})"
             );
 
             let lending_history = self
