@@ -68,7 +68,7 @@ pub(crate) fn today() -> NaiveDate {
 fn is_long_term_cap_gain(acquisition: NaiveDate, disposal: Option<NaiveDate>) -> bool {
     let disposal = disposal.unwrap_or_else(today);
     let hold_time = disposal - acquisition;
-    hold_time >= chrono::Duration::days(356)
+    hold_time >= chrono::Duration::days(365)
 }
 
 fn format_order_side(order_side: OrderSide) -> String {
