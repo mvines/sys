@@ -175,9 +175,7 @@ pub async fn run<T: Signers>(
             println!("Computing validator credit scores for epoch {epoch}");
             let validator_credit_scores =
                 get_validator_credit_scores(rpc_client, &epoch_info, epoch).map_err(|err| {
-                    format!(
-                        "Failed to get validator credit score for epoch {epoch}: {err:?}"
-                    )
+                    format!("Failed to get validator credit score for epoch {epoch}: {err:?}")
                 })?;
             db.set_validator_credit_scores(epoch, validator_credit_scores)?;
         }
@@ -356,9 +354,7 @@ pub async fn run<T: Signers>(
             let authority_account = rpc_client
                 .get_account_with_commitment(&authority_address, rpc_client.commitment())?
                 .value
-                .ok_or_else(|| {
-                    format!("Authority account, {authority_address}, does not exist")
-                })?;
+                .ok_or_else(|| format!("Authority account, {authority_address}, does not exist"))?;
 
             let mut message = Message::new(
                 &solana_sdk::stake::instruction::merge(
@@ -569,9 +565,7 @@ pub async fn run<T: Signers>(
             let sai = stake_accounts.get(&stake_account_address).unwrap();
             assert!(!sai.busy, "{stake_account_address} should not be busy");
             if sai.vote_account_address == Pubkey::default() {
-                println!(
-                    "Delegate {stake_account_address} to {vote_account_address}"
-                );
+                println!("Delegate {stake_account_address} to {vote_account_address}");
 
                 let (recent_blockhash, last_valid_block_height) =
                     rpc_client.get_latest_blockhash_with_commitment(rpc_client.commitment())?;
@@ -627,9 +621,7 @@ pub async fn run<T: Signers>(
     }
 
     if transaction_failures > 0 {
-        let msg = format!(
-            "stake spreader: {transaction_failures} transactions failed"
-        );
+        let msg = format!("stake spreader: {transaction_failures} transactions failed");
         notifier.send(&msg).await;
         println!("{msg}");
     }

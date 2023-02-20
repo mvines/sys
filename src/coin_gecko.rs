@@ -48,9 +48,7 @@ fn token_to_coin(token: &MaybeToken) -> Result<&'static str, Box<dyn std::error:
 
 pub async fn get_current_price(token: &MaybeToken) -> Result<Decimal, Box<dyn std::error::Error>> {
     let coin = token_to_coin(token)?;
-    let url = format!(
-        "https://api.coingecko.com/api/v3/simple/price?ids={coin}&vs_currencies=usd"
-    );
+    let url = format!("https://api.coingecko.com/api/v3/simple/price?ids={coin}&vs_currencies=usd");
 
     #[derive(Debug, Serialize, Deserialize)]
     struct Coins {

@@ -449,9 +449,7 @@ impl ExchangeClient for FtxExchangeClient {
         while start_time < end_time {
             let page_end_time = std::cmp::min(start_time + one_day, end_time);
 
-            println!(
-                "(Fetching history from {start_time} to {page_end_time})"
-            );
+            println!("(Fetching history from {start_time} to {page_end_time})");
 
             let lending_history = self
                 .rest

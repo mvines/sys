@@ -68,10 +68,11 @@ impl ExchangeClient for KrakenExchangeClient {
                     .vol
                     .parse::<f64>()
                     .map_err(|err| format!("Invalid open order `vol` field: {err}"))?;
-                let price =
-                    open_order.descr.price.parse::<f64>().map_err(|err| {
-                        format!("Invalid open order `descr.price` field: {err}")
-                    })?;
+                let price = open_order
+                    .descr
+                    .price
+                    .parse::<f64>()
+                    .map_err(|err| format!("Invalid open order `descr.price` field: {err}"))?;
                 if open_order.descr.orderside == "sell" {
                     in_order_sol += vol
                 } else {

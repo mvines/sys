@@ -622,9 +622,7 @@ async fn process_exchange_deposit<T: Signers>(
         println!("Authority address: {authority_address}");
     }
     println!("Amount: {}{}", token.symbol(), token.ui_amount(amount));
-    println!(
-        "{token} {exchange:?} deposit address: {deposit_address}"
-    );
+    println!("{token} {exchange:?} deposit address: {deposit_address}");
 
     let mut message = Message::new(&instructions, Some(&authority_address));
     message.recent_blockhash = recent_blockhash;
@@ -893,9 +891,8 @@ async fn process_exchange_sell(
 
     if let Some(price_floor) = price_floor {
         if price < price_floor {
-            let msg = format!(
-                "Proposed price, ${price}, is beneath price floor. Adjusting upwards"
-            );
+            let msg =
+                format!("Proposed price, ${price}, is beneath price floor. Adjusting upwards");
             price = price_floor;
             println!("{msg}");
             notifier.send(&format!("{exchange:?}: {msg}")).await;
@@ -917,9 +914,8 @@ async fn process_exchange_sell(
                 None
             }
         }) {
-            let msg = format!(
-                "Order declined because price, ${price}, is less than basis ${basis}",
-            );
+            let msg =
+                format!("Order declined because price, ${price}, is less than basis ${basis}",);
             println!("{msg}");
             notifier.send(&format!("{exchange:?}: {msg}")).await;
             return Ok(());
@@ -1151,10 +1147,9 @@ async fn process_jup_swap<T: Signers>(
 
             let simulation_result = rpc_client.simulate_transaction(&transaction)?.value;
             if simulation_result.err.is_some() {
-                return Err(format!(
-                    "Setup transaction simulation failure: {simulation_result:?}"
-                )
-                .into());
+                return Err(
+                    format!("Setup transaction simulation failure: {simulation_result:?}").into(),
+                );
             }
 
             transaction.try_sign(&signers, recent_blockhash)?;
@@ -1174,10 +1169,9 @@ async fn process_jup_swap<T: Signers>(
 
         let simulation_result = rpc_client.simulate_transaction(&transaction)?.value;
         if simulation_result.err.is_some() {
-            return Err(format!(
-                "Swap transaction simulation failure: {simulation_result:?}"
-            )
-            .into());
+            return Err(
+                format!("Swap transaction simulation failure: {simulation_result:?}").into(),
+            );
         }
 
         transaction.try_sign(&signers, recent_blockhash)?;
@@ -1632,8 +1626,7 @@ fn liquidity_token_ui_amount(
                         " [{}{}]",
                         liquidity_token.format_ui_amount(liquidity_ui_amount),
                         match current_apr {
-                            Some(current_apr) if include_apr =>
-                                format!(", {current_apr:.2}% APR"),
+                            Some(current_apr) if include_apr => format!(", {current_apr:.2}% APR"),
                             _ => String::new(),
                         }
                     ),
@@ -2650,9 +2643,7 @@ async fn process_account_merge<T: Signers>(
             rpc_client
                 .get_account_with_commitment(&authority_address, rpc_client.commitment())?
                 .value
-                .ok_or_else(|| {
-                    format!("Authority account, {authority_address}, does not exist")
-                })?
+                .ok_or_else(|| format!("Authority account, {authority_address}, does not exist"))?
         };
 
         let amount = from_tracked_account.last_update_balance;
@@ -2766,11 +2757,7 @@ async fn process_account_sweep<T: Signers>(
         rpc_client
             .get_account_with_commitment(&from_authority_address, rpc_client.commitment())?
             .value
-            .ok_or_else(|| {
-                format!(
-                    "Authority account, {from_authority_address}, does not exist"
-                )
-            })?
+            .ok_or_else(|| format!("Authority account, {from_authority_address}, does not exist"))?
     };
 
     let mut num_transaction_signatures = 1; // from_address_authority
@@ -3726,9 +3713,7 @@ async fn process_account_sync_sweep(
     }
 
     for transitory_sweep_stake_address in transitory_sweep_stake_addresses {
-        println!(
-            "Considering merging transitory stake {transitory_sweep_stake_address}"
-        );
+        println!("Considering merging transitory stake {transitory_sweep_stake_address}");
 
         let transitory_sweep_stake_account = match rpc_client
             .get_account_with_commitment(&transitory_sweep_stake_address, rpc_client.commitment())?
@@ -3774,9 +3759,7 @@ async fn process_account_sync_sweep(
             })?;
 
         if transient_stake_activation.state != StakeActivationState::Active {
-            println!(
-                "  Transitory stake is not yet active: {transient_stake_activation:?}"
-            );
+            println!("  Transitory stake is not yet active: {transient_stake_activation:?}");
             continue;
         }
 
@@ -5699,9 +5682,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     signer_of(arg_matches, "by", &mut wallet_manager)?
                 } else {
                     signer_of(arg_matches, "from_address", &mut wallet_manager).map_err(|err| {
-                        format!(
-                            "Authority not found, consider using the `--by` argument): {err}"
-                        )
+                        format!("Authority not found, consider using the `--by` argument): {err}")
                     })?
                 };
 
@@ -5760,9 +5741,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     signer_of(arg_matches, "by", &mut wallet_manager)?
                 } else {
                     signer_of(arg_matches, "from_address", &mut wallet_manager).map_err(|err| {
-                        format!(
-                            "Authority not found, consider using the `--by` argument): {err}"
-                        )
+                        format!("Authority not found, consider using the `--by` argument): {err}")
                     })?
                 };
 
@@ -5796,9 +5775,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     signer_of(arg_matches, "by", &mut wallet_manager)?
                 } else {
                     signer_of(arg_matches, "from_address", &mut wallet_manager).map_err(|err| {
-                        format!(
-                            "Authority not found, consider using the `--by` argument): {err}"
-                        )
+                        format!("Authority not found, consider using the `--by` argument): {err}")
                     })?
                 };
 
@@ -5848,9 +5825,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     signer_of(arg_matches, "by", &mut wallet_manager)?
                 } else {
                     signer_of(arg_matches, "address", &mut wallet_manager).map_err(|err| {
-                        format!(
-                            "Authority not found, consider using the `--by` argument): {err}"
-                        )
+                        format!("Authority not found, consider using the `--by` argument): {err}")
                     })?
                 };
 
@@ -5884,9 +5859,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     signer_of(arg_matches, "by", &mut wallet_manager)?
                 } else {
                     signer_of(arg_matches, "address", &mut wallet_manager).map_err(|err| {
-                        format!(
-                            "Authority not found, consider using the `--by` argument): {err}"
-                        )
+                        format!("Authority not found, consider using the `--by` argument): {err}")
                     })?
                 };
 
@@ -6019,9 +5992,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let liquidity_token = value_t!(arg_matches, "liquidity_token", Token)
                     .map(|t| t.into())
                     .or_else(|_| {
-                        collateral_token.liquidity_token().ok_or_else(|| {
-                            format!("{collateral_token} is not a collateral token")
-                        })
+                        collateral_token
+                            .liquidity_token()
+                            .ok_or_else(|| format!("{collateral_token} is not a collateral token"))
                     })?;
                 let liquidity_amount = match arg_matches.value_of("amount").unwrap() {
                     "ALL" => None,
@@ -6030,9 +6003,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 let (signer, address) = signer_of(arg_matches, "from", &mut wallet_manager)
                     .map_err(|err| {
-                        format!(
-                            "Authority not found, consider using the `--by` argument): {err}"
-                        )
+                        format!("Authority not found, consider using the `--by` argument): {err}")
                     })?;
                 let address = address.expect("address");
                 let signer = signer.expect("signer");
@@ -6065,9 +6036,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 };
                 let (signer, address) =
                     signer_of(arg_matches, "to", &mut wallet_manager).map_err(|err| {
-                        format!(
-                            "Authority not found, consider using the `--by` argument): {err}"
-                        )
+                        format!("Authority not found, consider using the `--by` argument): {err}")
                     })?;
                 let address = address.expect("address");
                 let signer = signer.expect("signer");

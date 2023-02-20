@@ -46,9 +46,7 @@ pub fn send_transaction_until_expired(
                 }
             },
             Err(err) => {
-                println!(
-                    "Unable to determine if transaction was confirmed: {err:?}"
-                );
+                println!("Unable to determine if transaction was confirmed: {err:?}");
             }
         }
 

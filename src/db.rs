@@ -681,10 +681,7 @@ impl DbData {
         let bytes = fs::read(filename)?;
 
         serde_json::from_str(std::str::from_utf8(&bytes).expect("invalid utf8")).map_err(|err| {
-            io::Error::new(
-                io::ErrorKind::Other,
-                format!("JSON parse failed: {err:?}"),
-            )
+            io::Error::new(io::ErrorKind::Other, format!("JSON parse failed: {err:?}"))
         })
     }
 
