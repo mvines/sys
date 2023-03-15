@@ -3,6 +3,8 @@ use {
     chrono::prelude::*,
     rust_decimal::prelude::*,
     serde::{Deserialize, Serialize},
+    std::{collections::HashMap, sync::Arc},
+    tokio::sync::RwLock,
 };
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -72,7 +74,22 @@ pub async fn get_historical_price(
     when: NaiveDate,
     token: &MaybeToken,
 ) -> Result<Decimal, Box<dyn std::error::Error>> {
+    type Data = HashMap<(NaiveDate, String), Decimal>;
+    lazy_static::lazy_static! {
+        static ref PRICE_CACHE: Arc<RwLock<Data>> = Arc::new(RwLock::new(HashMap::new()));
+    }
+
     let coin = token_to_coin(token)?;
+
+    if let Ok(pc) = PRICE_CACHE.try_read() {
+        let key = (when, coin.to_string());
+        if pc.contains_key(&key) {
+            return pc
+                .get(&key)
+                .ok_or_else(|| format!("Cache is invalid for {when}").into())
+                .copied();
+        }
+    }
 
     let url = format!(
         "https://api.coingecko.com/api/v3/coins/{}/history?date={}-{}-{}&localization=false",
@@ -82,11 +99,20 @@ pub async fn get_historical_price(
         when.year()
     );
 
-    reqwest::get(url)
+    match reqwest::get(url)
         .await?
         .json::<HistoryResponse>()
         .await?
         .market_data
-        .ok_or_else(|| format!("Market data not available for {when}").into())
-        .map(|market_data| Decimal::from_f64(market_data.current_price.usd).unwrap())
+    {
+        Some(market_data) => {
+            let price = market_data.current_price.usd;
+            PRICE_CACHE
+                .write()
+                .await
+                .insert((when, coin.to_string()), Decimal::from_f64(price).unwrap());
+            Ok(Decimal::from_f64(price).unwrap())
+        }
+        None => Err(format!("Market data not available for {when}").into()),
+    }
 }
