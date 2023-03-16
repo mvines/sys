@@ -71,7 +71,7 @@ pub async fn get_current_price(token: &MaybeToken) -> Result<Decimal, Box<dyn st
                 stsol: Option<CurrencyList>,
             }
 
-            let coins = dbg!(reqwest::get(url).await?.json::<Coins>().await?);
+            let coins = reqwest::get(url).await?.json::<Coins>().await?;
 
             coins
                 .solana
