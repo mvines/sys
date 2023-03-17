@@ -23,7 +23,10 @@ impl ExchangeClient for CoinbaseExchangeClient {
         while let Some(account_result) = accounts.next().await {
             for account in account_result.unwrap() {
                 if let Ok(id) = coinbase_rs::Uuid::from_str(&account.id) {
-                    if token.name() == account.currency.code {
+                    if token.name() == account.currency.code
+                        && account.primary
+                        && account.allow_deposits
+                    {
                         let addresses = self.client.list_addresses(&id);
                         pin_mut!(addresses);
 
