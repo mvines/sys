@@ -3,7 +3,7 @@ use {
     chrono::prelude::*,
     rust_decimal::prelude::*,
     serde::{Deserialize, Serialize},
-    std::{collections::HashMap, sync::Arc},
+    std::{collections::HashMap, env, sync::Arc},
     tokio::sync::RwLock,
 };
 
@@ -48,6 +48,15 @@ fn token_to_coin(token: &MaybeToken) -> Result<&'static str, Box<dyn std::error:
     Ok(coin)
 }
 
+fn get_cg_pro_api_key() -> (&'static str, String) {
+    let (maybe_pro, x_cg_pro_api_key) = match env::var("CG_PRO_API_KEY") {
+        Err(_) => ("", "".into()),
+        Ok(x_cg_pro_api_key) => ("pro-", format!("&x_cg_pro_api_key={x_cg_pro_api_key}")),
+    };
+
+    (maybe_pro, x_cg_pro_api_key)
+}
+
 pub async fn get_current_price(token: &MaybeToken) -> Result<Decimal, Box<dyn std::error::Error>> {
     type CurrentPriceCache = HashMap<MaybeToken, Decimal>;
     lazy_static::lazy_static! {
@@ -59,8 +68,10 @@ pub async fn get_current_price(token: &MaybeToken) -> Result<Decimal, Box<dyn st
         Some(price) => Ok(*price),
         None => {
             let coin = token_to_coin(token)?;
+
+            let (maybe_pro, x_cg_pro_api_key) = get_cg_pro_api_key();
             let url = format!(
-                "https://api.coingecko.com/api/v3/simple/price?ids={coin}&vs_currencies=usd"
+                "https://{maybe_pro}api.coingecko.com/api/v3/simple/price?ids={coin}&vs_currencies=usd{x_cg_pro_api_key}"
             );
 
             #[derive(Debug, Serialize, Deserialize)]
@@ -103,8 +114,10 @@ pub async fn get_historical_price(
         Some(price) => Ok(*price),
         None => {
             let coin = token_to_coin(token)?;
+
+            let (maybe_pro, x_cg_pro_api_key) = get_cg_pro_api_key();
             let url = format!(
-                "https://api.coingecko.com/api/v3/coins/{}/history?date={}-{}-{}&localization=false",
+                "https://{maybe_pro}api.coingecko.com/api/v3/coins/{}/history?date={}-{}-{}&localization=false{x_cg_pro_api_key}",
                 coin,
                 when.day(),
                 when.month(),
