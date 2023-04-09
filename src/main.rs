@@ -129,42 +129,6 @@ fn add_exchange_deposit_address_to_db(
     Ok(())
 }
 
-async fn verify_exchange_balance(
-    db: &mut Db,
-    exchange: Exchange,
-    exchange_client: &dyn ExchangeClient,
-    token: MaybeToken,
-    deposit_address: &Pubkey,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let exchange_account = db
-        .get_account(*deposit_address, token)
-        .expect("exchange deposit address does not exist in database");
-    let total_lot_balance =
-        token.ui_amount(exchange_account.lots.iter().map(|lot| lot.amount).sum());
-
-    if total_lot_balance > 0. {
-        let exchange_balance = {
-            let balances = exchange_client.balances().await?;
-            balances
-                .get(&token.to_string())
-                .cloned()
-                .unwrap_or_default()
-                .total
-        };
-
-        if exchange_balance < total_lot_balance {
-            eprintln!(
-                "Error: {0:?} {4} actual balance is less than local database amount. Actual {3}{1}, expected {3}{2}",
-                exchange, exchange_balance, total_lot_balance,
-                token.symbol(),
-                token,
-            );
-            exit(1);
-        }
-    }
-    Ok(())
-}
-
 async fn process_sync_exchange(
     db: &mut Db,
     exchange: Exchange,
@@ -172,16 +136,6 @@ async fn process_sync_exchange(
     rpc_client: &RpcClient,
     notifier: &Notifier,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // Validate current exchange SOL balance against local database
-    {
-        let token = MaybeToken::SOL();
-
-        let deposit_address = exchange_client.deposit_address(token).await?;
-        add_exchange_deposit_address_to_db(db, exchange, token, deposit_address, rpc_client)?;
-
-        verify_exchange_balance(db, exchange, exchange_client, token, &deposit_address).await?;
-    }
-
     let recent_deposits = exchange_client.recent_deposits().await?;
     let recent_withdrawals = exchange_client.recent_withdrawals().await?;
 
