@@ -1433,12 +1433,12 @@ async fn process_sync_swaps(
 
                     let transaction_status_meta = result.transaction.meta.unwrap();
 
-                    let pre_token_balances = transaction_status_meta
-                        .pre_token_balances
-                        .unwrap_or_default();
-                    let post_token_balances = transaction_status_meta
-                        .post_token_balances
-                        .unwrap_or_default();
+                    let pre_token_balances =
+                        Option::<Vec<_>>::from(transaction_status_meta.pre_token_balances)
+                            .unwrap_or_default();
+                    let post_token_balances =
+                        Option::<Vec<_>>::from(transaction_status_meta.post_token_balances)
+                            .unwrap_or_default();
 
                     let token_amount_diff = |owner: Pubkey, mint: Pubkey| {
                         let owner = owner.to_string();
@@ -1460,7 +1460,7 @@ async fn process_sync_swaps(
                             .iter()
                             .filter_map(|token_balance| {
                                 if (num_token_balances == 1
-                                    || token_balance.owner.as_ref() == Some(&owner))
+                                    || token_balance.owner.as_ref() == Some(&owner).into())
                                     && token_balance.mint == mint
                                 {
                                     Some(
@@ -1484,7 +1484,7 @@ async fn process_sync_swaps(
                             .iter()
                             .filter_map(|token_balance| {
                                 if (num_token_balances == 1
-                                    || token_balance.owner.as_ref() == Some(&owner))
+                                    || token_balance.owner.as_ref() == Some(&owner).into())
                                     && token_balance.mint == mint
                                 {
                                     Some(

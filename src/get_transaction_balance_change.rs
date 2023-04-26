@@ -56,8 +56,7 @@ pub fn get_transaction_balance_change(
 
     let pre_amount = if address_is_token {
         u64::from_str(
-            &meta
-                .pre_token_balances
+            &Option::<Vec<_>>::from(meta.pre_token_balances)
                 .unwrap()
                 .iter()
                 .find(|ptb| ptb.account_index as usize == account_index)
@@ -72,8 +71,7 @@ pub fn get_transaction_balance_change(
 
     let post_amount = if address_is_token {
         u64::from_str(
-            &meta
-                .post_token_balances
+            &Option::<Vec<_>>::from(meta.post_token_balances)
                 .unwrap()
                 .iter()
                 .find(|ptb| ptb.account_index as usize == account_index)
