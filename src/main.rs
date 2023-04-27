@@ -946,7 +946,7 @@ async fn process_jup_quote(
     from_token: Token,
     to_token: Token,
     ui_amount: f64,
-    slippage_bps: f64,
+    slippage_bps: u64,
     max_quotes: usize,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let quotes = jup_ag::quote(
@@ -975,7 +975,7 @@ async fn process_jup_swap<T: Signers>(
     from_token: Token,
     to_token: Token,
     ui_amount: Option<f64>,
-    slippage_bps: f64,
+    slippage_bps: u64,
     lot_selection_method: LotSelectionMethod,
     signers: T,
     existing_signature: Option<Signature>,
@@ -1080,46 +1080,22 @@ async fn process_jup_swap<T: Signers>(
         }
 
         println!("Generating swap transaction...");
-        let swap_transactions = jup_ag::swap_with_config(
+        let mut transaction = jup_ag::swap_with_config(
             quote.clone(),
             address,
             jup_ag::SwapConfig {
                 wrap_unwrap_sol: Some(false),
-                as_legacy_transaction: true,
+                as_legacy_transaction: None,
                 compute_unit_price_micro_lamports,
                 ..jup_ag::SwapConfig::default()
             },
         )
-        .await?;
-        if swap_transactions.cleanup.is_some() {
-            return Err("swap cleanup transaction not supported".into());
-        }
-        if let Some(mut transaction) = swap_transactions.setup {
-            let (recent_blockhash, last_valid_block_height) =
-                rpc_client.get_latest_blockhash_with_commitment(rpc_client.commitment())?;
-            transaction.message.recent_blockhash = recent_blockhash;
-
-            let simulation_result = rpc_client.simulate_transaction(&transaction)?.value;
-            if simulation_result.err.is_some() {
-                return Err(
-                    format!("Setup transaction simulation failure: {simulation_result:?}").into(),
-                );
-            }
-
-            transaction.try_sign(&signers, recent_blockhash)?;
-            let signature = transaction.signatures[0];
-            println!("Setup transaction signature: {signature}");
-
-            if !send_transaction_until_expired(rpc_client, &transaction, last_valid_block_height) {
-                return Err("Setup transaction failed".into());
-            }
-        }
-
-        let mut transaction = swap_transactions.swap;
+        .await?
+        .swap_transaction;
 
         let (recent_blockhash, last_valid_block_height) =
             rpc_client.get_latest_blockhash_with_commitment(rpc_client.commitment())?;
-        transaction.message.recent_blockhash = recent_blockhash;
+        transaction.message.set_recent_blockhash(recent_blockhash);
 
         let simulation_result = rpc_client.simulate_transaction(&transaction)?.value;
         if simulation_result.err.is_some() {
@@ -1128,9 +1104,11 @@ async fn process_jup_swap<T: Signers>(
             );
         }
 
-        transaction.try_sign(&signers, recent_blockhash)?;
-        let signature = transaction.signatures[0];
-        println!("Transaction signature: {signature}");
+        assert_eq!(transaction.signatures[0], Signature::default());
+        let signatures = signers.try_sign_message(&transaction.message.serialize())?;
+        assert_eq!(signatures.len(), 1);
+        let signature = signatures[0];
+        transaction.signatures[0] = signature;
 
         if db.get_account(address, to_token.into()).is_none() {
             let epoch = rpc_client.get_epoch_info()?.epoch;
@@ -1420,6 +1398,7 @@ async fn process_sync_swaps(
                         &signature,
                         RpcTransactionConfig {
                             commitment: Some(rpc_client.commitment()),
+                            max_supported_transaction_version: Some(0),
                             ..RpcTransactionConfig::default()
                         },
                     )?;
@@ -4572,13 +4551,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .help("Amount of the source token to swap"),
                         )
                         .arg(
-                            Arg::with_name("slippage")
+                            Arg::with_name("slippage_bps")
                                 .long("slippage")
-                                .value_name("PERCENT")
+                                .value_name("BPS")
                                 .takes_value(true)
-                                .validator(is_parsable::<f64>)
-                                .default_value("1")
-                                .help("Maximum slippage percent"),
+                                .validator(is_parsable::<u64>)
+                                .default_value("100")
+                                .help("Maximum slippage bps"),
                         )
                         .arg(
                             Arg::with_name("max_quotes")
@@ -4625,13 +4604,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .help("Amount of tokens to swap; accepts ALL keyword"),
                         )
                         .arg(
-                            Arg::with_name("slippage")
+                            Arg::with_name("slippage_bps")
                                 .long("slippage")
-                                .value_name("PERCENT")
+                                .value_name("BPS")
                                 .takes_value(true)
-                                .validator(is_parsable::<f64>)
-                                .default_value("1")
-                                .help("Maximum slippage percent"),
+                                .validator(is_parsable::<u64>)
+                                .default_value("100")
+                                .help("Maximum slippage bps"),
                         )
                         .arg(
                             Arg::with_name("if_from_balance_exceeds")
@@ -5839,7 +5818,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let from_token = value_t_or_exit!(arg_matches, "from_token", Token);
                 let to_token = value_t_or_exit!(arg_matches, "to_token", Token);
                 let ui_amount = value_t_or_exit!(arg_matches, "amount", f64);
-                let slippage_bps = value_t_or_exit!(arg_matches, "slippage", f64) * 100.;
+                let slippage_bps = value_t_or_exit!(arg_matches, "slippage_bps", u64);
                 let max_quotes = value_t!(arg_matches, "max_quotes", usize)
                     .ok()
                     .unwrap_or(usize::MAX);
@@ -5855,7 +5834,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "ALL" => None,
                     ui_amount => Some(ui_amount.parse::<f64>().unwrap()),
                 };
-                let slippage_bps = value_t_or_exit!(arg_matches, "slippage", f64) * 100.;
+                let slippage_bps = value_t_or_exit!(arg_matches, "slippage_bps", u64);
                 let signer = signer.expect("signer");
                 let address = address.expect("address");
                 let lot_selection_method =

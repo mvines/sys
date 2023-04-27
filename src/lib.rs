@@ -1,4 +1,4 @@
-use {solana_client::rpc_client::RpcClient, solana_sdk::transaction::Transaction};
+use solana_client::rpc_client::{RpcClient, SerializableTransaction};
 
 pub mod binance_exchange;
 pub mod coin_gecko;
@@ -22,14 +22,14 @@ pub fn app_version() -> String {
 
 pub fn send_transaction_until_expired(
     rpc_client: &RpcClient,
-    transaction: &Transaction,
+    transaction: &impl SerializableTransaction,
     last_valid_block_height: u64,
 ) -> bool {
     loop {
         // `send_and_confirm_transaction_with_spinner()` fails with
         // "Transaction simulation failed: This transaction has already been processed" (AlreadyProcessed)
         // if the transaction was already processed by an earlier iteration of this loop
-        match rpc_client.confirm_transaction(&transaction.signatures[0]) {
+        match rpc_client.confirm_transaction(transaction.get_signature()) {
             Ok(true) => return true,
             Ok(false) => match rpc_client.get_epoch_info() {
                 Ok(epoch_info) => {
