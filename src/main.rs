@@ -1926,6 +1926,12 @@ async fn process_account_list(
     let mut held_tokens =
         BTreeMap::<MaybeToken, (/*price*/ Option<Decimal>, /*amount*/ u64)>::default();
 
+    // hacky: display a unified rate if the long and short term rate is equal
+    let unified_tax_rate = db
+        .get_tax_rate()
+        .map(|tax_rate| tax_rate.short_term_gain - tax_rate.long_term_gain <= f64::EPSILON)
+        .unwrap_or(false);
+
     let mut accounts = db.get_accounts();
     accounts.sort_by(|a, b| {
         let mut result = a.last_update_balance.cmp(&b.last_update_balance);
@@ -2104,11 +2110,22 @@ async fn process_account_list(
                 }
 
                 println!(
-                    "    Value: ${}, income: ${}, unrealized short-term cap gain: ${}, unrealized long-term cap gain: ${}",
+                    "    Value: ${}, income: ${}, {}",
                     account_current_value.separated_string_with_fixed_place(2),
                     account_income.separated_string_with_fixed_place(2),
-                    account_unrealized_short_term_gain.separated_string_with_fixed_place(2),
-                    account_unrealized_long_term_gain.separated_string_with_fixed_place(2),
+                    if unified_tax_rate {
+                        format!(
+                            "unrealized cap gain: ${}",
+                            (account_unrealized_short_term_gain
+                                + account_unrealized_long_term_gain)
+                                .separated_string_with_fixed_place(2)
+                        )
+                    } else {
+                        format!("unrealized short-term cap gain: ${}, unrealized long-term cap gain: ${}",
+                            account_unrealized_short_term_gain.separated_string_with_fixed_place(2),
+                            account_unrealized_long_term_gain.separated_string_with_fixed_place(2)
+                        )
+                    }
                 );
 
                 total_unrealized_short_term_gain += account_unrealized_short_term_gain;
@@ -2185,11 +2202,22 @@ async fn process_account_list(
                 }
             }
             println!(
-                "    Disposed value: ${} (income: ${}, short-term cap gain: ${}, long-term cap gain: ${})",
+                "    Disposed value: ${} (income: ${}, {})",
                 disposed_value.separated_string_with_fixed_place(2),
                 disposed_income.separated_string_with_fixed_place(2),
-                disposed_short_term_cap_gain.separated_string_with_fixed_place(2),
-                disposed_long_term_cap_gain.separated_string_with_fixed_place(2),
+                if unified_tax_rate {
+                    format!(
+                        "cap gain: ${}",
+                        (disposed_short_term_cap_gain + disposed_long_term_cap_gain)
+                            .separated_string_with_fixed_place(2)
+                    )
+                } else {
+                    format!(
+                        "short-term cap gain: ${}, long-term cap gain: ${}",
+                        disposed_short_term_cap_gain.separated_string_with_fixed_place(2),
+                        disposed_long_term_cap_gain.separated_string_with_fixed_place(2)
+                    )
+                }
             );
             println!();
         }
@@ -2205,7 +2233,13 @@ async fn process_account_list(
 
         let tax_rate = db.get_tax_rate();
         println!("Realized Gains");
-        println!("  Year    | Income          | Short-term gain | Long-term gain | Estimated Tax ");
+        if unified_tax_rate {
+            println!("  Year    | Income          |       Cap gain | Estimated Tax ");
+        } else {
+            println!(
+                "  Year    | Income          | Short-term gain | Long-term gain | Estimated Tax "
+            );
+        }
         for (year, annual_realized_gain) in annual_realized_gains {
             let (symbol, realized_gains) = {
                 ('P', annual_realized_gain.by_payment_period)
@@ -2234,17 +2268,29 @@ async fn process_account_list(
                     };
 
                     println!(
-                        "  {} {}{} | ${:14} | ${:14} | ${:14}| {}",
+                        "  {} {}{} | ${:14} | {}| {}",
                         year,
                         symbol,
                         q + 1,
                         realized_gain.income.separated_string_with_fixed_place(2),
-                        realized_gain
-                            .short_term_cap_gain
-                            .separated_string_with_fixed_place(2),
-                        realized_gain
-                            .long_term_cap_gain
-                            .separated_string_with_fixed_place(2),
+                        if unified_tax_rate {
+                            format!(
+                                "${:14}",
+                                (realized_gain.short_term_cap_gain
+                                    + realized_gain.long_term_cap_gain)
+                                    .separated_string_with_fixed_place(2)
+                            )
+                        } else {
+                            format!(
+                                "${:14} | ${:14}",
+                                realized_gain
+                                    .short_term_cap_gain
+                                    .separated_string_with_fixed_place(2),
+                                realized_gain
+                                    .long_term_cap_gain
+                                    .separated_string_with_fixed_place(2)
+                            )
+                        },
                         tax
                     );
                 }
@@ -2285,14 +2331,22 @@ async fn process_account_list(
             "  Income:              ${} (realized)",
             total_income.separated_string_with_fixed_place(2)
         );
-        println!(
-            "  Short-term cap gain: ${} (unrealized)",
-            total_unrealized_short_term_gain.separated_string_with_fixed_place(2)
-        );
-        println!(
-            "  Long-term cap gain:  ${} (unrealized)",
-            total_unrealized_long_term_gain.separated_string_with_fixed_place(2)
-        );
+        if unified_tax_rate {
+            println!(
+                "  Cap gain:            ${} (unrealized)",
+                (total_unrealized_short_term_gain + total_unrealized_long_term_gain)
+                    .separated_string_with_fixed_place(2)
+            );
+        } else {
+            println!(
+                "  Short-term cap gain: ${} (unrealized)",
+                total_unrealized_short_term_gain.separated_string_with_fixed_place(2)
+            );
+            println!(
+                "  Long-term cap gain:  ${} (unrealized)",
+                total_unrealized_long_term_gain.separated_string_with_fixed_place(2)
+            );
+        }
 
         let pending_deposits = db.pending_deposits(None).len();
         let pending_withdrawals = db.pending_withdrawals(None).len();
@@ -4175,9 +4229,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .arg(
                             Arg::with_name("long-term-gain")
                                 .takes_value(true)
-                                .required(true)
                                 .validator(is_tax_rate)
-                                .help("Long-term capital gain tax rate")
+                                .help("Long-term capital gain tax rate (default: short-term rate)")
                         )
                 )
                 .subcommand(
@@ -5593,9 +5646,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .unwrap();
                 let long_term_gain = arg_matches
                     .value_of("long-term-gain")
-                    .unwrap()
-                    .parse::<f64>()
-                    .unwrap();
+                    .map(|x| x.parse::<f64>().unwrap())
+                    .unwrap_or(short_term_gain);
 
                 println!("Income tax rate: {income:.2}");
                 println!("Short-term gain rate: {short_term_gain:.2}");
