@@ -1943,6 +1943,8 @@ dependencies = [
 [[package]]
 name = "jup-ag"
 version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fd778a5128705d9e59216a954575aef010b93ef0ba1b8bcbf78931b333f39d91"
 dependencies = [
  "base64 0.13.0",
  "bincode",
