@@ -34,6 +34,7 @@ impl From<&Token> for TulipLending {
             Token::tuSOL | Token::wSOL => TulipLending::sol(),
             Token::mSOL | Token::tumSOL => TulipLending::msol(),
             Token::stSOL | Token::tustSOL => TulipLending::stsol(),
+            Token::UXD => panic!("UXD not supported by Tulip"),
         }
     }
 }
