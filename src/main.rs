@@ -4126,6 +4126,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .subcommand(
                     SubCommand::with_name("ls")
                         .about("List registered accounts")
+                        .alias("sl")
                         .arg(
                             Arg::with_name("all")
                                 .short("a")
