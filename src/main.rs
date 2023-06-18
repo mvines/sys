@@ -452,6 +452,7 @@ async fn process_exchange_deposit<T: Signers>(
         .ok_or_else(|| format!("From account, {from_address}, does not exist"))?;
 
     let authority_account = if from_address == authority_address {
+        #[allow(clippy::redundant_clone)]
         from_account.clone()
     } else {
         rpc_client
