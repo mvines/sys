@@ -1663,11 +1663,13 @@ async fn println_lot(
         description,
     );
 
-    if let Some(notifier) = notifier {
-        notifier.send(&msg).await;
-    }
+    if !token.fiat_fungible() {
+        if let Some(notifier) = notifier {
+            notifier.send(&msg).await;
+        }
 
-    println!("{msg}");
+        println!("{msg}");
+    }
 }
 
 fn format_disposed_lot(
@@ -2111,20 +2113,27 @@ async fn process_account_list(
                 }
 
                 println!(
-                    "    Value: ${}, income: ${}, {}",
+                    "    Value: ${}{}",
                     account_current_value.separated_string_with_fixed_place(2),
-                    account_income.separated_string_with_fixed_place(2),
-                    if unified_tax_rate {
-                        format!(
-                            "unrealized cap gain: ${}",
-                            (account_unrealized_short_term_gain
-                                + account_unrealized_long_term_gain)
-                                .separated_string_with_fixed_place(2)
-                        )
+                    if account.token.fiat_fungible() {
+                        "".into()
                     } else {
-                        format!("unrealized short-term cap gain: ${}, unrealized long-term cap gain: ${}",
-                            account_unrealized_short_term_gain.separated_string_with_fixed_place(2),
-                            account_unrealized_long_term_gain.separated_string_with_fixed_place(2)
+                        format!(
+                            ", income: ${}, {}",
+                            account_income.separated_string_with_fixed_place(2),
+                            if unified_tax_rate {
+                                format!(
+                                    "unrealized cap gain: ${}",
+                                    (account_unrealized_short_term_gain
+                                        + account_unrealized_long_term_gain)
+                                        .separated_string_with_fixed_place(2)
+                                )
+                            } else {
+                                format!("unrealized short-term cap gain: ${}, unrealized long-term cap gain: ${}",
+                                account_unrealized_short_term_gain.separated_string_with_fixed_place(2),
+                                account_unrealized_long_term_gain.separated_string_with_fixed_place(2)
+                            )
+                            }
                         )
                     }
                 );
