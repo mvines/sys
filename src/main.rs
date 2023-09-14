@@ -3296,7 +3296,7 @@ async fn process_account_sync(
 
         let inflation_rewards = rpc_client.get_inflation_reward(&addresses, Some(epoch))?;
 
-        for (inflation_reward, address, mut account) in
+        for (inflation_reward, address, account) in
             itertools::izip!(inflation_rewards, addresses.iter(), accounts.iter_mut(),)
         {
             assert_eq!(*address, account.address);
@@ -3346,7 +3346,7 @@ async fn process_account_sync(
     }
 
     // Look for unexpected balance changes (such as transaction and rent rewards)
-    for mut account in accounts.iter_mut() {
+    for account in accounts.iter_mut() {
         account.last_update_epoch = stop_epoch;
 
         let current_balance = account.token.balance(rpc_client, &account.address)?;

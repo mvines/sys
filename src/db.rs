@@ -558,7 +558,7 @@ impl TrackedAccount {
         let mut amount = 0;
         for lot in lots {
             amount += lot.amount;
-            if let Some(mut existing_lot) = self
+            if let Some(existing_lot) = self
                 .lots
                 .iter_mut()
                 .find(|l| l.acquisition == lot.acquisition)
