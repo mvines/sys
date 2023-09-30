@@ -35,7 +35,7 @@ You can also run `./fetch-release.sh` to download the latest Linux and macOS bin
 * Full Excel export, useful to hand off to a CPA or your entity's finance department. Sorry no TurboTax import!
 
 ## Coming Soon Features!
-Once Solana mainnet upgrades to Solana v1.14 and the stake redelegation
+Once Solana mainnet upgrades to Solana v1.17 and the stake redelegation
 instruction is activated (see
 [here](https://github.com/solana-labs/solana/issues/26765)), the following
 features will become available in `sys`:
