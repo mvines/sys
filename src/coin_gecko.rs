@@ -34,6 +34,7 @@ fn token_to_coin(token: &MaybeToken) -> Result<&'static str, Box<dyn std::error:
         Some(token) => match token {
             Token::USDC => "usd-coin",
             Token::UXD => "uxd-stablecoin",
+            Token::bSOL => "blazestake-staked-sol",
             Token::mSOL => "msol",
             Token::stSOL => "lido-staked-sol",
             Token::wSOL => "solana",
@@ -78,6 +79,8 @@ pub async fn get_current_price(token: &MaybeToken) -> Result<Decimal, Box<dyn st
             #[derive(Debug, Serialize, Deserialize)]
             struct Coins {
                 solana: Option<CurrencyList>,
+                #[serde(rename = "blazestake-staked-sol")]
+                bsol: Option<CurrencyList>,
                 msol: Option<CurrencyList>,
                 #[serde(rename = "lido-staked-sol")]
                 stsol: Option<CurrencyList>,
@@ -92,6 +95,7 @@ pub async fn get_current_price(token: &MaybeToken) -> Result<Decimal, Box<dyn st
                 .or(coins.msol)
                 .or(coins.stsol)
                 .or(coins.uxd)
+                .or(coins.bsol)
                 .ok_or_else(|| format!("Simple price data not available for {coin}").into())
                 .map(|price| {
                     let price = Decimal::from_f64(price.usd).unwrap();

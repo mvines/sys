@@ -33,6 +33,7 @@ use {
 pub enum Token {
     USDC,
     UXD,
+    bSOL,
     mSOL,
     stSOL,
     tuSOL,
@@ -48,6 +49,7 @@ impl Token {
             Token::USDC => pubkey!("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"),
             Token::UXD => pubkey!("7kbnvuGBxxj8AG9qp8Scn56muWGaRaFqxg1FsRp3PaFT"),
             Token::tuUSDC => pubkey!("Amig8TisuLpzun8XyGfC5HJHHGUQEscjLgoTWsCCKihg"),
+            Token::bSOL => pubkey!("bSo13r4TkiE4KumL71LsHTPpL2euBYLFx6h9HP3piy1"),
             Token::mSOL => pubkey!("mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So"),
             Token::stSOL => pubkey!("7dHbWXmci3dT8UFYWYZweBLXgycu7Y3iL6trKn1Y7ARj"),
             Token::tuSOL => pubkey!("H4Q3hDbuMUw8Bu72Ph8oV2xMQ7BFNbekpfQZKS2xF7jW"),
@@ -66,6 +68,7 @@ impl Token {
             Token::USDC => "($)",
             Token::UXD => "UXD$",
             Token::tuUSDC => "tu($)",
+            Token::bSOL => "b◎",
             Token::mSOL => "m◎",
             Token::stSOL => "st◎",
             Token::tuSOL => "tu◎",
@@ -80,6 +83,7 @@ impl Token {
             Token::USDC | Token::UXD | Token::tuUSDC => 6,
             Token::stSOL
             | Token::tuSOL
+            | Token::bSOL
             | Token::mSOL
             | Token::tumSOL
             | Token::tustSOL
@@ -107,7 +111,9 @@ impl Token {
 
     pub fn liquidity_token(&self) -> Option<MaybeToken> {
         match self {
-            Token::USDC | Token::UXD | Token::mSOL | Token::stSOL | Token::wSOL => None,
+            Token::USDC | Token::UXD | Token::bSOL | Token::mSOL | Token::stSOL | Token::wSOL => {
+                None
+            }
             Token::tuUSDC | Token::tuSOL | Token::tumSOL | Token::tustSOL => {
                 Some(crate::tulip::liquidity_token(self))
             }
@@ -119,7 +125,9 @@ impl Token {
         rpc_client: &RpcClient,
     ) -> Result<Decimal, Box<dyn std::error::Error>> {
         match self {
-            Token::USDC | Token::UXD | Token::mSOL | Token::stSOL | Token::wSOL => unreachable!(),
+            Token::USDC | Token::UXD | Token::bSOL | Token::mSOL | Token::stSOL | Token::wSOL => {
+                unreachable!()
+            }
             Token::tuUSDC | Token::tuSOL | Token::tumSOL | Token::tustSOL => {
                 crate::tulip::get_current_liquidity_token_rate(rpc_client, self).await
             }
@@ -155,7 +163,7 @@ impl Token {
             return Ok(Decimal::from_f64(1.).unwrap());
         }
         match self {
-            Token::USDC | Token::UXD | Token::mSOL | Token::stSOL | Token::wSOL => {
+            Token::USDC | Token::UXD | Token::bSOL | Token::mSOL | Token::stSOL | Token::wSOL => {
                 coin_gecko::get_current_price(&MaybeToken(Some(*self))).await
             }
             Token::tuUSDC | Token::tuSOL | Token::tumSOL | Token::tustSOL => {
