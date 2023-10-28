@@ -2716,6 +2716,7 @@ async fn process_account_sweep<T: Signers>(
     db: &mut Db,
     rpc_client: &RpcClient,
     from_address: Pubkey,
+    token: MaybeToken,
     retain_amount: u64,
     no_sweep_ok: bool,
     from_authority_address: Pubkey,
@@ -2723,8 +2724,6 @@ async fn process_account_sweep<T: Signers>(
     to_address: Option<Pubkey>,
     notifier: &Notifier,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let token = MaybeToken::SOL();
-
     let (recent_blockhash, last_valid_block_height) =
         rpc_client.get_latest_blockhash_with_commitment(rpc_client.commitment())?;
     let fee_calculator = get_deprecated_fee_calculator(rpc_client)?;
@@ -2737,16 +2736,6 @@ async fn process_account_sweep<T: Signers>(
     let from_tracked_account = db
         .get_account(from_address, token)
         .ok_or_else(|| format!("Account, {from_address}, is not tracked"))?;
-
-    if from_account.lamports < from_tracked_account.last_update_balance {
-        return Err(format!(
-            "{}: On-chain account balance ({}) less than tracked balance ({})",
-            from_address,
-            token.ui_amount(from_account.lamports),
-            token.ui_amount(from_tracked_account.last_update_balance)
-        )
-        .into());
-    }
 
     let authority_account = if from_address == from_authority_address {
         from_account.clone()
@@ -2765,6 +2754,10 @@ async fn process_account_sweep<T: Signers>(
             .ok_or_else(|| format!("Account {to_address} ({token}) does not exist"))?;
         (to_address, None)
     } else {
+        if !token.is_sol() {
+            return Err("--to <ADDRESS> must be provided for token sweeps".into());
+        }
+
         let transitory_stake_account = Keypair::new();
 
         let sweep_stake_account = db
@@ -2804,60 +2797,94 @@ async fn process_account_sweep<T: Signers>(
         .into());
     }
 
-    let (mut instructions, sweep_amount) = if from_account.owner == system_program::id() {
-        let lamports = if from_address == from_authority_address {
-            from_tracked_account.last_update_balance.saturating_sub(
-                num_transaction_signatures * fee_calculator.lamports_per_signature + retain_amount,
+    let (mut instructions, sweep_amount) = if token.is_sol() {
+        if from_account.lamports < from_tracked_account.last_update_balance {
+            return Err(format!(
+                "{}: On-chain account balance ({}) less than tracked balance ({})",
+                from_address,
+                token.ui_amount(from_account.lamports),
+                token.ui_amount(from_tracked_account.last_update_balance)
+            )
+            .into());
+        }
+
+        if from_account.owner == system_program::id() {
+            let lamports = if from_address == from_authority_address {
+                from_tracked_account.last_update_balance.saturating_sub(
+                    num_transaction_signatures * fee_calculator.lamports_per_signature
+                        + retain_amount,
+                )
+            } else {
+                from_tracked_account
+                    .last_update_balance
+                    .saturating_sub(retain_amount)
+            };
+
+            (
+                vec![system_instruction::transfer(
+                    &from_address,
+                    &to_address,
+                    lamports,
+                )],
+                lamports,
+            )
+        } else if from_account.owner == solana_vote_program::id() {
+            let minimum_balance = rpc_client.get_minimum_balance_for_rent_exemption(
+                solana_vote_program::vote_state::VoteState::size_of(),
+            )?;
+
+            let lamports = from_tracked_account
+                .last_update_balance
+                .saturating_sub(minimum_balance + retain_amount);
+
+            (
+                vec![solana_vote_program::vote_instruction::withdraw(
+                    &from_address,
+                    &from_authority_address,
+                    lamports,
+                    &to_address,
+                )],
+                lamports,
+            )
+        } else if from_account.owner == solana_sdk::stake::program::id() {
+            let lamports = from_tracked_account
+                .last_update_balance
+                .saturating_sub(retain_amount);
+
+            (
+                vec![solana_sdk::stake::instruction::withdraw(
+                    &from_address,
+                    &from_authority_address,
+                    &to_address,
+                    lamports,
+                    None,
+                )],
+                lamports,
             )
         } else {
-            from_tracked_account
-                .last_update_balance
-                .saturating_sub(retain_amount)
-        };
+            return Err(format!("Unsupported `from` account owner: {}", from_account.owner).into());
+        }
+    } else {
+        let token = token.token().unwrap();
 
-        (
-            vec![system_instruction::transfer(
-                &from_address,
-                &to_address,
-                lamports,
-            )],
-            lamports,
-        )
-    } else if from_account.owner == solana_vote_program::id() {
-        let minimum_balance = rpc_client.get_minimum_balance_for_rent_exemption(
-            solana_vote_program::vote_state::VoteState::size_of(),
-        )?;
-
-        let lamports = from_tracked_account
-            .last_update_balance
-            .saturating_sub(minimum_balance + retain_amount);
-
-        (
-            vec![solana_vote_program::vote_instruction::withdraw(
-                &from_address,
-                &from_authority_address,
-                lamports,
-                &to_address,
-            )],
-            lamports,
-        )
-    } else if from_account.owner == solana_sdk::stake::program::id() {
         let lamports = from_tracked_account
             .last_update_balance
             .saturating_sub(retain_amount);
 
         (
-            vec![solana_sdk::stake::instruction::withdraw(
-                &from_address,
+            vec![spl_token::instruction::transfer_checked(
+                &spl_token::id(),
+                &token.ata(&from_address),
+                &token.mint(),
+                &token.ata(&to_address),
                 &from_authority_address,
-                &to_address,
+                &[],
                 lamports,
-                None,
-            )],
+                token.decimals(),
+            )
+            .unwrap()],
             lamports,
         )
-    } else {
-        return Err(format!("Unsupported `from` account owner: {}", from_account.owner).into());
     };
 
     if sweep_amount < token.amount(1.) {
@@ -4287,6 +4314,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     SubCommand::with_name("sweep")
                         .about("Sweep SOL into the sweep stake account")
                         .arg(
+                            Arg::with_name("token")
+                                .value_name("SOL or SPL Token")
+                                .takes_value(true)
+                                .required(true)
+                                .validator(is_valid_token_or_sol)
+                                .default_value("SOL")
+                                .help("Token type"),
+                        )
+                        .arg(
                             Arg::with_name("address")
                                 .value_name("ADDRESS")
                                 .takes_value(true)
@@ -5698,6 +5734,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .await?;
             }
             ("sweep", Some(arg_matches)) => {
+                let token = value_t!(arg_matches, "token", Token).ok();
                 let from_address = pubkey_of(arg_matches, "address").unwrap();
                 let (from_authority_signer, from_authority_address) =
                     signer_of(arg_matches, "authority", &mut wallet_manager)?;
@@ -5712,6 +5749,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     &mut db,
                     &rpc_client,
                     from_address,
+                    token.into(),
                     retain_amount,
                     no_sweep_ok,
                     from_authority_address,
