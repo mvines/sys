@@ -774,10 +774,10 @@ dependencies = [
 [[package]]
 name = "coinbase-rs"
 version = "0.3.0"
-source = "git+https://github.com/mvines/coinbase-rs.git?rev=806abc1d1d388b581c9a601b1184c1f8ee7e04d6#806abc1d1d388b581c9a601b1184c1f8ee7e04d6"
+source = "git+https://github.com/mvines/coinbase-rs.git?rev=0ada57aff324e4955db772caebd0e46190333a8c#0ada57aff324e4955db772caebd0e46190333a8c"
 dependencies = [
  "async-stream",
- "base64 0.13.0",
+ "base64 0.12.3",
  "bigdecimal",
  "chrono",
  "futures",

@@ -17,7 +17,7 @@ chrono = "0.4"
 chrono-humanize = "0.2.1"
 clap = "2.33"
 #coinbase-rs = { path = "../coinbase-rs" }
-coinbase-rs = { git = "https://github.com/mvines/coinbase-rs.git", rev = "806abc1d1d388b581c9a601b1184c1f8ee7e04d6" }
+coinbase-rs = { git = "https://github.com/mvines/coinbase-rs.git", rev = "0ada57aff324e4955db772caebd0e46190333a8c" }
 console = "0.14.1"
 fd-lock = "3.0.0"
 ftx = { git = "https://github.com/fabianboesiger/ftx", rev = "bb98235d356dd1a2becc5bdf32a4b738311ed434" }
