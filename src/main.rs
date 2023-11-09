@@ -3118,7 +3118,7 @@ async fn process_account_split<T: Signers>(
         last_update_epoch: epoch.saturating_sub(1),
         last_update_balance: 0,
         lots: vec![],
-        no_sync: None,
+        no_sync: from_account.no_sync,
     })?;
     db.record_transfer(
         signature,
