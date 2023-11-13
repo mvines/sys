@@ -1902,6 +1902,13 @@ impl Db {
                 DbError::LotMoveFailed(format!("Unknown destination account: {to_address}"))
             })?;
 
+        if from_account.address == to_account.address {
+            return Err(DbError::LotMoveFailed(format!(
+                "Destination and source accounts are the same: {} ({})",
+                to_account.address, to_account.token
+            )));
+        }
+
         if to_account.token != from_account.token {
             return Err(DbError::LotMoveFailed(format!(
                 "Token mismatch ({} != {})",
