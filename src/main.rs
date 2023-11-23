@@ -981,8 +981,10 @@ async fn process_jup_swap<T: Signers>(
     signers: T,
     existing_signature: Option<Signature>,
     if_from_balance_exceeds: Option<u64>,
+    for_no_less_than: Option<f64>,
     max_coingecko_value_percentage_loss: f64,
     compute_unit_price_micro_lamports: Option<usize>,
+    notifier: &Notifier,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let from_account = db
         .get_account(address, from_token.into())
@@ -1018,11 +1020,12 @@ async fn process_jup_swap<T: Signers>(
             .into());
         }
 
+        let swap_prefix = format!("Swap {}->{}", from_token, to_token);
+
         if let Some(if_from_balance_exceeds) = if_from_balance_exceeds {
             if from_account.last_update_balance < if_from_balance_exceeds {
                 println!(
-                    "Swap to {} declined because {} ({}) balance is less than {}{}",
-                    to_token,
+                    "{swap_prefix} declined because {} ({}) balance is less than {}{}",
                     address,
                     from_token.name(),
                     from_token.symbol(),
@@ -1075,12 +1078,24 @@ async fn process_jup_swap<T: Signers>(
             > Decimal::from_f64(max_coingecko_value_percentage_loss).unwrap()
         {
             return Err(format!(
-                "Swap exceeds the max value loss ({max_coingecko_value_percentage_loss:2}%) relative to CoinGecko token price"
+                "{swap_prefix} exceeds the max value loss ({max_coingecko_value_percentage_loss:2}%) relative to CoinGecko token price"
             )
             .into());
         }
 
-        println!("Generating swap transaction...");
+        if let Some(for_no_less_than) = for_no_less_than {
+            let to_token_amount = to_token.ui_amount(quote.other_amount_threshold);
+
+            if to_token_amount < for_no_less_than {
+                let to_token_symbol = to_token.symbol();
+                let msg = format!("{swap_prefix} would not result in at least {to_token_symbol}{for_no_less_than} tokens, only would have received {to_token_symbol}{to_token_amount}");
+                println!("{msg}");
+                notifier.send(&msg).await;
+                return Ok(());
+            }
+        }
+
+        println!("Generating {swap_prefix} Transaction...");
         let mut transaction = jup_ag::swap_with_config(
             quote.clone(),
             address,
@@ -4724,6 +4739,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 ),
                         )
                         .arg(
+                            Arg::with_name("for_no_less_than")
+                                .long("for-no-less-than")
+                                .value_name("AMOUNT")
+                                .takes_value(true)
+                                .validator(is_parsable::<f64>)
+                                .conflicts_with("at")
+                                .help(
+                                    "Exit successfully without swapping if \
+                                       the swap would result in less than \
+                                       this amount of destination tokens",
+                                ),
+                        )
+                        .arg(
                             Arg::with_name("max_coingecko_value_percentage_loss")
                                 .long("max-coingecko-value-percentage-loss")
                                 .value_name("PERCENT")
@@ -5944,6 +5972,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let if_from_balance_exceeds = value_t!(arg_matches, "if_from_balance_exceeds", f64)
                     .ok()
                     .map(|x| from_token.amount(x));
+                let for_no_less_than = value_t!(arg_matches, "for_no_less_than", f64).ok();
                 let max_coingecko_value_percentage_loss =
                     value_t_or_exit!(arg_matches, "max_coingecko_value_percentage_loss", f64);
                 let compute_unit_price_micro_lamports =
@@ -5961,8 +5990,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     vec![signer],
                     signature,
                     if_from_balance_exceeds,
+                    for_no_less_than,
                     max_coingecko_value_percentage_loss,
                     compute_unit_price_micro_lamports,
+                    &notifier,
                 )
                 .await?;
                 process_sync_swaps(&mut db, &rpc_client, &notifier).await?;
