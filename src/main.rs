@@ -3277,12 +3277,13 @@ async fn process_account_sync(
     rpc_client: &RpcClient,
     address: Option<Pubkey>,
     max_epochs_to_process: Option<u64>,
+    reconcile_no_sync_account_balances: bool,
     notifier: &Notifier,
 ) -> Result<(), Box<dyn std::error::Error>> {
     process_account_sync_pending_transfers(db, rpc_client).await?;
     process_account_sync_sweep(db, rpc_client, notifier).await?;
 
-    let mut accounts = match address {
+    let (mut accounts, mut no_sync_accounts): (_, Vec<_>) = match address {
         Some(address) => {
             // sync all tokens for the given address...
             let accounts = db.get_account_tokens(address);
@@ -3294,8 +3295,55 @@ async fn process_account_sync(
         None => db.get_accounts(),
     }
     .into_iter()
-    .filter(|account| !account.no_sync.unwrap_or_default())
-    .collect::<Vec<_>>();
+    .partition(|account| !account.no_sync.unwrap_or_default());
+
+    if reconcile_no_sync_account_balances {
+        for account in no_sync_accounts.iter_mut() {
+            if account.lots.is_empty() {
+                continue;
+            }
+
+            let current_balance = account.token.balance(rpc_client, &account.address)?;
+
+            match current_balance.cmp(&account.last_update_balance) {
+                std::cmp::Ordering::Less => {
+                    println!(
+                        "\nWarning: {} ({}) balance is less than expected. Actual: {}{}, expected: {}{}\n",
+                        account.address,
+                        account.token,
+                        account.token.symbol(),
+                        account.token.ui_amount(current_balance),
+                        account.token.symbol(),
+                        account.token.ui_amount(account.last_update_balance)
+                    );
+                }
+                std::cmp::Ordering::Greater => {
+                    // sort by lowest basis
+                    account
+                        .lots
+                        .sort_by(|a, b| a.acquisition.price().cmp(&b.acquisition.price()));
+
+                    let lowest_basis_lot = &mut account.lots[0];
+                    let additional_balance = current_balance - account.last_update_balance;
+                    lowest_basis_lot.amount += additional_balance;
+
+                    let msg = format!(
+                        "{} ({}): Additional {}{} added",
+                        account.address,
+                        account.token,
+                        account.token.symbol(),
+                        account.token.ui_amount(additional_balance)
+                    );
+                    notifier.send(&msg).await;
+                    println!("{msg}");
+
+                    account.last_update_balance = current_balance;
+                    db.update_account(account.clone())?;
+                }
+                _ => {}
+            }
+        }
+    }
 
     let current_sol_price = MaybeToken::SOL().get_current_price(rpc_client).await?;
 
@@ -4491,6 +4539,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .validator(is_parsable::<u64>)
                                 .help("Only process up to this number of epochs for account balance changes [default: all]"),
                         )
+                        .arg(
+                            Arg::with_name("reconcile_no_sync_account_balances")
+                                .long("reconcile-no-sync-account-balances")
+                                .takes_value(false)
+                                .help("Reconcile local account balances with on-chain state for --no-sync accounts (advanced; uncommon)"),
+                        )
                 )
                 .subcommand(
                     SubCommand::with_name("wrap")
@@ -5490,8 +5544,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 )
                 .await?
             }
-            process_account_sync(&mut db, &rpc_client, None, max_epochs_to_process, &notifier)
-                .await?;
+            process_account_sync(
+                &mut db,
+                &rpc_client,
+                None,
+                max_epochs_to_process,
+                false,
+                &notifier,
+            )
+            .await?;
         }
         ("db", Some(db_matches)) => match db_matches.subcommand() {
             ("import", Some(arg_matches)) => {
@@ -5611,7 +5672,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     ui_amount,
                 )
                 .await?;
-                process_account_sync(&mut db, &rpc_client, Some(address), None, &notifier).await?;
+                process_account_sync(&mut db, &rpc_client, Some(address), None, false, &notifier)
+                    .await?;
             }
             ("dispose", Some(arg_matches)) => {
                 let address = pubkey_of(arg_matches, "address").unwrap();
@@ -5858,6 +5920,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             ("sync", Some(arg_matches)) => {
                 let address = pubkey_of(arg_matches, "address");
+                let reconcile_no_sync_account_balances =
+                    arg_matches.is_present("reconcile_no_sync_account_balances");
                 let max_epochs_to_process =
                     value_t!(arg_matches, "max_epochs_to_process", u64).ok();
                 process_account_sync(
@@ -5865,6 +5929,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     &rpc_client,
                     address,
                     max_epochs_to_process,
+                    reconcile_no_sync_account_balances,
                     &notifier,
                 )
                 .await?;
