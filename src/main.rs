@@ -2338,6 +2338,10 @@ async fn process_account_list(
 
         println!("Current Holdings");
         for (held_token, (current_token_price, total_held_amount, unrealized_gain)) in held_tokens {
+            if total_held_amount == 0 {
+                continue;
+            }
+
             let estimated_tax = tax_rate
                 .and_then(|tax_rate| {
                     let tax = unrealized_gain.short_term_cap_gain * tax_rate.short_term_gain
