@@ -1941,8 +1941,14 @@ async fn process_account_list(
     verbose: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut annual_realized_gains = BTreeMap::<usize, AnnualRealizedGain>::default();
-    let mut held_tokens =
-        BTreeMap::<MaybeToken, (/*price*/ Option<Decimal>, /*amount*/ u64)>::default();
+    let mut held_tokens = BTreeMap::<
+        MaybeToken,
+        (
+            /*price*/ Option<Decimal>,
+            /*amount*/ u64,
+            RealizedGain,
+        ),
+    >::default();
 
     // hacky: display a unified rate if the long and short term rate is equal
     let unified_tax_rate = db
@@ -1980,7 +1986,11 @@ async fn process_account_list(
 
             if let std::collections::btree_map::Entry::Vacant(e) = held_tokens.entry(account.token)
             {
-                e.insert((account.token.get_current_price(rpc_client).await.ok(), 0));
+                e.insert((
+                    account.token.get_current_price(rpc_client).await.ok(),
+                    0,
+                    RealizedGain::default(),
+                ));
             }
 
             let held_token = held_tokens.get_mut(&account.token).unwrap();
@@ -2145,9 +2155,9 @@ async fn process_account_list(
                                 )
                             } else {
                                 format!("unrealized short-term cap gain: ${}, unrealized long-term cap gain: ${}",
-                                account_unrealized_short_term_gain.separated_string_with_fixed_place(2),
-                                account_unrealized_long_term_gain.separated_string_with_fixed_place(2)
-                            )
+                                    account_unrealized_short_term_gain.separated_string_with_fixed_place(2),
+                                    account_unrealized_long_term_gain.separated_string_with_fixed_place(2)
+                                )
                             }
                         )
                     }
@@ -2157,6 +2167,9 @@ async fn process_account_list(
                 total_unrealized_long_term_gain += account_unrealized_long_term_gain;
                 total_income += account_income;
                 total_current_value += account_current_value;
+
+                held_token.2.short_term_cap_gain += account_unrealized_short_term_gain;
+                held_token.2.long_term_cap_gain += account_unrealized_long_term_gain;
             } else {
                 println!("  No lots");
             }
@@ -2324,9 +2337,25 @@ async fn process_account_list(
         println!();
 
         println!("Current Holdings");
-        for (held_token, (current_token_price, total_held_amount)) in held_tokens {
+        for (held_token, (current_token_price, total_held_amount, unrealized_gain)) in held_tokens {
+            let estimated_tax = tax_rate
+                .and_then(|tax_rate| {
+                    let tax = unrealized_gain.short_term_cap_gain * tax_rate.short_term_gain
+                        + unrealized_gain.long_term_cap_gain * tax_rate.long_term_gain;
+
+                    if tax > 0. {
+                        Some(format!(
+                            "; ${} estimated tax",
+                            tax.separated_string_with_fixed_place(2)
+                        ))
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or_default();
+
             println!(
-                "  {:<7}       {:<20} (${:14} ; ${} per {})",
+                "  {:<7}       {:<20} (${:14} ; ${} per {}{})",
                 held_token.to_string(),
                 held_token.format_amount(total_held_amount),
                 current_token_price
@@ -2343,6 +2372,7 @@ async fn process_account_list(
                         .separated_string_with_fixed_place(3))
                     .unwrap_or_else(|| "?".into()),
                 held_token,
+                estimated_tax,
             );
         }
         println!();
