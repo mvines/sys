@@ -1088,14 +1088,11 @@ async fn process_jup_swap<T: Signers>(
         }
 
         println!("Generating {swap_prefix} Transaction...");
-        let mut swap_request = jup_ag::SwapRequest::new( address, quote.clone());
+        let mut swap_request = jup_ag::SwapRequest::new(address, quote.clone());
         swap_request.wrap_and_unwrap_sol = Some(false);
         swap_request.compute_unit_price_micro_lamports = compute_unit_price_micro_lamports;
 
-        let mut transaction = jup_ag::swap(swap_request
-        )
-        .await?
-        .swap_transaction;
+        let mut transaction = jup_ag::swap(swap_request).await?.swap_transaction;
 
         let (recent_blockhash, last_valid_block_height) =
             rpc_client.get_latest_blockhash_with_commitment(rpc_client.commitment())?;
@@ -6036,8 +6033,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let ui_amount = value_t_or_exit!(arg_matches, "amount", f64);
                 let slippage_bps = value_t_or_exit!(arg_matches, "slippage_bps", u64);
 
-                process_jup_quote(from_token, to_token, ui_amount, slippage_bps)
-                    .await?;
+                process_jup_quote(from_token, to_token, ui_amount, slippage_bps).await?;
             }
             ("swap", Some(arg_matches)) => {
                 let (signer, address) = signer_of(arg_matches, "address", &mut wallet_manager)?;
