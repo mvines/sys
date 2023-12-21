@@ -927,9 +927,9 @@ async fn process_exchange_sell(
 
 fn println_jup_quote(from_token: Token, to_token: Token, quote: &jup_ag::Quote) {
     let route = quote
-        .market_infos
+        .route_plan
         .iter()
-        .map(|market_info| market_info.label.clone())
+        .map(|route_plan| route_plan.swap_info.label.clone().unwrap_or_default())
         .join(", ");
     println!(
         "Swap {}{} for {}{} (min: {}{}) via {}",
@@ -948,9 +948,8 @@ async fn process_jup_quote(
     to_token: Token,
     ui_amount: f64,
     slippage_bps: u64,
-    max_quotes: usize,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let quotes = jup_ag::quote(
+    let quote = jup_ag::quote(
         from_token.mint(),
         to_token.mint(),
         from_token.amount(ui_amount),
@@ -959,12 +958,9 @@ async fn process_jup_quote(
             ..jup_ag::QuoteConfig::default()
         },
     )
-    .await?
-    .data;
+    .await?;
 
-    for quote in quotes.into_iter().take(max_quotes) {
-        println_jup_quote(from_token, to_token, dbg!(&quote));
-    }
+    println_jup_quote(from_token, to_token, &quote);
     Ok(())
 }
 
@@ -983,7 +979,7 @@ async fn process_jup_swap<T: Signers>(
     if_from_balance_exceeds: Option<u64>,
     for_no_less_than: Option<f64>,
     max_coingecko_value_percentage_loss: f64,
-    compute_unit_price_micro_lamports: Option<usize>,
+    compute_unit_price_micro_lamports: Option<u64>,
     notifier: &Notifier,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let from_account = db
@@ -1048,7 +1044,7 @@ async fn process_jup_swap<T: Signers>(
         })?;
 
         println!("Fetching best {from_token}->{to_token} quote...");
-        let quotes = jup_ag::quote(
+        let quote = jup_ag::quote(
             from_token.mint(),
             to_token.mint(),
             amount,
@@ -1057,13 +1053,9 @@ async fn process_jup_swap<T: Signers>(
                 ..jup_ag::QuoteConfig::default()
             },
         )
-        .await?
-        .data;
+        .await?;
 
-        let quote = quotes
-            .get(0)
-            .ok_or_else(|| format!("No quotes found for {from_token} to {to_token}"))?;
-        println_jup_quote(from_token, to_token, quote);
+        println_jup_quote(from_token, to_token, &quote);
 
         let from_value =
             from_token_price * Decimal::from_f64(from_token.ui_amount(quote.in_amount)).unwrap();
@@ -1096,15 +1088,11 @@ async fn process_jup_swap<T: Signers>(
         }
 
         println!("Generating {swap_prefix} Transaction...");
-        let mut transaction = jup_ag::swap_with_config(
-            quote.clone(),
-            address,
-            jup_ag::SwapConfig {
-                wrap_unwrap_sol: Some(false),
-                as_legacy_transaction: None,
-                compute_unit_price_micro_lamports,
-                ..jup_ag::SwapConfig::default()
-            },
+        let mut swap_request = jup_ag::SwapRequest::new( address, quote.clone());
+        swap_request.wrap_and_unwrap_sol = Some(false);
+        swap_request.compute_unit_price_micro_lamports = compute_unit_price_micro_lamports;
+
+        let mut transaction = jup_ag::swap(swap_request
         )
         .await?
         .swap_transaction;
@@ -6047,11 +6035,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let to_token = value_t_or_exit!(arg_matches, "to_token", Token);
                 let ui_amount = value_t_or_exit!(arg_matches, "amount", f64);
                 let slippage_bps = value_t_or_exit!(arg_matches, "slippage_bps", u64);
-                let max_quotes = value_t!(arg_matches, "max_quotes", usize)
-                    .ok()
-                    .unwrap_or(usize::MAX);
 
-                process_jup_quote(from_token, to_token, ui_amount, slippage_bps, max_quotes)
+                process_jup_quote(from_token, to_token, ui_amount, slippage_bps)
                     .await?;
             }
             ("swap", Some(arg_matches)) => {
@@ -6075,7 +6060,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let max_coingecko_value_percentage_loss =
                     value_t_or_exit!(arg_matches, "max_coingecko_value_percentage_loss", f64);
                 let compute_unit_price_micro_lamports =
-                    value_t!(arg_matches, "compute_unit_price_micro_lamports", usize).ok();
+                    value_t!(arg_matches, "compute_unit_price_micro_lamports", u64).ok();
 
                 process_jup_swap(
                     &mut db,

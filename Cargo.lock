@@ -777,7 +777,7 @@ version = "0.3.0"
 source = "git+https://github.com/mvines/coinbase-rs.git?rev=0ada57aff324e4955db772caebd0e46190333a8c#0ada57aff324e4955db772caebd0e46190333a8c"
 dependencies = [
  "async-stream",
- "base64 0.12.3",
+ "base64 0.13.0",
  "bigdecimal",
  "chrono",
  "futures",
@@ -1942,9 +1942,9 @@ dependencies = [
 
 [[package]]
 name = "jup-ag"
-version = "0.5.0"
+version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fd778a5128705d9e59216a954575aef010b93ef0ba1b8bcbf78931b333f39d91"
+checksum = "878b0dafd4c951ba2b2f074e441e763c2490346ce8df54cb241aff4e1ce1312a"
 dependencies = [
  "base64 0.13.0",
  "bincode",
