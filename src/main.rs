@@ -1,3 +1,4 @@
+mod amount;
 mod db;
 mod field_as_string;
 mod get_transaction_balance_change;
@@ -6,7 +7,7 @@ mod rpc_client_utils;
 mod stake_spreader;
 
 use {
-    crate::get_transaction_balance_change::*,
+    crate::{amount::Amount, get_transaction_balance_change::*},
     chrono::prelude::*,
     chrono_humanize::HumanTime,
     clap::{
@@ -51,6 +52,23 @@ use {
         tulip,
     },
 };
+
+fn is_amount_or_all_or_half<T>(amount: T) -> Result<(), String>
+where
+    T: AsRef<str> + std::fmt::Display,
+{
+    if amount.as_ref().parse::<u64>().is_ok()
+        || amount.as_ref().parse::<f64>().is_ok()
+        || amount.as_ref() == "ALL"
+        || amount.as_ref() == "HALF"
+    {
+        Ok(())
+    } else {
+        Err(format!(
+            "Unable to parse input amount as integer or float, provided: {amount}"
+        ))
+    }
+}
 
 fn get_deprecated_fee_calculator(
     rpc_client: &RpcClient,
@@ -390,7 +408,7 @@ async fn process_exchange_deposit<T: Signers>(
     exchange_client: &dyn ExchangeClient,
     token: MaybeToken,
     deposit_address: Pubkey,
-    amount: Option<u64>,
+    amount: Amount,
     from_address: Pubkey,
     if_source_balance_exceeds: Option<u64>,
     if_exchange_balance_less_than: Option<u64>,
@@ -4968,7 +4986,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .takes_value(true)
                                 .validator(is_amount_or_all)
                                 .required(true)
-                                .help("Amount of liquidity tokens to deposit; accepts keyword ALL"),
+                                .help("Amount of liquidity tokens to deposit; accepts keywords ALL"),
                         )
                         .arg(
                             Arg::with_name("liquidity_token")
@@ -5143,9 +5161,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             Arg::with_name("amount")
                                 .value_name("AMOUNT")
                                 .takes_value(true)
-                                .validator(is_amount_or_all)
+                                .validator(is_amount_or_all_or_half)
                                 .required(true)
-                                .help("The amount to deposit; accepts keyword ALL"),
+                                .help("Amount to deposit; accepts keywords ALL and HALF"),
                         )
                         .arg(lot_selection_arg())
                         .arg(lot_numbers_arg())
@@ -6345,8 +6363,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ("deposit", Some(arg_matches)) => {
                     let token = MaybeToken::from(value_t!(arg_matches, "token", Token).ok());
                     let amount = match arg_matches.value_of("amount").unwrap() {
-                        "ALL" => None,
-                        amount => Some(token.amount(amount.parse().unwrap())),
+                        "ALL" => Amount::All,
+                        "HALF" => Amount::Half,
+                        amount => Amount::Exact(token.amount(amount.parse().unwrap())),
                     };
                     let if_source_balance_exceeds =
                         value_t!(arg_matches, "if_source_balance_exceeds", f64)
