@@ -87,7 +87,7 @@ pub async fn get_signature_date(
     signature: Signature,
 ) -> Result<NaiveDate, Box<dyn std::error::Error>> {
     let statuses = rpc_client.get_signature_statuses_with_history(&[signature])?;
-    if let Some(Some(ts)) = statuses.value.get(0) {
+    if let Some(Some(ts)) = statuses.value.first() {
         let block_date = get_block_date(rpc_client, ts.slot).await?;
         Ok(block_date)
     } else {

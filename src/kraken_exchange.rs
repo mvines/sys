@@ -258,11 +258,11 @@ impl ExchangeClient for KrakenExchangeClient {
             if let (Some(ask_price), Some(bid_price)) = (
                 order_book
                     .asks
-                    .get(0)
+                    .first()
                     .and_then(|order_book_tier| order_book_tier.0.parse::<f64>().ok()),
                 order_book
                     .bids
-                    .get(0)
+                    .first()
                     .and_then(|order_book_tier| order_book_tier.0.parse::<f64>().ok()),
             ) {
                 return Ok(BidAsk {

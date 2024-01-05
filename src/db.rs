@@ -1740,7 +1740,7 @@ impl Db {
                     account.address
                 )));
             }
-            if let Some(lot) = lots.get(0) {
+            if let Some(lot) = lots.first() {
                 let mut account = account.clone();
                 account.remove_lot(lot.lot_number);
                 tracked_accounts.push((lot.clone(), account));
