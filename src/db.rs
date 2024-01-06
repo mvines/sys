@@ -708,36 +708,56 @@ impl Db {
     pub fn set_exchange_credentials(
         &mut self,
         exchange: Exchange,
+        exchange_account: &str,
         exchange_credentials: ExchangeCredentials,
     ) -> DbResult<()> {
-        self.clear_exchange_credentials(exchange)?;
+        self.clear_exchange_credentials(exchange, exchange_account)?;
 
         self.credentials_db
-            .set(&format!("{exchange:?}"), &exchange_credentials)
+            .set(
+                &format!("{exchange:?}{exchange_account}"),
+                &exchange_credentials,
+            )
             .unwrap();
 
         Ok(self.credentials_db.dump()?)
     }
 
-    pub fn get_exchange_credentials(&self, exchange: Exchange) -> Option<ExchangeCredentials> {
-        self.credentials_db.get(&format!("{exchange:?}"))
+    pub fn get_exchange_credentials(
+        &self,
+        exchange: Exchange,
+        exchange_account: &str,
+    ) -> Option<ExchangeCredentials> {
+        self.credentials_db
+            .get(&format!("{exchange:?}{exchange_account}"))
     }
 
-    pub fn clear_exchange_credentials(&mut self, exchange: Exchange) -> DbResult<()> {
-        if self.get_exchange_credentials(exchange).is_some() {
-            self.credentials_db.rem(&format!("{exchange:?}")).ok();
+    pub fn clear_exchange_credentials(
+        &mut self,
+        exchange: Exchange,
+        exchange_account: &str,
+    ) -> DbResult<()> {
+        if self
+            .get_exchange_credentials(exchange, exchange_account)
+            .is_some()
+        {
+            self.credentials_db
+                .rem(&format!("{exchange:?}{exchange_account}"))
+                .ok();
             self.credentials_db.dump()?;
         }
         Ok(())
     }
 
-    pub fn get_configured_exchanges(&self) -> Vec<(Exchange, ExchangeCredentials)> {
+    pub fn get_default_accounts_from_all_configured_exchanges(
+        &self,
+    ) -> Vec<(Exchange, ExchangeCredentials)> {
         self.credentials_db
             .get_all()
             .into_iter()
             .filter_map(|key| {
                 if let Ok(exchange) = key.parse() {
-                    self.get_exchange_credentials(exchange)
+                    self.get_exchange_credentials(exchange, "")
                         .map(|exchange_credentials| (exchange, exchange_credentials))
                 } else {
                     None

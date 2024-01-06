@@ -5065,6 +5065,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .about("Exchange interactions")
                 .setting(AppSettings::SubcommandRequiredElseHelp)
                 .setting(AppSettings::InferSubcommands)
+                .arg(
+                    Arg::with_name("exchange_account")
+                        .long("account")
+                        .value_name("ACCOUNT_NAME")
+                        .takes_value(true)
+                        .global(true)
+                        .help("User-defined name of the exchange account to use \
+                              (extra help: specify this option BEFORE the subcomand name, \
+                               not after as indicated by --help) [default: '']"),
+                )
                 .subcommand(
                     SubCommand::with_name("balance")
                         .about("Get exchange balance")
@@ -5569,7 +5579,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ("sync", Some(arg_matches)) => {
             let max_epochs_to_process = value_t!(arg_matches, "max_epochs_to_process", u64).ok();
             process_sync_swaps(&mut db, &rpc_client, &notifier).await?;
-            for (exchange, exchange_credentials) in db.get_configured_exchanges() {
+            for (exchange, exchange_credentials) in
+                db.get_default_accounts_from_all_configured_exchanges()
+            {
                 println!("Synchronizing {exchange:?}...");
                 let exchange_client = exchange_client_new(exchange, exchange_credentials)?;
                 process_sync_exchange(
@@ -6225,9 +6237,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             assert!(exchanges.contains(&exchange), "Bug!");
             let exchange = Exchange::from_str(exchange)?;
 
+            let exchange_account = value_t!(exchange_matches, "exchange_account", String)
+                .ok()
+                .unwrap_or_default();
+
             let exchange_client = || {
                 let exchange_credentials = db
-                    .get_exchange_credentials(exchange)
+                    .get_exchange_credentials(exchange, &exchange_account)
                     .ok_or_else(|| format!("No API key set for {exchange:?}"))?;
                 exchange_client_new(exchange, exchange_credentials)
             };
@@ -6708,43 +6724,51 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     )
                     .await?;
                 }
-                ("api", Some(api_matches)) => match api_matches.subcommand() {
-                    ("show", Some(_arg_matches)) => match db.get_exchange_credentials(exchange) {
-                        Some(ExchangeCredentials {
-                            api_key,
-                            subaccount,
-                            ..
-                        }) => {
-                            println!("API Key: {api_key}");
-                            println!("Secret: ********");
-                            if let Some(subaccount) = subaccount {
-                                println!("Subaccount: {subaccount}");
+                ("api", Some(api_matches)) => {
+                    match api_matches.subcommand() {
+                        ("show", Some(_arg_matches)) => {
+                            match db.get_exchange_credentials(exchange, &exchange_account) {
+                                Some(ExchangeCredentials {
+                                    api_key,
+                                    subaccount,
+                                    ..
+                                }) => {
+                                    println!("Account name: {exchange_account}");
+                                    println!("API Key: {api_key}");
+                                    println!("Secret: ********");
+                                    if let Some(subaccount) = subaccount {
+                                        println!("Subaccount: {subaccount}");
+                                    }
+                                }
+                                None => {
+                                    println!("No API key set for {exchange:?}, account name: '{exchange_account}'");
+                                }
                             }
                         }
-                        None => {
-                            println!("No API key set for {exchange:?}");
+                        ("set", Some(arg_matches)) => {
+                            let api_key = value_t_or_exit!(arg_matches, "api_key", String);
+                            let secret = value_t_or_exit!(arg_matches, "secret", String);
+                            let subaccount = value_t!(arg_matches, "subaccount", String).ok();
+                            db.set_exchange_credentials(
+                                exchange,
+                                &exchange_account,
+                                ExchangeCredentials {
+                                    api_key,
+                                    secret,
+                                    subaccount,
+                                },
+                            )?;
+                            println!(
+                                "API key set for {exchange:?}, account name: '{exchange_account}'"
+                            );
                         }
-                    },
-                    ("set", Some(arg_matches)) => {
-                        let api_key = value_t_or_exit!(arg_matches, "api_key", String);
-                        let secret = value_t_or_exit!(arg_matches, "secret", String);
-                        let subaccount = value_t!(arg_matches, "subaccount", String).ok();
-                        db.set_exchange_credentials(
-                            exchange,
-                            ExchangeCredentials {
-                                api_key,
-                                secret,
-                                subaccount,
-                            },
-                        )?;
-                        println!("API key set for {exchange:?}");
+                        ("clear", Some(_arg_matches)) => {
+                            db.clear_exchange_credentials(exchange, &exchange_account)?;
+                            println!("Cleared API key for {exchange:?}, account name: '{exchange_account}'");
+                        }
+                        _ => unreachable!(),
                     }
-                    ("clear", Some(_arg_matches)) => {
-                        db.clear_exchange_credentials(exchange)?;
-                        println!("Cleared API key for {exchange:?}");
-                    }
-                    _ => unreachable!(),
-                },
+                }
 
                 _ => unreachable!(),
             }
