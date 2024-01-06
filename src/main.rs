@@ -128,6 +128,7 @@ async fn get_block_date_and_price(
 fn add_exchange_deposit_address_to_db(
     db: &mut Db,
     exchange: Exchange,
+    exchange_account: &str,
     token: MaybeToken,
     deposit_address: Pubkey,
     rpc_client: &RpcClient,
@@ -137,7 +138,7 @@ fn add_exchange_deposit_address_to_db(
         db.add_account(TrackedAccount {
             address: deposit_address,
             token,
-            description: format!("{exchange:?}"),
+            description: format!("{exchange:?} {exchange_account}"),
             last_update_epoch: epoch,
             last_update_balance: 0,
             lots: vec![],
@@ -5579,10 +5580,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ("sync", Some(arg_matches)) => {
             let max_epochs_to_process = value_t!(arg_matches, "max_epochs_to_process", u64).ok();
             process_sync_swaps(&mut db, &rpc_client, &notifier).await?;
-            for (exchange, exchange_credentials) in
-                db.get_default_accounts_from_all_configured_exchanges()
+            for (exchange, exchange_credentials, exchange_account) in
+                db.get_default_accounts_from_configured_exchanges()
             {
-                println!("Synchronizing {exchange:?}...");
+                println!("Synchronizing {exchange:?} {exchange_account}...");
                 let exchange_client = exchange_client_new(exchange, exchange_credentials)?;
                 process_sync_exchange(
                     &mut db,
@@ -6415,6 +6416,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     add_exchange_deposit_address_to_db(
                         &mut db,
                         exchange,
+                        &exchange_account,
                         token,
                         deposit_address,
                         &rpc_client,
@@ -6465,6 +6467,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     add_exchange_deposit_address_to_db(
                         &mut db,
                         exchange,
+                        &exchange_account,
                         token,
                         deposit_address,
                         &rpc_client,

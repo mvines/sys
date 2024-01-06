@@ -749,16 +749,16 @@ impl Db {
         Ok(())
     }
 
-    pub fn get_default_accounts_from_all_configured_exchanges(
+    pub fn get_default_accounts_from_configured_exchanges(
         &self,
-    ) -> Vec<(Exchange, ExchangeCredentials)> {
+    ) -> Vec<(Exchange, ExchangeCredentials, String)> {
         self.credentials_db
             .get_all()
             .into_iter()
             .filter_map(|key| {
                 if let Ok(exchange) = key.parse() {
                     self.get_exchange_credentials(exchange, "")
-                        .map(|exchange_credentials| (exchange, exchange_credentials))
+                        .map(|exchange_credentials| (exchange, exchange_credentials, "".into()))
                 } else {
                     None
                 }
