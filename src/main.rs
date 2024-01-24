@@ -4373,6 +4373,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         )
                 )
                 .subcommand(
+                    SubCommand::with_name("tax-rate")
+                        .about("Show entity tax rate for account listing")
+                )
+                .subcommand(
                     SubCommand::with_name("merge")
                         .about("Merge one stake account into another")
                         .arg(
@@ -5845,6 +5849,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     short_term_gain,
                     long_term_gain,
                 })?;
+            }
+            ("tax-rate", Some(_arg_matches)) => {
+                if let Some(TaxRate {
+                    income,
+                    short_term_gain,
+                    long_term_gain,
+                }) = db.get_tax_rate()
+                {
+                    println!("Income tax rate: {income:.2}");
+                    println!("Short-term gain rate: {short_term_gain:.2}");
+                    println!("Long-term gain rate: {long_term_gain:.2}");
+                } else {
+                    println!("(unset)");
+                }
             }
             ("merge", Some(arg_matches)) => {
                 let from_address = pubkey_of(arg_matches, "from_address").unwrap();
