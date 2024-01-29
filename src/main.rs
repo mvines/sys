@@ -123,27 +123,27 @@ async fn get_block_date_and_price(
     let block_date = rpc_client_utils::get_block_date(rpc_client, slot).await?;
     Ok((
         block_date,
-        token.get_historical_price(rpc_client, block_date).await?,
+        retry_get_historical_price(rpc_client, block_date, token).await?,
     ))
 }
 
-async fn retry_get_block_date_and_price(
+async fn retry_get_historical_price(
     rpc_client: &RpcClient,
-    slot: Slot,
+    block_date: NaiveDate,
     token: MaybeToken,
-) -> Result<(NaiveDate, Decimal), Box<dyn std::error::Error>> {
+) -> Result<Decimal, Box<dyn std::error::Error>> {
     const NUM_RETRIES: usize = 20;
     for _ in 1..NUM_RETRIES {
-        let date_price = get_block_date_and_price(rpc_client, slot, token).await;
-        if date_price.is_ok() {
-            println!("Got block date and price");
-            return date_price;
+        let price = token.get_historical_price(rpc_client, block_date).await;
+        if price.is_ok() {
+            println!("Got price");
+            return price;
         }
-        println!("Retry get_block_date_and_price");
-        //emprically observed cool down period is ~14s
+        println!("Retry get_historical_price");
+        //empirically observed cool down period is ~14s
         sleep(Duration::from_secs(5));
     }
-    get_block_date_and_price(rpc_client, slot, token).await
+    token.get_historical_price(rpc_client, block_date).await
 }
 
 fn add_exchange_deposit_address_to_db(
@@ -3460,7 +3460,7 @@ async fn process_account_sync(
 
                 let slot = inflation_reward.effective_slot;
                 let (when, price) =
-                    retry_get_block_date_and_price(rpc_client, slot, account.token).await?;
+                    get_block_date_and_price(rpc_client, slot, account.token).await?;
                 let lot = Lot {
                     lot_number: db.next_lot_number(),
                     acquisition: LotAcquistion::new(
