@@ -140,7 +140,10 @@ async fn retry_get_historical_price(
             return price;
         }
         println!("Retry get_historical_price");
-        //empirically observed cool down period is ~14s
+        // Empirically observed cool down period is ~14s
+        //
+        // TODO: Move this retry logic into `coin_gecko::get_historical_price()`, and respect the
+        // HTTP `Retry-After:` response header from Coin Gecko
         sleep(Duration::from_secs(5));
     }
     token.get_historical_price(rpc_client, block_date).await
