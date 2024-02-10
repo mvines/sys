@@ -2007,13 +2007,17 @@ async fn process_account_cost_basis(
 
         for (amount, price) in lots {
             total_amount += amount;
-            total_price += Decimal::from_u64(amount).unwrap() * price;
+            total_price += Decimal::from_f64(token.ui_amount(amount)).unwrap() * price;
         }
         println!(
-            "  {:>7}: {:<20} at ${:.2}",
+            "  {:>7}: {:<20} at ${} ; ${:.2} per {}",
             token.to_string(),
             token.format_amount(total_amount),
-            total_price / Decimal::from_u64(total_amount).unwrap()
+            TryInto::<f64>::try_into(total_price)
+                .unwrap()
+                .separated_string_with_fixed_place(2),
+            total_price / Decimal::from_f64(token.ui_amount(total_amount)).unwrap(),
+            token.name()
         );
     }
     Ok(())
