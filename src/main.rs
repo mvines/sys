@@ -1959,6 +1959,66 @@ impl AnnualRealizedGain {
     }
 }
 
+async fn process_account_cost_basis(
+    db: &Db,
+    when: NaiveDate,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut held_tokens =
+        BTreeMap::<MaybeToken, Vec<(/*amount: */ u64, /*price: */ Decimal)>>::default();
+
+    println!("Average Cost Basis on {when}");
+    for disposed_lot in db.disposed_lots() {
+        if disposed_lot.lot.acquisition.when > when || disposed_lot.when < when {
+            continue;
+        }
+        held_tokens
+            .entry(disposed_lot.token)
+            .or_insert_with(Vec::new)
+            .push((
+                disposed_lot.lot.amount,
+                disposed_lot.lot.acquisition.price(),
+            ));
+    }
+
+    for account in db.get_accounts() {
+        let held_token = held_tokens.entry(account.token).or_insert_with(Vec::new);
+        for lot in account.lots {
+            if lot.acquisition.when <= when {
+                held_token.push((lot.amount, lot.acquisition.price()));
+            }
+        }
+    }
+
+    // Merge wSOL lots into SOL
+    if let Some(mut lots) = held_tokens.remove(&Token::wSOL.into()) {
+        held_tokens
+            .entry(MaybeToken::SOL())
+            .or_insert_with(Vec::new)
+            .append(&mut lots);
+    }
+
+    for (token, lots) in held_tokens {
+        if lots.is_empty() || token.fiat_fungible() {
+            continue;
+        }
+
+        let mut total_amount = 0;
+        let mut total_price = Decimal::default();
+
+        for (amount, price) in lots {
+            total_amount += amount;
+            total_price += Decimal::from_u64(amount).unwrap() * price;
+        }
+        println!(
+            "  {:>7}: {:<20} at ${:.2}",
+            token.to_string(),
+            token.format_amount(total_amount),
+            total_price / Decimal::from_u64(total_amount).unwrap()
+        );
+    }
+    Ok(())
+}
+
 async fn process_account_list(
     db: &Db,
     rpc_client: &RpcClient,
@@ -4309,6 +4369,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         ),
                 )
                 .subcommand(
+                    SubCommand::with_name("cost-basis")
+                        .about("Display average cost basis of holdings")
+                        .arg(
+                            Arg::with_name("when")
+                                .value_name("YY/MM/DD")
+                                .takes_value(true)
+                                .required(false)
+                                .validator(|value| naivedate_of(&value).map(|_| ()))
+                                .default_value(&default_when)
+                                .help("Date to calculate cost basis for")
+                        )
+                )
+                .subcommand(
                     SubCommand::with_name("xls")
                         .about("Export an Excel spreadsheet file")
                         .arg(
@@ -5795,6 +5868,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     verbose,
                 )
                 .await?;
+            }
+            ("cost-basis", Some(arg_matches)) => {
+                let when = value_t!(arg_matches, "when", String)
+                    .map(|s| naivedate_of(&s).unwrap())
+                    .unwrap();
+
+                process_account_cost_basis(&db, when).await?;
             }
             ("xls", Some(arg_matches)) => {
                 let outfile = value_t_or_exit!(arg_matches, "outfile", String);
