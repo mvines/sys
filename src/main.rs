@@ -3008,7 +3008,7 @@ async fn process_account_sweep<T: Signers>(
     } else {
         let token = token.token().unwrap();
 
-        let lamports = from_tracked_account
+        let amount = from_tracked_account
             .last_update_balance
             .saturating_sub(retain_amount);
 
@@ -3020,11 +3020,11 @@ async fn process_account_sweep<T: Signers>(
                 &token.ata(&to_address),
                 &from_authority_address,
                 &[],
-                lamports,
+                amount,
                 token.decimals(),
             )
             .unwrap()],
-            lamports,
+            amount,
         )
     };
 
@@ -5999,14 +5999,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .await?;
             }
             ("sweep", Some(arg_matches)) => {
-                let token = value_t!(arg_matches, "token", Token).ok();
+                let token = value_t!(arg_matches, "token", Token).ok().into();
                 let from_address = pubkey_of(arg_matches, "address").unwrap();
                 let (from_authority_signer, from_authority_address) =
                     signer_of(arg_matches, "authority", &mut wallet_manager)?;
                 let from_authority_address = from_authority_address.expect("authority_address");
                 let from_authority_signer = from_authority_signer.expect("authority_signer");
-                let retain_amount =
-                    MaybeToken::SOL().amount(value_t!(arg_matches, "retain", f64).unwrap_or(0.));
+                let retain_ui_amount = value_t!(arg_matches, "retain", f64).unwrap_or(0.);
                 let no_sweep_ok = arg_matches.is_present("no_sweep_ok");
                 let to_address = pubkey_of(arg_matches, "to");
 
@@ -6014,8 +6013,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     &mut db,
                     &rpc_client,
                     from_address,
-                    token.into(),
-                    retain_amount,
+                    token,
+                    token.amount(retain_ui_amount),
                     no_sweep_ok,
                     from_authority_address,
                     vec![from_authority_signer],
