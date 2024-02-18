@@ -2859,11 +2859,13 @@ async fn process_account_sweep<T: Signers>(
     from_address: Pubkey,
     token: MaybeToken,
     retain_amount: u64,
+    exact_amount: Option<u64>,
     no_sweep_ok: bool,
     from_authority_address: Pubkey,
     signers: T,
     to_address: Option<Pubkey>,
     notifier: &Notifier,
+    existing_signature: Option<Signature>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (recent_blockhash, last_valid_block_height) =
         rpc_client.get_latest_blockhash_with_commitment(rpc_client.commitment())?;
@@ -2897,6 +2899,10 @@ async fn process_account_sweep<T: Signers>(
     } else {
         if !token.is_sol() {
             return Err("--to <ADDRESS> must be provided for token sweeps".into());
+        }
+
+        if existing_signature.is_some() {
+            return Err("--signature only supported for token sweeps".into());
         }
 
         let transitory_stake_account = Keypair::new();
@@ -2938,6 +2944,18 @@ async fn process_account_sweep<T: Signers>(
         .into());
     }
 
+    let apply_exact_amount = |amount: u64| -> Result<u64, Box<dyn std::error::Error>> {
+        if let Some(exact_amount) = exact_amount {
+            if exact_amount > amount {
+                Err(format!("Account has insufficient balance: {}", from_address).into())
+            } else {
+                Ok(exact_amount)
+            }
+        } else {
+            Ok(amount)
+        }
+    };
+
     let (mut instructions, sweep_amount) = if token.is_sol() {
         if from_account.lamports < from_tracked_account.last_update_balance {
             return Err(format!(
@@ -2950,7 +2968,7 @@ async fn process_account_sweep<T: Signers>(
         }
 
         if from_account.owner == system_program::id() {
-            let lamports = if from_address == from_authority_address {
+            let lamports = apply_exact_amount(if from_address == from_authority_address {
                 from_tracked_account.last_update_balance.saturating_sub(
                     num_transaction_signatures * fee_calculator.lamports_per_signature
                         + retain_amount,
@@ -2959,7 +2977,7 @@ async fn process_account_sweep<T: Signers>(
                 from_tracked_account
                     .last_update_balance
                     .saturating_sub(retain_amount)
-            };
+            })?;
 
             (
                 vec![system_instruction::transfer(
@@ -2974,9 +2992,11 @@ async fn process_account_sweep<T: Signers>(
                 solana_vote_program::vote_state::VoteState::size_of(),
             )?;
 
-            let lamports = from_tracked_account
-                .last_update_balance
-                .saturating_sub(minimum_balance + retain_amount);
+            let lamports = apply_exact_amount(
+                from_tracked_account
+                    .last_update_balance
+                    .saturating_sub(minimum_balance + retain_amount),
+            )?;
 
             (
                 vec![solana_vote_program::vote_instruction::withdraw(
@@ -2988,9 +3008,11 @@ async fn process_account_sweep<T: Signers>(
                 lamports,
             )
         } else if from_account.owner == solana_sdk::stake::program::id() {
-            let lamports = from_tracked_account
-                .last_update_balance
-                .saturating_sub(retain_amount);
+            let lamports = apply_exact_amount(
+                from_tracked_account
+                    .last_update_balance
+                    .saturating_sub(retain_amount),
+            )?;
 
             (
                 vec![solana_sdk::stake::instruction::withdraw(
@@ -3008,9 +3030,11 @@ async fn process_account_sweep<T: Signers>(
     } else {
         let token = token.token().unwrap();
 
-        let amount = from_tracked_account
-            .last_update_balance
-            .saturating_sub(retain_amount);
+        let amount = apply_exact_amount(
+            from_tracked_account
+                .last_update_balance
+                .saturating_sub(retain_amount),
+        )?;
 
         (
             vec![spl_token::instruction::transfer_checked(
@@ -3060,6 +3084,7 @@ async fn process_account_sweep<T: Signers>(
         sweep_stake_address,
     )) = via_transitory_stake.as_ref()
     {
+        assert!(existing_signature.is_none());
         assert_eq!(to_address, transitory_stake_account.pubkey());
 
         let (sweep_stake_authorized, sweep_stake_vote_account_address) =
@@ -3106,36 +3131,44 @@ async fn process_account_sweep<T: Signers>(
         )
     };
 
-    let mut message = Message::new(&instructions, Some(&from_authority_address));
-    message.recent_blockhash = recent_blockhash;
-    assert_eq!(
-        rpc_client.get_fee_for_message(&message)?,
-        num_transaction_signatures * fee_calculator.lamports_per_signature
-    );
+    let (signature, maybe_transaction) = match existing_signature {
+        None => {
+            let mut message = Message::new(&instructions, Some(&from_authority_address));
+            message.recent_blockhash = recent_blockhash;
+            assert_eq!(
+                rpc_client.get_fee_for_message(&message)?,
+                num_transaction_signatures * fee_calculator.lamports_per_signature
+            );
 
-    let mut transaction = Transaction::new_unsigned(message);
-    let simulation_result = rpc_client.simulate_transaction(&transaction)?.value;
-    if simulation_result.err.is_some() {
-        return Err(format!("Simulation failure: {simulation_result:?}").into());
-    }
+            let mut transaction = Transaction::new_unsigned(message);
+            let simulation_result = rpc_client.simulate_transaction(&transaction)?.value;
+            if simulation_result.err.is_some() {
+                return Err(format!("Simulation failure: {simulation_result:?}").into());
+            }
 
-    transaction.partial_sign(&signers, recent_blockhash);
-    if let Some((transitory_stake_account, sweep_stake_authority_keypair, ..)) =
-        via_transitory_stake.as_ref()
-    {
-        transaction.try_sign(
-            &[transitory_stake_account, sweep_stake_authority_keypair],
-            recent_blockhash,
-        )?;
-    }
+            transaction.partial_sign(&signers, recent_blockhash);
+            if let Some((transitory_stake_account, sweep_stake_authority_keypair, ..)) =
+                via_transitory_stake.as_ref()
+            {
+                assert!(existing_signature.is_none());
+                transaction.try_sign(
+                    &[transitory_stake_account, sweep_stake_authority_keypair],
+                    recent_blockhash,
+                )?;
+            }
 
-    let signature = transaction.signatures[0];
-    println!("Transaction signature: {signature}");
+            let signature = transaction.signatures[0];
+            println!("Transaction signature: {signature}");
 
-    let epoch = rpc_client.get_epoch_info()?.epoch;
-    if let Some((transitory_stake_account, ..)) = via_transitory_stake.as_ref() {
-        db.add_transitory_sweep_stake_address(transitory_stake_account.pubkey(), epoch)?;
-    }
+            let epoch = rpc_client.get_epoch_info()?.epoch;
+            if let Some((transitory_stake_account, ..)) = via_transitory_stake.as_ref() {
+                assert!(existing_signature.is_none());
+                db.add_transitory_sweep_stake_address(transitory_stake_account.pubkey(), epoch)?;
+            }
+            (signature, Some(transaction))
+        }
+        Some(existing_signature) => (existing_signature, None),
+    };
     db.record_transfer(
         signature,
         last_valid_block_height,
@@ -3148,12 +3181,14 @@ async fn process_account_sweep<T: Signers>(
         None,
     )?;
 
-    if !send_transaction_until_expired(rpc_client, &transaction, last_valid_block_height) {
-        db.cancel_transfer(signature)?;
-        if let Some((transitory_stake_account, ..)) = via_transitory_stake.as_ref() {
-            db.remove_transitory_sweep_stake_address(transitory_stake_account.pubkey())?;
+    if let Some(transaction) = maybe_transaction {
+        if !send_transaction_until_expired(rpc_client, &transaction, last_valid_block_height) {
+            db.cancel_transfer(signature)?;
+            if let Some((transitory_stake_account, ..)) = via_transitory_stake.as_ref() {
+                db.remove_transitory_sweep_stake_address(transitory_stake_account.pubkey())?;
+            }
+            return Err("Sweep failed".into());
         }
-        return Err("Sweep failed".into());
     }
     println!("Confirming sweep: {signature}");
     let when = get_signature_date(rpc_client, signature).await?;
@@ -4510,9 +4545,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .value_name("SIGNATURE")
                                 .takes_value(true)
                                 .validator(is_parsable::<Signature>)
-                                .help("Existing merge transaction signature that succeeded but \
-                                      due to RPC infrastructure limitations the local database \
-                                      considered it to have failed. Careful!")
+                                .help("Use an existing transaction signature for merge. \
+                                      That is, perform the local database operations only. \
+                                      Careful!")
                         )
                 )
                 .subcommand(
@@ -4558,14 +4593,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .help("Exit successfully if a sweep is not possible due to low source account balance"),
                         )
                         .arg(
+                            Arg::with_name("exactly")
+                                .long("exactly")
+                                .value_name("AMOUNT")
+                                .takes_value(true)
+                                .validator(is_amount)
+                                .help("Sweep exactly this amount [default: full account balance minus the value provided to --retain]"),
+                        )
+                        .arg(
                             Arg::with_name("retain")
                                 .short("r")
                                 .long("retain")
-                                .value_name("SOL")
+                                .value_name("AMOUNT")
                                 .takes_value(true)
-                                .validator(is_parsable::<f64>)
-                                .help("Amount of SOL to retain in the source account [default: 0]"),
-                        ),
+                                .validator(is_amount)
+                                .help("Amount of SOL/tokens to leave in source account [default: 0]"),
+                        )
+                        .arg(
+                            Arg::with_name("transaction")
+                                .long("transaction")
+                                .value_name("SIGNATURE")
+                                .takes_value(true)
+                                .validator(is_parsable::<Signature>)
+                                .help("Use an existing transaction signature for sweep. \
+                                      That is, perform the local database operations only. \
+                                      Careful!")
+                        )
                 )
                 .subcommand(
                     SubCommand::with_name("split")
@@ -6006,8 +6059,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let from_authority_address = from_authority_address.expect("authority_address");
                 let from_authority_signer = from_authority_signer.expect("authority_signer");
                 let retain_ui_amount = value_t!(arg_matches, "retain", f64).unwrap_or(0.);
+                let exactly_ui_amount = value_t!(arg_matches, "exactly", f64).ok();
                 let no_sweep_ok = arg_matches.is_present("no_sweep_ok");
                 let to_address = pubkey_of(arg_matches, "to");
+                let signature = value_t!(arg_matches, "transaction", Signature).ok();
 
                 process_account_sweep(
                     &mut db,
@@ -6015,11 +6070,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     from_address,
                     token,
                     token.amount(retain_ui_amount),
+                    exactly_ui_amount.map(|ui_amount| token.amount(ui_amount)),
                     no_sweep_ok,
                     from_authority_address,
                     vec![from_authority_signer],
                     to_address,
                     &notifier,
+                    signature,
                 )
                 .await?;
             }
