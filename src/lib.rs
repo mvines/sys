@@ -5,6 +5,7 @@ pub mod coin_gecko;
 pub mod coinbase_exchange;
 pub mod exchange;
 pub mod ftx_exchange;
+pub mod helius_rpc;
 pub mod kraken_exchange;
 pub mod metrics;
 pub mod token;

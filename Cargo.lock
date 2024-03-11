@@ -4205,6 +4205,7 @@ dependencies = [
  "async-trait",
  "binance-rs-async",
  "bincode",
+ "bs58 0.4.0",
  "chrono",
  "chrono-humanize",
  "clap 2.33.3",

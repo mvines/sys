@@ -3141,6 +3141,7 @@ async fn process_account_sweep<T: Signers>(
             );
 
             let mut transaction = Transaction::new_unsigned(message);
+
             let simulation_result = rpc_client.simulate_transaction(&transaction)?.value;
             if simulation_result.err.is_some() {
                 return Err(format!("Simulation failure: {simulation_result:?}").into());
