@@ -28,6 +28,8 @@ use {
     solana_sdk::{
         clock::Slot,
         commitment_config::CommitmentConfig,
+        compute_budget,
+        instruction::Instruction,
         message::Message,
         native_token::lamports_to_sol,
         pubkey::Pubkey,
@@ -48,6 +50,7 @@ use {
     sys::{
         app_version,
         exchange::{self, *},
+        helius_rpc,
         metrics::{self, dp, MetricsConfig},
         send_transaction_until_expired,
         token::*,
@@ -147,6 +150,40 @@ async fn retry_get_historical_price(
         sleep(Duration::from_secs(5));
     }
     token.get_historical_price(rpc_client, block_date).await
+}
+
+#[derive(Default, Debug)]
+struct ComputeBudget {
+    compute_unit_price_micro_lamports: Option<u64>,
+    compute_unit_limit: Option<u32>,
+}
+
+fn apply_compute_budget(
+    rpc_client: &RpcClient,
+    instructions: &mut Vec<Instruction>,
+    compute_budget: ComputeBudget,
+) {
+    if let Some(compute_unit_limit) = compute_budget.compute_unit_limit {
+        instructions.push(
+            compute_budget::ComputeBudgetInstruction::set_compute_unit_limit(compute_unit_limit),
+        );
+    }
+    if let Some(compute_unit_price_micro_lamports) =
+        compute_budget.compute_unit_price_micro_lamports
+    {
+        if let Ok(priority_fee_estimate) = helius_rpc::get_priority_fee_estimate_for_instructions(
+            rpc_client,
+            helius_rpc::HeliusPriorityLevel::High,
+            instructions,
+        ) {
+            println!("Note: helius compute unit price estimate is {priority_fee_estimate}");
+        }
+        instructions.push(
+            compute_budget::ComputeBudgetInstruction::set_compute_unit_price(
+                compute_unit_price_micro_lamports,
+            ),
+        );
+    }
 }
 
 fn add_exchange_deposit_address_to_db(
@@ -441,6 +478,7 @@ async fn process_exchange_deposit<T: Signers>(
     signers: T,
     lot_selection_method: LotSelectionMethod,
     lot_numbers: Option<HashSet<usize>>,
+    compute_budget: ComputeBudget,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(if_exchange_balance_less_than) = if_exchange_balance_less_than {
         let exchange_balance = exchange_client
@@ -512,7 +550,7 @@ async fn process_exchange_deposit<T: Signers>(
         .into());
     }
 
-    let (instructions, amount) = match token.token() {
+    let (mut instructions, amount) = match token.token() {
         /*SOL*/
         None => {
             assert_eq!(from_account.lamports, from_account_balance);
@@ -607,6 +645,7 @@ async fn process_exchange_deposit<T: Signers>(
             (instructions, amount)
         }
     };
+    apply_compute_budget(rpc_client, &mut instructions, compute_budget);
 
     if amount == 0 {
         return Err("Nothing to deposit".into());
@@ -2734,6 +2773,7 @@ async fn process_account_xls(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn process_account_merge<T: Signers>(
     db: &mut Db,
     rpc_client: &RpcClient,
@@ -2741,6 +2781,7 @@ async fn process_account_merge<T: Signers>(
     into_address: Pubkey,
     authority_address: Pubkey,
     signers: T,
+    compute_budget: ComputeBudget,
     existing_signature: Option<Signature>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let token = MaybeToken::SOL(); // TODO: Support merging tokens one day
@@ -2786,7 +2827,7 @@ async fn process_account_merge<T: Signers>(
 
         let amount = from_tracked_account.last_update_balance;
 
-        let instructions = if from_account.owner == solana_sdk::stake::program::id()
+        let mut instructions = if from_account.owner == solana_sdk::stake::program::id()
             && into_account.owner == solana_sdk::stake::program::id()
         {
             solana_sdk::stake::instruction::merge(&into_address, &from_address, &authority_address)
@@ -2807,6 +2848,7 @@ async fn process_account_merge<T: Signers>(
             )
             .into());
         };
+        apply_compute_budget(rpc_client, &mut instructions, compute_budget);
 
         println!("Merging {from_address} into {into_address}");
         if from_address != authority_address {
@@ -2865,6 +2907,7 @@ async fn process_account_sweep<T: Signers>(
     signers: T,
     to_address: Option<Pubkey>,
     notifier: &Notifier,
+    compute_budget: ComputeBudget,
     existing_signature: Option<Signature>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (recent_blockhash, last_valid_block_height) =
@@ -3131,6 +3174,8 @@ async fn process_account_sweep<T: Signers>(
         )
     };
 
+    apply_compute_budget(rpc_client, &mut instructions, compute_budget);
+
     let (signature, maybe_transaction) = match existing_signature {
         None => {
             let mut message = Message::new(&instructions, Some(&from_authority_address));
@@ -3141,7 +3186,6 @@ async fn process_account_sweep<T: Signers>(
             );
 
             let mut transaction = Transaction::new_unsigned(message);
-
             let simulation_result = rpc_client.simulate_transaction(&transaction)?.value;
             if simulation_result.err.is_some() {
                 return Err(format!("Simulation failure: {simulation_result:?}").into());
@@ -3213,6 +3257,7 @@ async fn process_account_split<T: Signers>(
     signers: T,
     into_keypair: Option<Keypair>,
     if_balance_exceeds: Option<f64>,
+    compute_budget: ComputeBudget,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // TODO: Support splitting two system accounts? Tokens? Otherwise at least error cleanly when it's attempted
     let token = MaybeToken::SOL(); // TODO: Support splitting tokens one day
@@ -3258,12 +3303,13 @@ async fn process_account_split<T: Signers>(
         }
     }
 
-    let instructions = solana_sdk::stake::instruction::split(
+    let mut instructions = solana_sdk::stake::instruction::split(
         &from_address,
         &authority_address,
         amount,
         &into_keypair.pubkey(),
     );
+    apply_compute_budget(rpc_client, &mut instructions, compute_budget);
 
     let message = Message::new(&instructions, Some(&authority_address));
 
@@ -3669,6 +3715,7 @@ async fn process_account_wrap<T: Signers>(
     lot_numbers: Option<HashSet<usize>>,
     authority_address: Pubkey,
     signers: T,
+    compute_budget: ComputeBudget,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let sol = MaybeToken::SOL();
     let wsol = Token::wSOL;
@@ -3736,6 +3783,7 @@ async fn process_account_wrap<T: Signers>(
         spl_token::instruction::sync_native(&spl_token::id(), &wsol_address).unwrap(),
     ]);
 
+    apply_compute_budget(rpc_client, &mut instructions, compute_budget);
     let message = Message::new(&instructions, Some(&authority_address));
 
     let mut transaction = Transaction::new_unsigned(message);
@@ -3785,6 +3833,7 @@ async fn process_account_unwrap<T: Signers>(
     lot_numbers: Option<HashSet<usize>>,
     authority_address: Pubkey,
     signers: T,
+    compute_budget: ComputeBudget,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let sol = MaybeToken::SOL();
     let wsol = Token::wSOL;
@@ -3803,7 +3852,7 @@ async fn process_account_unwrap<T: Signers>(
 
     let ephemeral_token_account = Keypair::new();
 
-    let instructions = [
+    let mut instructions = vec![
         spl_associated_token_account::instruction::create_associated_token_account_idempotent(
             &authority_address,
             &ephemeral_token_account.pubkey(),
@@ -3830,6 +3879,7 @@ async fn process_account_unwrap<T: Signers>(
         )
         .unwrap(),
     ];
+    apply_compute_budget(rpc_client, &mut instructions, compute_budget);
 
     let message = Message::new(&instructions, Some(&authority_address));
 
@@ -3870,6 +3920,7 @@ async fn process_account_unwrap<T: Signers>(
 
     Ok(())
 }
+
 async fn process_account_sync_pending_transfers(
     db: &mut Db,
     rpc_client: &RpcClient,
@@ -4150,6 +4201,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .takes_value(false)
                 .global(true)
                 .help("Show additional information"),
+        )
+        .arg(
+            Arg::with_name("compute_unit_price_micro_lamports")
+                .long("compute-unit-price")
+                .value_name("MICROLAMPORTS")
+                .takes_value(true)
+                .validator(is_parsable::<u64>)
+                .help("Set a compute unit price in micro-lamports to pay \
+                      a higher transaction fee for higher transaction \
+                      prioritization [default: none]"),
+        )
+        .arg(
+            Arg::with_name("compute_unit_limit")
+                .long("compute-unit-limit")
+                .value_name("COMPUTE UNITS")
+                .takes_value(true)
+                .validator(is_parsable::<u32>)
+                .help("Set the transaction compute unit limit [default: no explicit limit]"),
         )
         .subcommand(
             SubCommand::with_name("price")
@@ -5011,16 +5080,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .help("Reject if the value lost relative to CoinGecko token
                                       price exceeds this percentage"),
                         )
-                        .arg(
-                            Arg::with_name("compute_unit_price_micro_lamports")
-                                .long("compute-unit-price")
-                                .value_name("MICROLAMPORTS")
-                                .takes_value(true)
-                                .validator(is_parsable::<usize>)
-                                .help("Set a compute unit price in micro-lamports to pay \
-                                      a higher transaction fee for higher transaction \
-                                      prioritization"),
-                        )
                         .arg(lot_selection_arg())
                         .arg(
                             Arg::with_name("transaction")
@@ -5668,6 +5727,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let app_matches = app.get_matches();
     let db_path = value_t_or_exit!(app_matches, "db_path", PathBuf);
     let verbose = app_matches.is_present("verbose");
+
+    let compute_budget = ComputeBudget {
+        compute_unit_price_micro_lamports: value_t!(
+            app_matches,
+            "compute_unit_price_micro_lamports",
+            u64
+        )
+        .ok(),
+        compute_unit_limit: value_t!(app_matches, "compute_unit_limit", u32).ok(),
+    };
+
     let rpc_client = RpcClient::new_with_timeout_and_commitment(
         normalize_to_url_if_moniker(value_t_or_exit!(app_matches, "json_rpc_url", String)),
         std::time::Duration::from_secs(120),
@@ -6048,6 +6118,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     into_address,
                     authority_address,
                     vec![authority_signer],
+                    compute_budget,
                     signature,
                 )
                 .await?;
@@ -6077,6 +6148,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     vec![from_authority_signer],
                     to_address,
                     &notifier,
+                    compute_budget,
                     signature,
                 )
                 .await?;
@@ -6117,6 +6189,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     vec![authority_signer],
                     into_keypair,
                     if_balance_exceeds,
+                    compute_budget,
                 )
                 .await?;
             }
@@ -6201,6 +6274,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     lot_numbers,
                     authority_address,
                     vec![authority_signer],
+                    compute_budget,
                 )
                 .await?;
             }
@@ -6234,6 +6308,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     lot_numbers,
                     authority_address,
                     vec![authority_signer],
+                    compute_budget,
                 )
                 .await?;
             }
@@ -6268,8 +6343,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let for_no_less_than = value_t!(arg_matches, "for_no_less_than", f64).ok();
                 let max_coingecko_value_percentage_loss =
                     value_t_or_exit!(arg_matches, "max_coingecko_value_percentage_loss", f64);
-                let compute_unit_price_micro_lamports =
-                    value_t!(arg_matches, "compute_unit_price_micro_lamports", u64).ok();
+
+                if compute_budget.compute_unit_limit.is_some() {
+                    println!("Note: --compute-unit-limit ignored for jup swap");
+                }
 
                 process_jup_swap(
                     &mut db,
@@ -6285,7 +6362,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if_from_balance_exceeds,
                     for_no_less_than,
                     max_coingecko_value_percentage_loss,
-                    compute_unit_price_micro_lamports,
+                    compute_budget.compute_unit_price_micro_lamports,
                     &notifier,
                 )
                 .await?;
@@ -6618,6 +6695,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         vec![authority_signer],
                         lot_selection_method,
                         lot_numbers,
+                        compute_budget,
                     )
                     .await?;
                     process_sync_exchange(
