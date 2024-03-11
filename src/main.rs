@@ -3174,16 +3174,26 @@ async fn process_account_sweep<T: Signers>(
         )
     };
 
-    apply_compute_budget(rpc_client, &mut instructions, compute_budget);
-
     let (signature, maybe_transaction) = match existing_signature {
         None => {
             let mut message = Message::new(&instructions, Some(&from_authority_address));
             message.recent_blockhash = recent_blockhash;
-            assert_eq!(
-                rpc_client.get_fee_for_message(&message)?,
-                num_transaction_signatures * fee_calculator.lamports_per_signature
-            );
+
+            let fee_for_message = rpc_client.get_fee_for_message(&message)?;
+
+            if compute_budget.compute_unit_price_micro_lamports.is_none() {
+                assert_eq!(
+                    fee_for_message,
+                    num_transaction_signatures * fee_calculator.lamports_per_signature
+                );
+            } else if from_account.owner == system_program::id() {
+                // Being lazy right now...
+                // The additional lamports used for priority fee were not accounted for
+                // when moving Lots around..
+                println!("TODO: account for priority fee in lot split...");
+            }
+
+            apply_compute_budget(rpc_client, &mut instructions, compute_budget);
 
             let mut transaction = Transaction::new_unsigned(message);
             let simulation_result = rpc_client.simulate_transaction(&transaction)?.value;

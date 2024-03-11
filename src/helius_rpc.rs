@@ -53,7 +53,7 @@ pub fn get_priority_fee_estimate_for_transaction(
     priority_level: HeliusPriorityLevel,
     transaction: &Transaction,
 ) -> Result<u64, String> {
-    println!("Invoking Helius RPC method: getPriorityFeeEstimate");
+    //println!("Invoking Helius RPC method: getPriorityFeeEstimate");
 
     let request = serde_json::json!([HeliusGetPriorityFeeEstimateRequest {
         options: Some(HeliusGetPriorityFeeEstimateOptions {
@@ -84,7 +84,7 @@ pub fn get_priority_fee_estimate_for_instructions(
     priority_level: HeliusPriorityLevel,
     instructions: &[Instruction],
 ) -> Result<u64, String> {
-    println!("Invoking Helius RPC method: getPriorityFeeEstimate");
+    //println!("Invoking Helius RPC method: getPriorityFeeEstimate");
 
     let mut account_keys: Vec<_> = instructions
         .iter()
@@ -113,7 +113,7 @@ pub fn get_priority_fee_estimate_for_instructions(
             solana_client::rpc_request::RpcRequest::Custom {
                 method: "getPriorityFeeEstimate",
             },
-            dbg!(request),
+            request,
         )
         .map(|response| {
             response
