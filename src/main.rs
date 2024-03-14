@@ -152,7 +152,7 @@ async fn retry_get_historical_price(
     token.get_historical_price(rpc_client, block_date).await
 }
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone, Copy)]
 struct ComputeBudget {
     compute_unit_price_micro_lamports: Option<u64>,
     compute_unit_limit: Option<u32>,
@@ -3176,6 +3176,8 @@ async fn process_account_sweep<T: Signers>(
 
     let (signature, maybe_transaction) = match existing_signature {
         None => {
+            apply_compute_budget(rpc_client, &mut instructions, compute_budget);
+
             let mut message = Message::new(&instructions, Some(&from_authority_address));
             message.recent_blockhash = recent_blockhash;
 
@@ -3192,8 +3194,6 @@ async fn process_account_sweep<T: Signers>(
                 // when moving Lots around..
                 println!("TODO: account for priority fee in lot split...");
             }
-
-            apply_compute_budget(rpc_client, &mut instructions, compute_budget);
 
             let mut transaction = Transaction::new_unsigned(message);
             let simulation_result = rpc_client.simulate_transaction(&transaction)?.value;
