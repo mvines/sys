@@ -3319,13 +3319,23 @@ async fn process_account_split<T: Signers>(
         }
     }
 
-    let mut instructions = solana_sdk::stake::instruction::split(
+    let minimum_stake_account_balance = rpc_client
+        .get_minimum_balance_for_rent_exemption(solana_sdk::stake::state::StakeStateV2::size_of())?;
+
+    let mut instructions = vec![];
+    apply_compute_budget(rpc_client, &mut instructions, compute_budget);
+
+    instructions.push(system_instruction::transfer(
+        &authority_address,
+        &into_keypair.pubkey(),
+        minimum_stake_account_balance,
+    ));
+    instructions.append(&mut solana_sdk::stake::instruction::split(
         &from_address,
         &authority_address,
         amount,
         &into_keypair.pubkey(),
-    );
-    apply_compute_budget(rpc_client, &mut instructions, compute_budget);
+    ));
 
     let message = Message::new(&instructions, Some(&authority_address));
 
