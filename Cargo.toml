@@ -18,7 +18,7 @@ chrono = "0.4"
 chrono-humanize = "0.2.1"
 clap = "2.33"
 #coinbase-rs = { path = "../coinbase-rs" }
-coinbase-rs = { git = "https://github.com/mvines/coinbase-rs.git", rev = "0ada57aff324e4955db772caebd0e46190333a8c" }
+coinbase-rs = { git = "https://github.com/mvines/coinbase-rs.git", rev = "f9647efa5386e24238a0b9baee3012e6d431271f" }
 console = "0.14.1"
 fd-lock = "3.0.0"
 ftx = { git = "https://github.com/fabianboesiger/ftx", rev = "bb98235d356dd1a2becc5bdf32a4b738311ed434" }
@@ -43,20 +43,21 @@ separator = "0.4.1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 simple_excel_writer = "0.1.9"
-solana-clap-utils = "=1.14.17"
-solana-cli-config = "=1.14.17"
-solana-cli-output = "=1.14.17"
-solana-client = "=1.14.17"
-solana-logger = "=1.14.17"
-solana-remote-wallet = "=1.14.17"
-solana-sdk = "=1.14.17"
-solana-transaction-status = "=1.14.17"
-solana-vote-program = "=1.14.17"            # Remove `solana-vote-program` dependency upon update to Solana 1.16
-spl-associated-token-account = "1.0.3"
-spl-token = "3.2.0"
+solana-clap-utils = "=1.17.26"
+solana-cli-config = "=1.17.26"
+solana-cli-output = "=1.17.26"
+solana-client = "=1.17.26"
+solana-logger = "=1.17.26"
+solana-remote-wallet = "=1.17.26"
+solana-sdk = "=1.17.26"
+solana-transaction-status = "=1.17.26"
+solana-vote-program = "=1.17.26"            # Remove `solana-vote-program` dependency upon update to Solana 1.16
+spl-associated-token-account = "2.3.0"
+spl-token = "4.0.0"
+spl-token-2022 = "2.0.1"
 spl-token-lending = { git = "https://github.com/solana-labs/solana-program-library.git", rev = "1d1c2b178b8cf2ed3e28006c27b2ba5b3d039d67" }
 strum = { version = "0.23", features = ["derive"] }
 thiserror = "1.0"
 tokio = { version = "1", features = ["macros", "time"] }
-tulipv2-sdk-common = "0.9.5"
+#tulipv2-sdk-common = "0.9.5"
 

@@ -1,7 +1,5 @@
 use {
-    crate::{
-        binance_exchange, coinbase_exchange, ftx_exchange, kraken_exchange, token::MaybeToken,
-    },
+    crate::{binance_exchange, coinbase_exchange, kraken_exchange, token::MaybeToken},
     async_trait::async_trait,
     chrono::NaiveDate,
     serde::{Deserialize, Serialize},
@@ -36,8 +34,6 @@ impl FromStr for Exchange {
             "Binance" | "binance" => Ok(Exchange::Binance),
             "BinanceUs" | "binanceus" => Ok(Exchange::BinanceUs),
             "Coinbase" | "coinbase" => Ok(Exchange::Coinbase),
-            "Ftx" | "ftx" => Ok(Exchange::Ftx),
-            "FtxUs" | "ftxus" => Ok(Exchange::FtxUs),
             "Kraken" | "kraken" => Ok(Exchange::Kraken),
             _ => Err(ParseExchangeError::InvalidExchange),
         }
@@ -206,9 +202,8 @@ pub fn exchange_client_new(
         Exchange::Binance => Box::new(binance_exchange::new(exchange_credentials)?),
         Exchange::BinanceUs => Box::new(binance_exchange::new_us(exchange_credentials)?),
         Exchange::Coinbase => Box::new(coinbase_exchange::new(exchange_credentials)?),
-        Exchange::Ftx => Box::new(ftx_exchange::new(exchange_credentials)?),
-        Exchange::FtxUs => Box::new(ftx_exchange::new_us(exchange_credentials)?),
         Exchange::Kraken => Box::new(kraken_exchange::new(exchange_credentials)?),
+        Exchange::Ftx | Exchange::FtxUs => return Err("Unsupported Exchange".into()),
     };
     Ok(exchange_client)
 }

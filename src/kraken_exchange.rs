@@ -181,8 +181,9 @@ impl ExchangeClient for KrakenExchangeClient {
                     ohlc.low().parse::<f64>().ok(),
                     ohlc.volume().parse::<f64>().ok(),
                 ) {
+                    #[allow(deprecated)]
                     let naive = NaiveDateTime::from_timestamp(ohlc.time(), 0);
-                    let time: DateTime<Utc> = DateTime::from_utc(naive, Utc);
+                    let time: DateTime<Utc> = DateTime::from_naive_utc_and_offset(naive, Utc);
 
                     Some(Hlv {
                         time,
@@ -344,8 +345,8 @@ impl ExchangeClient for KrakenExchangeClient {
 
         // TODO: use `order.opentm` instead?
         let last_update = {
-            let today = Local::now().date();
-            NaiveDate::from_ymd(today.year(), today.month(), today.day())
+            let today = Local::now().date_naive();
+            NaiveDate::from_ymd_opt(today.year(), today.month(), today.day()).unwrap()
         };
 
         Ok(OrderStatus {

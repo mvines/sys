@@ -115,21 +115,23 @@ impl Token {
                 None
             }
             Token::tuUSDC | Token::tuSOL | Token::tumSOL | Token::tustSOL => {
-                Some(crate::tulip::liquidity_token(self))
+                None
+                //                Some(crate::tulip::liquidity_token(self))
             }
         }
     }
 
     pub async fn get_current_liquidity_token_rate(
         &self,
-        rpc_client: &RpcClient,
+        _rpc_client: &RpcClient,
     ) -> Result<Decimal, Box<dyn std::error::Error>> {
         match self {
             Token::USDC | Token::UXD | Token::bSOL | Token::mSOL | Token::stSOL | Token::wSOL => {
                 unreachable!()
             }
             Token::tuUSDC | Token::tuSOL | Token::tumSOL | Token::tustSOL => {
-                crate::tulip::get_current_liquidity_token_rate(rpc_client, self).await
+                unreachable!()
+                //crate::tulip::get_current_liquidity_token_rate(rpc_client, self).await
             }
         }
     }
@@ -157,7 +159,7 @@ impl Token {
     #[async_recursion::async_recursion(?Send)]
     pub async fn get_current_price(
         &self,
-        rpc_client: &RpcClient,
+        _rpc_client: &RpcClient,
     ) -> Result<Decimal, Box<dyn std::error::Error>> {
         if self.fiat_fungible() {
             return Ok(Decimal::from_f64(1.).unwrap());
@@ -167,7 +169,8 @@ impl Token {
                 coin_gecko::get_current_price(&MaybeToken(Some(*self))).await
             }
             Token::tuUSDC | Token::tuSOL | Token::tumSOL | Token::tustSOL => {
-                crate::tulip::get_current_price(rpc_client, self).await
+                Err("tulip support disabled".into())
+                //crate::tulip::get_current_price(rpc_client, self).await
             }
         }
     }

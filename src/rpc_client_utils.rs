@@ -7,7 +7,7 @@ use {
         clock::Slot,
         pubkey::Pubkey,
         signature::Signature,
-        stake::state::{Authorized, StakeState},
+        stake::state::{Authorized, StakeStateV2},
     },
 };
 
@@ -16,12 +16,13 @@ pub async fn get_block_date(
     slot: Slot,
 ) -> Result<NaiveDate, Box<dyn std::error::Error>> {
     let block_time = rpc_client.get_block_time(slot)?;
-    let local_timestamp = Local.timestamp(block_time, 0);
-    Ok(NaiveDate::from_ymd(
+    let local_timestamp = Local.timestamp_opt(block_time, 0).unwrap();
+    Ok(NaiveDate::from_ymd_opt(
         local_timestamp.year(),
         local_timestamp.month(),
         local_timestamp.day(),
-    ))
+    )
+    .unwrap())
 }
 
 pub fn get_stake_authorized(
@@ -44,7 +45,9 @@ pub fn get_stake_authorized(
     }
 
     match stake_account.state() {
-        Ok(StakeState::Stake(meta, stake)) => Ok((meta.authorized, stake.delegation.voter_pubkey)),
+        Ok(StakeStateV2::Stake(meta, stake, _stake_flags)) => {
+            Ok((meta.authorized, stake.delegation.voter_pubkey))
+        }
         _ => Err(format!("Invalid stake account: {stake_account_address}").into()),
     }
 }
@@ -61,19 +64,21 @@ pub fn stake_accounts_have_same_credits_observed(
         .map_err(|err| format!("Invalid stake account 2: {err}"))?;
 
     if let (
-        StakeState::Stake(
+        StakeStateV2::Stake(
             _,
             Stake {
                 delegation: _,
                 credits_observed: credits_observed1,
             },
+            _,
         ),
-        StakeState::Stake(
+        StakeStateV2::Stake(
             _,
             Stake {
                 delegation: _,
                 credits_observed: credits_observed2,
             },
+            _,
         ),
     ) = (stake_state1, stake_state2)
     {

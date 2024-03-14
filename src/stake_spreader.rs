@@ -13,7 +13,7 @@ use {
         signers::Signers,
         stake::{
             self,
-            state::{StakeActivationStatus, StakeState},
+            state::{StakeActivationStatus, StakeStateV2},
         },
         stake_history::StakeHistory,
         sysvar::{clock, stake_history},
@@ -239,10 +239,10 @@ pub async fn run<T: Signers>(
         .zip(maybe_accounts.into_iter().map(Option::unwrap_or_default))
         .filter_map(|((address, last_update_balance), account)| {
             if account.owner == stake::program::id() {
-                bincode::deserialize::<StakeState>(account.data.as_slice())
+                bincode::deserialize::<StakeStateV2>(account.data.as_slice())
                     .ok()
                     .and_then(|state| match state {
-                        StakeState::Initialized(meta) => {
+                        StakeStateV2::Initialized(meta) => {
                             if meta.authorized.staker == authority_address {
                                 let locked = meta.lockup.is_in_force(&clock, None);
                                 Some((
@@ -259,7 +259,7 @@ pub async fn run<T: Signers>(
                                 None
                             }
                         }
-                        StakeState::Stake(meta, stake) => {
+                        StakeStateV2::Stake(meta, stake, _stake_flags) => {
                             if meta.authorized.staker == authority_address {
                                 let locked = meta.lockup.is_in_force(&clock, None);
 
@@ -270,6 +270,7 @@ pub async fn run<T: Signers>(
                                 } = stake.delegation.stake_activating_and_deactivating(
                                     current_epoch,
                                     Some(&stake_history),
+                                    None,
                                 );
 
                                 let busy = (activating + deactivating) > 0

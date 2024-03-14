@@ -319,9 +319,9 @@ impl ExchangeClient for BinanceExchangeClient {
         assert_eq!(order.client_order_id, *order_id);
 
         let last_update = Local
-            .timestamp((order.update_time / 1000) as i64, 0)
-            .date()
-            .naive_local();
+            .timestamp_opt((order.update_time / 1000) as i64, 0)
+            .unwrap()
+            .date_naive();
 
         let side = match order.side {
             binance::rest_model::OrderSide::Sell => OrderSide::Sell,

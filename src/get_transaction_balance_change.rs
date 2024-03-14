@@ -27,6 +27,7 @@ pub fn get_transaction_balance_change(
     let when = confirmed_transaction
         .block_time
         .map(|block_time| {
+            #[allow(deprecated)]
             NaiveDateTime::from_timestamp_opt(block_time, 0)
                 .ok_or_else(|| format!("Invalid block time for slot {slot}"))
         })

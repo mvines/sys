@@ -24,7 +24,6 @@ You can also run `./fetch-release.sh` to download the latest Linux and macOS bin
   * Fetch market info, SOL balance and sell order status
   * Deposit from a vote, stake or system account
   * Initiate and cancel basic limit orders
-* Tulip USDC, SOL, mSOL and stSOL lending integration
 * Jupiter Aggregator token swaps between supported tokens
 * Automatic epoch reward tracking for vote and stake accounts
 * Validator identity rewards are also automatically tracked at the epoch level, but not directly attributed to each individual block that rewards are credited
@@ -33,14 +32,6 @@ You can also run `./fetch-release.sh` to download the latest Linux and macOS bin
 * Historical and spot price via CoinGecko for SOL and supported tokens.
 * Data is contained in a local `sell-your-sol/` subdirectory that can be easily backed up, and is editable by hand if necessary
 * Full Excel export, useful to hand off to a CPA or your entity's finance department. Sorry no TurboTax import!
-
-## Coming Soon Features!
-Once Solana mainnet upgrades to Solana v1.17 and the stake redelegation
-instruction is activated (see
-[here](https://github.com/solana-labs/solana/issues/26765)), the following
-features will become available in `sys`:
-* Stake account redelegation with no loss of staking rewards (`sys account redelegate --help`)
-* Stake Spreader functionality that allows you to chase the highest performing validators with no loss of staking rewards (`sys stake-spreader --help`)
 
 ## Examples
 Explore the help system instead:

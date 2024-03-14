@@ -54,7 +54,7 @@ use {
         metrics::{self, dp, MetricsConfig},
         send_transaction_until_expired,
         token::*,
-        tulip,
+        //tulip,
     },
 };
 
@@ -84,14 +84,14 @@ fn get_deprecated_fee_calculator(
 }
 
 pub(crate) fn today() -> NaiveDate {
-    let today = Local::now().date();
-    NaiveDate::from_ymd(today.year(), today.month(), today.day())
+    let today = Local::now().date_naive();
+    NaiveDate::from_ymd_opt(today.year(), today.month(), today.day()).unwrap()
 }
 
 fn is_long_term_cap_gain(acquisition: NaiveDate, disposal: Option<NaiveDate>) -> bool {
     let disposal = disposal.unwrap_or_else(today);
     let hold_time = disposal - acquisition;
-    hold_time >= chrono::Duration::days(365)
+    hold_time >= chrono::Duration::try_days(365).unwrap()
 }
 
 fn format_order_side(order_side: OrderSide) -> String {
@@ -1224,6 +1224,7 @@ async fn process_jup_swap<T: Signers>(
     Ok(())
 }
 
+/*
 #[allow(clippy::too_many_arguments)]
 async fn process_tulip_deposit<T: Signers>(
     db: &mut Db,
@@ -1449,6 +1450,7 @@ async fn process_tulip_withdraw<T: Signers>(
 
     Ok(())
 }
+*/
 
 async fn process_sync_swaps(
     db: &mut Db,
@@ -1490,8 +1492,9 @@ async fn process_sync_swaps(
                         .block_time
                         .ok_or("Transaction block time not available")?;
 
-                    let when = Local.timestamp(block_time, 0);
-                    let when = NaiveDate::from_ymd(when.year(), when.month(), when.day());
+                    let when = Local.timestamp_opt(block_time, 0).unwrap();
+                    let when =
+                        NaiveDate::from_ymd_opt(when.year(), when.month(), when.day()).unwrap();
 
                     let transaction_status_meta = result.transaction.meta.unwrap();
 
@@ -2140,9 +2143,12 @@ async fn process_account_list(
                         Some(LiquidityTokenInfo {
                             liquidity_token,
                             current_liquidity_token_rate,
+                            current_apr: None,
+                            /*
                             current_apr: tulip::get_current_lending_apr(rpc_client, &account.token)
                                 .await
                                 .ok(),
+                            */
                         })
                     } else {
                         None
@@ -3140,7 +3146,7 @@ async fn process_account_sweep<T: Signers>(
         instructions.append(&mut vec![
             system_instruction::allocate(
                 &transitory_stake_account.pubkey(),
-                std::mem::size_of::<solana_sdk::stake::state::StakeState>() as u64,
+                std::mem::size_of::<solana_sdk::stake::state::StakeStateV2>() as u64,
             ),
             system_instruction::assign(
                 &transitory_stake_account.pubkey(),
@@ -3398,7 +3404,7 @@ async fn process_account_redelegate<T: Signers>(
         rpc_client.get_latest_blockhash_with_commitment(rpc_client.commitment())?;
 
     let minimum_stake_account_balance = rpc_client
-        .get_minimum_balance_for_rent_exemption(solana_sdk::stake::state::StakeState::size_of())?;
+        .get_minimum_balance_for_rent_exemption(solana_sdk::stake::state::StakeStateV2::size_of())?;
 
     let into_keypair = into_keypair.unwrap_or_else(Keypair::new);
     if db
@@ -4172,10 +4178,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let default_db_path = "sell-your-sol";
     let default_json_rpc_url = "https://api.mainnet-beta.solana.com";
     let default_when = {
-        let today = Local::now().date();
+        let today = Local::now().date_naive();
         format!("{}/{}/{}", today.year(), today.month(), today.day())
     };
-    let exchanges = ["binance", "binanceus", "coinbase", "ftx", "ftxus", "kraken"];
+    let exchanges = ["binance", "binanceus", "coinbase", "kraken"];
 
     let app_version = &*app_version();
     let mut app = App::new(crate_name!())
@@ -6422,6 +6428,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             )
             .await?;
         }
+        ("tulip", _) => todo!("maybe restore tulip support one day"),
+        /*
         ("tulip", Some(tulip_matches)) => match tulip_matches.subcommand() {
             ("apr", Some(arg_matches)) => {
                 let token = value_t_or_exit!(arg_matches, "collateral_token", Token);
@@ -6503,6 +6511,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             _ => unreachable!(),
         },
+        */
         (exchange, Some(exchange_matches)) => {
             assert!(exchanges.contains(&exchange), "Bug!");
             let exchange = Exchange::from_str(exchange)?;
@@ -6773,7 +6782,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .unwrap_or_default();
 
                     let max_create_time = value_t!(arg_matches, "age", i64).ok().and_then(|age| {
-                        Utc::now().checked_sub_signed(chrono::Duration::hours(age))
+                        Utc::now().checked_sub_signed(chrono::Duration::try_hours(age).unwrap())
                     });
 
                     let side = value_t_or_exit!(arg_matches, "side", String);

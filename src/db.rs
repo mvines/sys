@@ -1041,8 +1041,8 @@ impl Db {
             // invent a new lot if `token.fiat_fungible()`
             assert!(from_account.lots.is_empty());
 
-            let today = Local::now().date();
-            let when = NaiveDate::from_ymd(today.year(), today.month(), today.day());
+            let today = Local::now().date_naive();
+            let when = NaiveDate::from_ymd_opt(today.year(), today.month(), today.day()).unwrap();
 
             vec![Lot {
                 lot_number: self.next_lot_number(),
