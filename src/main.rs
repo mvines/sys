@@ -1819,10 +1819,13 @@ async fn process_account_add(
     signature: Option<Signature>,
     no_sync: bool,
     ui_amount: Option<f64>,
+    ui_negative_amount: Option<f64>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (when, amount, last_update_epoch, kind) = match signature {
         Some(signature) => {
             assert!(ui_amount.is_none()); // argument parsing should have asserted this already
+            assert!(ui_negative_amount.is_none()); // argument parsing should have asserted this already
+
             let (address, address_is_token) = match token.token() {
                 Some(token) => (token.ata(&address), true),
                 None => (address, false),
@@ -1857,8 +1860,19 @@ async fn process_account_add(
         }
         None => {
             let amount = match ui_amount {
-                Some(ui_amount) => token.amount(ui_amount),
-                None => token.balance(rpc_client, &address)?,
+                Some(ui_amount) => {
+                    assert!(ui_negative_amount.is_none()); // argument parsing should have asserted this already
+                    token.amount(ui_amount)
+                }
+                None => {
+                    let amount = token.balance(rpc_client, &address)?;
+                    match ui_negative_amount {
+                        Some(ui_negative_amount) => {
+                            amount.saturating_sub(token.amount(ui_negative_amount))
+                        }
+                        None => amount,
+                    }
+                }
             };
 
             let last_update_epoch = rpc_client.get_epoch_info()?.epoch.saturating_sub(1);
@@ -4421,6 +4435,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .help("Consider the account to have this amount of tokens rather than \
                                        using the current value on chain (advanced; uncommon)"),
                         )
+                        .arg(
+                            Arg::with_name("neg_amount")
+                                .long("neg-amount")
+                                .value_name("AMOUNT")
+                                .takes_value(true)
+                                .validator(is_parsable::<f64>)
+                                .conflicts_with("amount")
+                                .conflicts_with("transaction")
+                                .help("If a negative amount is specified, subtract the provided AMOUNT from the \
+                                       on-chain balance (advanced; uncommon)"),
+                        )
                 )
                 .subcommand(
                     SubCommand::with_name("dispose")
@@ -5960,6 +5985,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .unwrap_or_default();
                 let no_sync = arg_matches.is_present("no_sync");
                 let ui_amount = value_t!(arg_matches, "amount", f64).ok();
+                let ui_negative_amount = value_t!(arg_matches, "neg_amount", f64).ok();
 
                 process_account_add(
                     &mut db,
@@ -5973,6 +5999,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     signature,
                     no_sync,
                     ui_amount,
+                    ui_negative_amount,
                 )
                 .await?;
                 process_account_sync(&mut db, &rpc_client, Some(address), None, false, &notifier)
