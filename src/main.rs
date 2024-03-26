@@ -3007,13 +3007,11 @@ async fn process_account_sweep<T: Signers>(
 
     let (mut instructions, sweep_amount) = if token.is_sol() {
         if from_account.lamports < from_tracked_account.last_update_balance {
-            return Err(format!(
-                "{}: On-chain account balance ({}) less than tracked balance ({})",
+            println!("Warning: {}: On-chain account balance ({}) less than tracked balance ({})",
                 from_address,
                 token.ui_amount(from_account.lamports),
                 token.ui_amount(from_tracked_account.last_update_balance)
-            )
-            .into());
+            );
         }
 
         if from_account.owner == system_program::id() {
