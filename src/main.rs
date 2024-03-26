@@ -3186,7 +3186,8 @@ async fn process_account_sweep<T: Signers>(
         )
     } else {
         format!(
-            "Sweeping {} from {} into {}",
+            "Sweeping {}{} from {} into {}",
+            token.symbol(),
             token.ui_amount(sweep_amount),
             from_address,
             to_address
