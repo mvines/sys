@@ -5845,7 +5845,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
 
             if verbose {
-                println!("{verbose_msg}: ${price:.2}");
+                println!("{verbose_msg}: ${price:.6}");
 
                 if let Some(liquidity_token) = token.liquidity_token() {
                     let rate = token.get_current_liquidity_token_rate(&rpc_client).await?;
@@ -5857,7 +5857,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     );
                 }
             } else {
-                println!("{price:.2}");
+                println!("{price:.6}");
             }
         }
         ("sync", Some(arg_matches)) => {
