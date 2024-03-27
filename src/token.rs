@@ -114,9 +114,13 @@ impl Token {
 
     pub fn liquidity_token(&self) -> Option<MaybeToken> {
         match self {
-            Token::USDC | Token::USDT | Token::UXD | Token::bSOL | Token::mSOL | Token::stSOL | Token::wSOL => {
-                None
-            }
+            Token::USDC
+            | Token::USDT
+            | Token::UXD
+            | Token::bSOL
+            | Token::mSOL
+            | Token::stSOL
+            | Token::wSOL => None,
             Token::tuUSDC | Token::tuSOL | Token::tumSOL | Token::tustSOL => {
                 None
                 //                Some(crate::tulip::liquidity_token(self))
@@ -129,7 +133,13 @@ impl Token {
         _rpc_client: &RpcClient,
     ) -> Result<Decimal, Box<dyn std::error::Error>> {
         match self {
-            Token::USDC | Token::USDT | Token::UXD | Token::bSOL | Token::mSOL | Token::stSOL | Token::wSOL => {
+            Token::USDC
+            | Token::USDT
+            | Token::UXD
+            | Token::bSOL
+            | Token::mSOL
+            | Token::stSOL
+            | Token::wSOL => {
                 unreachable!()
             }
             Token::tuUSDC | Token::tuSOL | Token::tumSOL | Token::tustSOL => {
@@ -168,9 +178,13 @@ impl Token {
             return Ok(Decimal::from_f64(1.).unwrap());
         }
         match self {
-            Token::USDC | Token::USDT | Token::UXD | Token::bSOL | Token::mSOL | Token::stSOL | Token::wSOL => {
-                coin_gecko::get_current_price(&MaybeToken(Some(*self))).await
-            }
+            Token::USDC
+            | Token::USDT
+            | Token::UXD
+            | Token::bSOL
+            | Token::mSOL
+            | Token::stSOL
+            | Token::wSOL => coin_gecko::get_current_price(&MaybeToken(Some(*self))).await,
             Token::tuUSDC | Token::tuSOL | Token::tumSOL | Token::tustSOL => {
                 Err("tulip support disabled".into())
                 //crate::tulip::get_current_price(rpc_client, self).await
