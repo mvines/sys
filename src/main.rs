@@ -3179,7 +3179,9 @@ async fn process_account_sweep<T: Signers>(
         format!(
             "Sweeping {}{} from {} into {} (via {})",
             token.symbol(),
-            token.ui_amount(sweep_amount),
+            token
+                .ui_amount(sweep_amount)
+                .separated_string_with_fixed_place(2),
             from_address,
             sweep_stake_address,
             to_address
@@ -3188,7 +3190,9 @@ async fn process_account_sweep<T: Signers>(
         format!(
             "Sweeping {}{} from {} into {}",
             token.symbol(),
-            token.ui_amount(sweep_amount),
+            token
+                .ui_amount(sweep_amount)
+                .separated_string_with_fixed_place(2),
             from_address,
             to_address
         )
