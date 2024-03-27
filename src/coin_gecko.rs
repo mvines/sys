@@ -33,6 +33,7 @@ fn token_to_coin(token: &MaybeToken) -> Result<&'static str, Box<dyn std::error:
         None => "solana",
         Some(token) => match token {
             Token::USDC => "usd-coin",
+            Token::USDT => "tether",
             Token::UXD => "uxd-stablecoin",
             Token::bSOL => "blazestake-staked-sol",
             Token::mSOL => "msol",
@@ -84,6 +85,8 @@ pub async fn get_current_price(token: &MaybeToken) -> Result<Decimal, Box<dyn st
                 msol: Option<CurrencyList>,
                 #[serde(rename = "lido-staked-sol")]
                 stsol: Option<CurrencyList>,
+                #[serde(rename = "tether")]
+                tether: Option<CurrencyList>,
                 #[serde(rename = "uxd-stablecoin")]
                 uxd: Option<CurrencyList>,
             }
@@ -94,6 +97,7 @@ pub async fn get_current_price(token: &MaybeToken) -> Result<Decimal, Box<dyn st
                 .solana
                 .or(coins.msol)
                 .or(coins.stsol)
+                .or(coins.tether)
                 .or(coins.uxd)
                 .or(coins.bsol)
                 .ok_or_else(|| format!("Simple price data not available for {coin}").into())

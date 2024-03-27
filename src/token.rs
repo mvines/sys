@@ -32,6 +32,7 @@ use {
 #[allow(non_camel_case_types)]
 pub enum Token {
     USDC,
+    USDT,
     UXD,
     bSOL,
     mSOL,
@@ -47,6 +48,7 @@ impl Token {
     pub fn mint(&self) -> Pubkey {
         match self {
             Token::USDC => pubkey!("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"),
+            Token::USDT => pubkey!("BQcdHdAQW1hczDbBi9hiegXAR7A98Q9jx3X3iBBBDiq4"),
             Token::UXD => pubkey!("7kbnvuGBxxj8AG9qp8Scn56muWGaRaFqxg1FsRp3PaFT"),
             Token::tuUSDC => pubkey!("Amig8TisuLpzun8XyGfC5HJHHGUQEscjLgoTWsCCKihg"),
             Token::bSOL => pubkey!("bSo13r4TkiE4KumL71LsHTPpL2euBYLFx6h9HP3piy1"),
@@ -66,6 +68,7 @@ impl Token {
     pub fn symbol(&self) -> &'static str {
         match self {
             Token::USDC => "($)",
+            Token::USDT => "USDT$",
             Token::UXD => "UXD$",
             Token::tuUSDC => "tu($)",
             Token::bSOL => "b◎",
@@ -80,7 +83,7 @@ impl Token {
 
     pub fn decimals(&self) -> u8 {
         match self {
-            Token::USDC | Token::UXD | Token::tuUSDC => 6,
+            Token::USDC | Token::USDT | Token::UXD | Token::tuUSDC => 6,
             Token::stSOL
             | Token::tuSOL
             | Token::bSOL
@@ -111,7 +114,7 @@ impl Token {
 
     pub fn liquidity_token(&self) -> Option<MaybeToken> {
         match self {
-            Token::USDC | Token::UXD | Token::bSOL | Token::mSOL | Token::stSOL | Token::wSOL => {
+            Token::USDC | Token::USDT | Token::UXD | Token::bSOL | Token::mSOL | Token::stSOL | Token::wSOL => {
                 None
             }
             Token::tuUSDC | Token::tuSOL | Token::tumSOL | Token::tustSOL => {
@@ -126,7 +129,7 @@ impl Token {
         _rpc_client: &RpcClient,
     ) -> Result<Decimal, Box<dyn std::error::Error>> {
         match self {
-            Token::USDC | Token::UXD | Token::bSOL | Token::mSOL | Token::stSOL | Token::wSOL => {
+            Token::USDC | Token::USDT | Token::UXD | Token::bSOL | Token::mSOL | Token::stSOL | Token::wSOL => {
                 unreachable!()
             }
             Token::tuUSDC | Token::tuSOL | Token::tumSOL | Token::tustSOL => {
@@ -165,7 +168,7 @@ impl Token {
             return Ok(Decimal::from_f64(1.).unwrap());
         }
         match self {
-            Token::USDC | Token::UXD | Token::bSOL | Token::mSOL | Token::stSOL | Token::wSOL => {
+            Token::USDC | Token::USDT | Token::UXD | Token::bSOL | Token::mSOL | Token::stSOL | Token::wSOL => {
                 coin_gecko::get_current_price(&MaybeToken(Some(*self))).await
             }
             Token::tuUSDC | Token::tuSOL | Token::tumSOL | Token::tustSOL => {
