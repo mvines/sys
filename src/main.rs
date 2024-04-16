@@ -32,6 +32,7 @@ use {
         instruction::Instruction,
         message::Message,
         native_token::lamports_to_sol,
+        native_token::{sol_to_lamports, Sol},
         pubkey::Pubkey,
         signature::{read_keypair_file, Keypair, Signature, Signer},
         signers::Signers,
@@ -152,38 +153,110 @@ async fn retry_get_historical_price(
     token.get_historical_price(rpc_client, block_date).await
 }
 
-#[derive(Default, Debug, Clone, Copy)]
-struct ComputeBudget {
-    compute_unit_price_micro_lamports: Option<u64>,
-    compute_unit_limit: Option<u32>,
+#[derive(Debug, Clone, Copy)]
+enum PriorityFee {
+    Auto { max_lamports: u64 },
+    Exact { lamports: u64 },
 }
 
-fn apply_compute_budget(
+impl PriorityFee {
+    fn default_auto() -> Self {
+        Self::Auto {
+            max_lamports: sol_to_lamports(0.005), // Same max as the Jupiter V6 Swap API
+        }
+    }
+}
+
+impl PriorityFee {
+    pub fn max_lamports(&self) -> u64 {
+        match self {
+            Self::Auto { max_lamports } => *max_lamports,
+            Self::Exact { lamports } => *lamports,
+        }
+    }
+
+    pub fn exact_lamports(&self) -> Option<u64> {
+        match self {
+            Self::Auto { .. } => None,
+            Self::Exact { lamports } => Some(*lamports),
+        }
+    }
+}
+
+#[derive(Default, Debug, Clone, Copy)]
+struct ComputeBudget {
+    compute_unit_price_micro_lamports: u64,
+    compute_unit_limit: u32,
+}
+
+impl ComputeBudget {
+    pub fn new(compute_unit_limit: u32, priority_fee_lamports: u64) -> Self {
+        Self {
+            compute_unit_price_micro_lamports: priority_fee_lamports * (1e6 as u64)
+                / compute_unit_limit as u64,
+            compute_unit_limit,
+        }
+    }
+
+    pub fn priority_fee_lamports(&self) -> u64 {
+        self.compute_unit_limit as u64 * self.compute_unit_price_micro_lamports / (1e6 as u64)
+    }
+}
+
+fn apply_priority_fee(
     rpc_client: &RpcClient,
     instructions: &mut Vec<Instruction>,
-    compute_budget: ComputeBudget,
-) {
-    if let Some(compute_unit_limit) = compute_budget.compute_unit_limit {
-        instructions.push(
-            compute_budget::ComputeBudgetInstruction::set_compute_unit_limit(compute_unit_limit),
-        );
-    }
-    if let Some(compute_unit_price_micro_lamports) =
-        compute_budget.compute_unit_price_micro_lamports
-    {
+    compute_unit_limit: u32,
+    priority_fee: PriorityFee,
+) -> Result<u64, Box<dyn std::error::Error>> {
+    let priority_fee_lamports = if let Some(exact_lamports) = priority_fee.exact_lamports() {
+        exact_lamports
+    } else {
+        let prioritization_fees =
+            rpc_client_utils::get_recent_priority_fees_for_instructions(rpc_client, instructions)?;
+
+        let max_compute_unit_price_micro_lamports = prioritization_fees
+            .iter()
+            .max()
+            .copied()
+            .unwrap_or_default();
+
         if let Ok(priority_fee_estimate) = helius_rpc::get_priority_fee_estimate_for_instructions(
             rpc_client,
             helius_rpc::HeliusPriorityLevel::High,
             instructions,
         ) {
-            println!("Note: helius compute unit price estimate is {priority_fee_estimate}");
+            println!("Note: helius compute unit price (high) estimate is {priority_fee_estimate}. `sys` computed {max_compute_unit_price_micro_lamports}");
         }
-        instructions.push(
-            compute_budget::ComputeBudgetInstruction::set_compute_unit_price(
-                compute_unit_price_micro_lamports,
-            ),
-        );
+
+        max_compute_unit_price_micro_lamports
+    };
+
+    if priority_fee_lamports > priority_fee.max_lamports() {
+        return Err(format!(
+            "Transaction too expensive. Priority fee of {} is greater than max fee of {}",
+            Sol(priority_fee_lamports),
+            Sol(priority_fee.max_lamports())
+        )
+        .into());
     }
+    println!("Priority fee: {}", Sol(priority_fee_lamports));
+
+    let compute_budget = ComputeBudget::new(compute_unit_limit, priority_fee_lamports);
+
+    instructions.push(
+        compute_budget::ComputeBudgetInstruction::set_compute_unit_limit(
+            compute_budget.compute_unit_limit,
+        ),
+    );
+
+    instructions.push(
+        compute_budget::ComputeBudgetInstruction::set_compute_unit_price(
+            compute_budget.compute_unit_price_micro_lamports,
+        ),
+    );
+
+    Ok(priority_fee_lamports)
 }
 
 fn add_exchange_deposit_address_to_db(
@@ -478,7 +551,7 @@ async fn process_exchange_deposit<T: Signers>(
     signers: T,
     lot_selection_method: LotSelectionMethod,
     lot_numbers: Option<HashSet<usize>>,
-    compute_budget: ComputeBudget,
+    priority_fee: PriorityFee,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(if_exchange_balance_less_than) = if_exchange_balance_less_than {
         let exchange_balance = exchange_client
@@ -645,7 +718,7 @@ async fn process_exchange_deposit<T: Signers>(
             (instructions, amount)
         }
     };
-    apply_compute_budget(rpc_client, &mut instructions, compute_budget);
+    apply_priority_fee(rpc_client, &mut instructions, 10_000, priority_fee)?;
 
     if amount == 0 {
         return Err("Nothing to deposit".into());
@@ -1061,7 +1134,7 @@ async fn process_jup_swap<T: Signers>(
     if_from_balance_exceeds: Option<u64>,
     for_no_less_than: Option<f64>,
     max_coingecko_value_percentage_loss: f64,
-    compute_unit_price_micro_lamports: Option<u64>,
+    priority_fee: PriorityFee,
     notifier: &Notifier,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let from_account = db
@@ -1172,9 +1245,54 @@ async fn process_jup_swap<T: Signers>(
         println!("Generating {swap_prefix} Transaction...");
         let mut swap_request = jup_ag::SwapRequest::new(address, quote.clone());
         swap_request.wrap_and_unwrap_sol = Some(false);
-        swap_request.compute_unit_price_micro_lamports = compute_unit_price_micro_lamports;
+
+        if let Some(lamports) = priority_fee.exact_lamports() {
+            //swap_request.prioritization_fee_lamports = dbg!(format!("{}", exact_lamports));
+            swap_request.prioritization_fee_lamports =
+                dbg!(jup_ag::PrioritizationFeeLamports::Exact { lamports });
+        }
 
         let mut transaction = jup_ag::swap(swap_request).await?.swap_transaction;
+
+        {
+            let mut transaction_compute_budget = ComputeBudget::default();
+
+            let static_account_keys = transaction.message.static_account_keys();
+            for instruction in transaction.message.instructions() {
+                if let Some(program_id) =
+                    static_account_keys.get(instruction.program_id_index as usize)
+                {
+                    if *program_id == compute_budget::id() {
+                        match solana_sdk::borsh0_10::try_from_slice_unchecked(&instruction.data) {
+                            Ok(compute_budget::ComputeBudgetInstruction::SetComputeUnitLimit(
+                                compute_unit_limit,
+                            )) => {
+                                transaction_compute_budget.compute_unit_limit = compute_unit_limit;
+                            }
+                            Ok(compute_budget::ComputeBudgetInstruction::SetComputeUnitPrice(
+                                micro_lamports,
+                            )) => {
+                                transaction_compute_budget.compute_unit_price_micro_lamports =
+                                    micro_lamports;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+            if transaction_compute_budget.priority_fee_lamports() > priority_fee.max_lamports() {
+                return Err(format!(
+                    "Swap too expensive. Priority fee of {} is greater than max fee of {}",
+                    Sol(transaction_compute_budget.priority_fee_lamports()),
+                    Sol(priority_fee.max_lamports())
+                )
+                .into());
+            }
+            println!(
+                "Swap priority fee: {}",
+                Sol(transaction_compute_budget.priority_fee_lamports())
+            );
+        }
 
         let (recent_blockhash, last_valid_block_height) =
             rpc_client.get_latest_blockhash_with_commitment(rpc_client.commitment())?;
@@ -2801,7 +2919,7 @@ async fn process_account_merge<T: Signers>(
     into_address: Pubkey,
     authority_address: Pubkey,
     signers: T,
-    compute_budget: ComputeBudget,
+    priority_fee: PriorityFee,
     existing_signature: Option<Signature>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let token = MaybeToken::SOL(); // TODO: Support merging tokens one day
@@ -2868,7 +2986,7 @@ async fn process_account_merge<T: Signers>(
             )
             .into());
         };
-        apply_compute_budget(rpc_client, &mut instructions, compute_budget);
+        apply_priority_fee(rpc_client, &mut instructions, 10_000, priority_fee)?;
 
         println!("Merging {from_address} into {into_address}");
         if from_address != authority_address {
@@ -2927,7 +3045,7 @@ async fn process_account_sweep<T: Signers>(
     signers: T,
     to_address: Option<Pubkey>,
     notifier: &Notifier,
-    compute_budget: ComputeBudget,
+    priority_fee: PriorityFee,
     existing_signature: Option<Signature>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (recent_blockhash, last_valid_block_height) =
@@ -3200,24 +3318,10 @@ async fn process_account_sweep<T: Signers>(
 
     let (signature, maybe_transaction) = match existing_signature {
         None => {
-            apply_compute_budget(rpc_client, &mut instructions, compute_budget);
+            apply_priority_fee(rpc_client, &mut instructions, 10_000, priority_fee)?;
 
             let mut message = Message::new(&instructions, Some(&from_authority_address));
             message.recent_blockhash = recent_blockhash;
-
-            let fee_for_message = rpc_client.get_fee_for_message(&message)?;
-
-            if compute_budget.compute_unit_price_micro_lamports.is_none() {
-                assert_eq!(
-                    fee_for_message,
-                    num_transaction_signatures * fee_calculator.lamports_per_signature
-                );
-            } else if from_account.owner == system_program::id() {
-                // Being lazy right now...
-                // The additional lamports used for priority fee were not accounted for
-                // when moving Lots around..
-                println!("TODO: account for priority fee in lot split...");
-            }
 
             let mut transaction = Transaction::new_unsigned(message);
             let simulation_result = rpc_client.simulate_transaction(&transaction)?.value;
@@ -3291,7 +3395,7 @@ async fn process_account_split<T: Signers>(
     signers: T,
     into_keypair: Option<Keypair>,
     if_balance_exceeds: Option<f64>,
-    compute_budget: ComputeBudget,
+    priority_fee: PriorityFee,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // TODO: Support splitting two system accounts? Tokens? Otherwise at least error cleanly when it's attempted
     let token = MaybeToken::SOL(); // TODO: Support splitting tokens one day
@@ -3341,7 +3445,7 @@ async fn process_account_split<T: Signers>(
         .get_minimum_balance_for_rent_exemption(solana_sdk::stake::state::StakeStateV2::size_of())?;
 
     let mut instructions = vec![];
-    apply_compute_budget(rpc_client, &mut instructions, compute_budget);
+    apply_priority_fee(rpc_client, &mut instructions, 10_000, priority_fee)?;
 
     instructions.push(system_instruction::transfer(
         &authority_address,
@@ -3759,7 +3863,7 @@ async fn process_account_wrap<T: Signers>(
     lot_numbers: Option<HashSet<usize>>,
     authority_address: Pubkey,
     signers: T,
-    compute_budget: ComputeBudget,
+    priority_fee: PriorityFee,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let sol = MaybeToken::SOL();
     let wsol = Token::wSOL;
@@ -3827,7 +3931,7 @@ async fn process_account_wrap<T: Signers>(
         spl_token::instruction::sync_native(&spl_token::id(), &wsol_address).unwrap(),
     ]);
 
-    apply_compute_budget(rpc_client, &mut instructions, compute_budget);
+    apply_priority_fee(rpc_client, &mut instructions, 10_000, priority_fee)?;
     let message = Message::new(&instructions, Some(&authority_address));
 
     let mut transaction = Transaction::new_unsigned(message);
@@ -3877,7 +3981,7 @@ async fn process_account_unwrap<T: Signers>(
     lot_numbers: Option<HashSet<usize>>,
     authority_address: Pubkey,
     signers: T,
-    compute_budget: ComputeBudget,
+    priority_fee: PriorityFee,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let sol = MaybeToken::SOL();
     let wsol = Token::wSOL;
@@ -3923,7 +4027,7 @@ async fn process_account_unwrap<T: Signers>(
         )
         .unwrap(),
     ];
-    apply_compute_budget(rpc_client, &mut instructions, compute_budget);
+    apply_priority_fee(rpc_client, &mut instructions, 10_000, priority_fee)?;
 
     let message = Message::new(&instructions, Some(&authority_address));
 
@@ -4247,22 +4351,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .help("Show additional information"),
         )
         .arg(
-            Arg::with_name("compute_unit_price_micro_lamports")
-                .long("compute-unit-price")
-                .value_name("MICROLAMPORTS")
+            Arg::with_name("priority_fee_exact")
+                .long("priority-fee-exact")
+                .value_name("SOL")
                 .takes_value(true)
-                .validator(is_parsable::<u64>)
-                .help("Set a compute unit price in micro-lamports to pay \
-                      a higher transaction fee for higher transaction \
-                      prioritization [default: none]"),
+                .validator(is_parsable::<f64>)
+                .help("Exactly specify the Solana priority fee to use for transactions"),
         )
         .arg(
-            Arg::with_name("compute_unit_limit")
-                .long("compute-unit-limit")
-                .value_name("COMPUTE UNITS")
+            Arg::with_name("priority_fee_auto")
+                .long("priority-fee-auto")
+                .value_name("SOL")
                 .takes_value(true)
-                .validator(is_parsable::<u32>)
-                .help("Set the transaction compute unit limit [default: no explicit limit]"),
+                .conflicts_with("priority_fee_exact")
+                .validator(is_parsable::<f64>)
+                .help("Automatically select the Solana priority fee to use for transactions, \
+                       but do not exceed the specified amount of SOL [default]"),
         )
         .subcommand(
             SubCommand::with_name("price")
@@ -5783,14 +5887,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let db_path = value_t_or_exit!(app_matches, "db_path", PathBuf);
     let verbose = app_matches.is_present("verbose");
 
-    let compute_budget = ComputeBudget {
-        compute_unit_price_micro_lamports: value_t!(
-            app_matches,
-            "compute_unit_price_micro_lamports",
-            u64
-        )
-        .ok(),
-        compute_unit_limit: value_t!(app_matches, "compute_unit_limit", u32).ok(),
+    let priority_fee = if let Ok(ui_priority_fee) = value_t!(app_matches, "priority_fee_exact", f64)
+    {
+        PriorityFee::Exact {
+            lamports: sol_to_lamports(ui_priority_fee),
+        }
+    } else if let Ok(ui_priority_fee) = value_t!(app_matches, "priority_fee_auto", f64) {
+        PriorityFee::Auto {
+            max_lamports: sol_to_lamports(ui_priority_fee),
+        }
+    } else {
+        PriorityFee::default_auto()
     };
 
     let rpc_client = RpcClient::new_with_timeout_and_commitment(
@@ -6175,7 +6282,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     into_address,
                     authority_address,
                     vec![authority_signer],
-                    compute_budget,
+                    priority_fee,
                     signature,
                 )
                 .await?;
@@ -6205,7 +6312,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     vec![from_authority_signer],
                     to_address,
                     &notifier,
-                    compute_budget,
+                    priority_fee,
                     signature,
                 )
                 .await?;
@@ -6246,7 +6353,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     vec![authority_signer],
                     into_keypair,
                     if_balance_exceeds,
-                    compute_budget,
+                    priority_fee,
                 )
                 .await?;
             }
@@ -6331,7 +6438,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     lot_numbers,
                     authority_address,
                     vec![authority_signer],
-                    compute_budget,
+                    priority_fee,
                 )
                 .await?;
             }
@@ -6365,7 +6472,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     lot_numbers,
                     authority_address,
                     vec![authority_signer],
-                    compute_budget,
+                    priority_fee,
                 )
                 .await?;
             }
@@ -6401,10 +6508,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let max_coingecko_value_percentage_loss =
                     value_t_or_exit!(arg_matches, "max_coingecko_value_percentage_loss", f64);
 
-                if compute_budget.compute_unit_limit.is_some() {
-                    println!("Note: --compute-unit-limit ignored for jup swap");
-                }
-
                 process_jup_swap(
                     &mut db,
                     &rpc_client,
@@ -6419,7 +6522,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if_from_balance_exceeds,
                     for_no_less_than,
                     max_coingecko_value_percentage_loss,
-                    compute_budget.compute_unit_price_micro_lamports,
+                    priority_fee,
                     &notifier,
                 )
                 .await?;
@@ -6755,7 +6858,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         vec![authority_signer],
                         lot_selection_method,
                         lot_numbers,
-                        compute_budget,
+                        priority_fee,
                     )
                     .await?;
                     process_sync_exchange(

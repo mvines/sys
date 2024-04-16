@@ -5,6 +5,7 @@ use {
         account::Account,
         account_utils::StateMut,
         clock::Slot,
+        instruction::Instruction,
         pubkey::Pubkey,
         signature::Signature,
         stake::state::{Authorized, StakeStateV2},
@@ -98,4 +99,34 @@ pub async fn get_signature_date(
     } else {
         Err(format!("Unknown signature: {signature}").into())
     }
+}
+
+pub fn get_recent_priority_fees_for_instructions(
+    rpc_client: &RpcClient,
+    instructions: &[Instruction],
+) -> Result<Vec<u64>, String> {
+    let mut account_keys: Vec<_> = instructions
+        .iter()
+        .flat_map(|instruction| {
+            instruction
+                .accounts
+                .iter()
+                .map(|account_meta| account_meta.pubkey)
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    account_keys.sort();
+    account_keys.dedup();
+
+    let prioritization_fees: Vec<_> = rpc_client
+        .get_recent_prioritization_fees(&account_keys)
+        .map(|response| {
+            response
+                .into_iter()
+                .map(|rpf| rpf.prioritization_fee)
+                .collect()
+        })
+        .map_err(|err| format!("Failed to invoke RPC method getRecentPrioritizationFees: {err}"))?;
+
+    Ok(prioritization_fees)
 }
