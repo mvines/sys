@@ -208,14 +208,14 @@ fn apply_priority_fee(
     instructions: &mut Vec<Instruction>,
     compute_unit_limit: u32,
     priority_fee: PriorityFee,
-) -> Result<u64, Box<dyn std::error::Error>> {
-    let priority_fee_lamports = if let Some(exact_lamports) = priority_fee.exact_lamports() {
-        exact_lamports
+) -> Result<(), Box<dyn std::error::Error>> {
+    let compute_budget = if let Some(exact_lamports) = priority_fee.exact_lamports() {
+        ComputeBudget::new(compute_unit_limit, exact_lamports)
     } else {
-        let prioritization_fees =
+        let recent_compute_unit_prices =
             rpc_client_utils::get_recent_priority_fees_for_instructions(rpc_client, instructions)?;
 
-        let max_compute_unit_price_micro_lamports = prioritization_fees
+        let compute_unit_price_micro_lamports = recent_compute_unit_prices
             .iter()
             .max()
             .copied()
@@ -226,23 +226,36 @@ fn apply_priority_fee(
             helius_rpc::HeliusPriorityLevel::High,
             instructions,
         ) {
-            println!("Note: helius compute unit price (high) estimate is {priority_fee_estimate}. `sys` computed {max_compute_unit_price_micro_lamports}");
+            println!(
+                "Note: helius compute unit price (high) estimate is {priority_fee_estimate}. \
+                      `sys` computed {compute_unit_price_micro_lamports}"
+            );
         }
 
-        max_compute_unit_price_micro_lamports
+        let compute_budget = ComputeBudget {
+            compute_unit_price_micro_lamports,
+            compute_unit_limit,
+        };
+
+        if compute_budget.priority_fee_lamports() > priority_fee.max_lamports() {
+            println!(
+                "Note: Computed priority fee of {} is greater than max fee",
+                Sol(priority_fee.max_lamports())
+            );
+            ComputeBudget::new(compute_unit_limit, priority_fee.max_lamports())
+        } else {
+            compute_budget
+        }
     };
 
-    if priority_fee_lamports > priority_fee.max_lamports() {
-        return Err(format!(
-            "Transaction too expensive. Priority fee of {} is greater than max fee of {}",
-            Sol(priority_fee_lamports),
-            Sol(priority_fee.max_lamports())
-        )
-        .into());
-    }
-    println!("Priority fee: {}", Sol(priority_fee_lamports));
-
-    let compute_budget = ComputeBudget::new(compute_unit_limit, priority_fee_lamports);
+    println!(
+        "Priority fee: {}",
+        Sol(compute_budget.priority_fee_lamports())
+    );
+    assert!(
+        0.01 > lamports_to_sol(compute_budget.priority_fee_lamports()),
+        "Priority fee too large, Bug?"
+    );
 
     instructions.push(
         compute_budget::ComputeBudgetInstruction::set_compute_unit_limit(
@@ -256,7 +269,7 @@ fn apply_priority_fee(
         ),
     );
 
-    Ok(priority_fee_lamports)
+    Ok(())
 }
 
 fn add_exchange_deposit_address_to_db(
