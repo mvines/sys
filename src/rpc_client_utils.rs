@@ -101,6 +101,7 @@ pub async fn get_signature_date(
     }
 }
 
+// Returns a sorted list of compute unit prices in micro lamports, from low to high
 pub fn get_recent_priority_fees_for_instructions(
     rpc_client: &RpcClient,
     instructions: &[Instruction],
@@ -118,7 +119,7 @@ pub fn get_recent_priority_fees_for_instructions(
     account_keys.sort();
     account_keys.dedup();
 
-    let prioritization_fees: Vec<_> = rpc_client
+    let mut prioritization_fees: Vec<_> = rpc_client
         .get_recent_prioritization_fees(&account_keys)
         .map(|response| {
             response
@@ -127,6 +128,8 @@ pub fn get_recent_priority_fees_for_instructions(
                 .collect()
         })
         .map_err(|err| format!("Failed to invoke RPC method getRecentPrioritizationFees: {err}"))?;
+
+    prioritization_fees.sort();
 
     Ok(prioritization_fees)
 }

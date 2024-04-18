@@ -215,11 +215,21 @@ fn apply_priority_fee(
         let recent_compute_unit_prices =
             rpc_client_utils::get_recent_priority_fees_for_instructions(rpc_client, instructions)?;
 
-        let compute_unit_price_micro_lamports = recent_compute_unit_prices
+        let mean_compute_unit_price_micro_lamports =
+            recent_compute_unit_prices.iter().copied().sum::<u64>()
+                / recent_compute_unit_prices.len() as u64;
+
+        /*
+        let max_compute_unit_price_micro_lamports = recent_compute_unit_prices
             .iter()
             .max()
             .copied()
             .unwrap_or_default();
+
+        println!("{recent_compute_unit_prices:?}: mean {mean_compute_unit_price_micro_lamports}, max {max_compute_unit_price_micro_lamports}");
+        */
+
+        let compute_unit_price_micro_lamports = mean_compute_unit_price_micro_lamports;
 
         if let Ok(priority_fee_estimate) = helius_rpc::get_priority_fee_estimate_for_instructions(
             rpc_client,
@@ -3331,7 +3341,7 @@ async fn process_account_sweep<T: Signers>(
 
     let (signature, maybe_transaction) = match existing_signature {
         None => {
-            apply_priority_fee(rpc_client, &mut instructions, 10_000, priority_fee)?;
+            apply_priority_fee(rpc_client, &mut instructions, 7_000, priority_fee)?;
 
             let mut message = Message::new(&instructions, Some(&from_authority_address));
             message.recent_blockhash = recent_blockhash;
@@ -3944,7 +3954,7 @@ async fn process_account_wrap<T: Signers>(
         spl_token::instruction::sync_native(&spl_token::id(), &wsol_address).unwrap(),
     ]);
 
-    apply_priority_fee(rpc_client, &mut instructions, 10_000, priority_fee)?;
+    apply_priority_fee(rpc_client, &mut instructions, 5_000, priority_fee)?;
     let message = Message::new(&instructions, Some(&authority_address));
 
     let mut transaction = Transaction::new_unsigned(message);
@@ -4040,7 +4050,7 @@ async fn process_account_unwrap<T: Signers>(
         )
         .unwrap(),
     ];
-    apply_priority_fee(rpc_client, &mut instructions, 10_000, priority_fee)?;
+    apply_priority_fee(rpc_client, &mut instructions, 5_000, priority_fee)?;
 
     let message = Message::new(&instructions, Some(&authority_address));
 
