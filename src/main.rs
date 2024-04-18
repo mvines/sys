@@ -29,7 +29,6 @@ use {
         clock::Slot,
         commitment_config::CommitmentConfig,
         compute_budget,
-        instruction::Instruction,
         message::Message,
         native_token::lamports_to_sol,
         native_token::{sol_to_lamports, Sol},
@@ -51,8 +50,8 @@ use {
     sys::{
         app_version,
         exchange::{self, *},
-        helius_rpc,
         metrics::{self, dp, MetricsConfig},
+        priority_fee::{apply_priority_fee, PriorityFee},
         send_transaction_until_expired,
         token::*,
         //tulip,
@@ -151,135 +150,6 @@ async fn retry_get_historical_price(
         sleep(Duration::from_secs(5));
     }
     token.get_historical_price(rpc_client, block_date).await
-}
-
-#[derive(Debug, Clone, Copy)]
-enum PriorityFee {
-    Auto { max_lamports: u64 },
-    Exact { lamports: u64 },
-}
-
-impl PriorityFee {
-    fn default_auto() -> Self {
-        Self::Auto {
-            max_lamports: sol_to_lamports(0.005), // Same max as the Jupiter V6 Swap API
-        }
-    }
-}
-
-impl PriorityFee {
-    pub fn max_lamports(&self) -> u64 {
-        match self {
-            Self::Auto { max_lamports } => *max_lamports,
-            Self::Exact { lamports } => *lamports,
-        }
-    }
-
-    pub fn exact_lamports(&self) -> Option<u64> {
-        match self {
-            Self::Auto { .. } => None,
-            Self::Exact { lamports } => Some(*lamports),
-        }
-    }
-}
-
-#[derive(Default, Debug, Clone, Copy)]
-struct ComputeBudget {
-    compute_unit_price_micro_lamports: u64,
-    compute_unit_limit: u32,
-}
-
-impl ComputeBudget {
-    pub fn new(compute_unit_limit: u32, priority_fee_lamports: u64) -> Self {
-        Self {
-            compute_unit_price_micro_lamports: priority_fee_lamports * (1e6 as u64)
-                / compute_unit_limit as u64,
-            compute_unit_limit,
-        }
-    }
-
-    pub fn priority_fee_lamports(&self) -> u64 {
-        self.compute_unit_limit as u64 * self.compute_unit_price_micro_lamports / (1e6 as u64)
-    }
-}
-
-fn apply_priority_fee(
-    rpc_client: &RpcClient,
-    instructions: &mut Vec<Instruction>,
-    compute_unit_limit: u32,
-    priority_fee: PriorityFee,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let compute_budget = if let Some(exact_lamports) = priority_fee.exact_lamports() {
-        ComputeBudget::new(compute_unit_limit, exact_lamports)
-    } else {
-        let recent_compute_unit_prices =
-            rpc_client_utils::get_recent_priority_fees_for_instructions(rpc_client, instructions)?;
-
-        let mean_compute_unit_price_micro_lamports =
-            recent_compute_unit_prices.iter().copied().sum::<u64>()
-                / recent_compute_unit_prices.len() as u64;
-
-        /*
-        let max_compute_unit_price_micro_lamports = recent_compute_unit_prices
-            .iter()
-            .max()
-            .copied()
-            .unwrap_or_default();
-
-        println!("{recent_compute_unit_prices:?}: mean {mean_compute_unit_price_micro_lamports}, max {max_compute_unit_price_micro_lamports}");
-        */
-
-        let compute_unit_price_micro_lamports = mean_compute_unit_price_micro_lamports;
-
-        if let Ok(priority_fee_estimate) = helius_rpc::get_priority_fee_estimate_for_instructions(
-            rpc_client,
-            helius_rpc::HeliusPriorityLevel::High,
-            instructions,
-        ) {
-            println!(
-                "Note: helius compute unit price (high) estimate is {priority_fee_estimate}. \
-                      `sys` computed {compute_unit_price_micro_lamports}"
-            );
-        }
-
-        let compute_budget = ComputeBudget {
-            compute_unit_price_micro_lamports,
-            compute_unit_limit,
-        };
-
-        if compute_budget.priority_fee_lamports() > priority_fee.max_lamports() {
-            println!(
-                "Note: Computed priority fee of {} is greater than max fee",
-                Sol(priority_fee.max_lamports())
-            );
-            ComputeBudget::new(compute_unit_limit, priority_fee.max_lamports())
-        } else {
-            compute_budget
-        }
-    };
-
-    println!(
-        "Priority fee: {}",
-        Sol(compute_budget.priority_fee_lamports())
-    );
-    assert!(
-        0.01 > lamports_to_sol(compute_budget.priority_fee_lamports()),
-        "Priority fee too large, Bug?"
-    );
-
-    instructions.push(
-        compute_budget::ComputeBudgetInstruction::set_compute_unit_limit(
-            compute_budget.compute_unit_limit,
-        ),
-    );
-
-    instructions.push(
-        compute_budget::ComputeBudgetInstruction::set_compute_unit_price(
-            compute_budget.compute_unit_price_micro_lamports,
-        ),
-    );
-
-    Ok(())
 }
 
 fn add_exchange_deposit_address_to_db(
@@ -1278,7 +1148,7 @@ async fn process_jup_swap<T: Signers>(
         let mut transaction = jup_ag::swap(swap_request).await?.swap_transaction;
 
         {
-            let mut transaction_compute_budget = ComputeBudget::default();
+            let mut transaction_compute_budget = sys::priority_fee::ComputeBudget::default();
 
             let static_account_keys = transaction.message.static_account_keys();
             for instruction in transaction.message.instructions() {
