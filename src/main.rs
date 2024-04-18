@@ -5129,7 +5129,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .takes_value(true)
                                 .validator(is_parsable::<f64>)
                                 .default_value("5")
-                                .help("Reject if the value lost relative to CoinGecko token
+                                .help("Reject if the value lost relative to CoinGecko token \
                                       price exceeds this percentage"),
                         )
                         .arg(lot_selection_arg())
