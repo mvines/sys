@@ -48,7 +48,7 @@ impl Token {
     pub fn mint(&self) -> Pubkey {
         match self {
             Token::USDC => pubkey!("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"),
-            Token::USDT => pubkey!("BQcdHdAQW1hczDbBi9hiegXAR7A98Q9jx3X3iBBBDiq4"),
+            Token::USDT => pubkey!("Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB"),
             Token::UXD => pubkey!("7kbnvuGBxxj8AG9qp8Scn56muWGaRaFqxg1FsRp3PaFT"),
             Token::tuUSDC => pubkey!("Amig8TisuLpzun8XyGfC5HJHHGUQEscjLgoTWsCCKihg"),
             Token::bSOL => pubkey!("bSo13r4TkiE4KumL71LsHTPpL2euBYLFx6h9HP3piy1"),

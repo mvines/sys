@@ -4928,6 +4928,7 @@ dependencies = [
  "serde",
  "serde_json",
  "simple_excel_writer",
+ "solana-account-decoder",
  "solana-clap-utils",
  "solana-cli-config",
  "solana-cli-output",
