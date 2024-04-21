@@ -2,7 +2,6 @@ mod amount;
 mod db;
 mod field_as_string;
 mod get_transaction_balance_change;
-mod notifier;
 mod rpc_client_utils;
 mod stake_spreader;
 
@@ -17,7 +16,6 @@ use {
     console::{style, Style},
     db::*,
     itertools::Itertools,
-    notifier::*,
     rpc_client_utils::get_signature_date,
     rust_decimal::prelude::*,
     separator::FixedPlaceSeparatable,
@@ -50,6 +48,7 @@ use {
         app_version,
         exchange::{self, *},
         metrics::{self, dp, MetricsConfig},
+        notifier::*,
         priority_fee::{apply_priority_fee, PriorityFee},
         send_transaction_until_expired,
         token::*,

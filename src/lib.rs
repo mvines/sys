@@ -7,6 +7,7 @@ pub mod exchange;
 pub mod helius_rpc;
 pub mod kraken_exchange;
 pub mod metrics;
+pub mod notifier;
 pub mod priority_fee;
 pub mod token;
 //pub mod tulip;

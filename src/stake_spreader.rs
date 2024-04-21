@@ -1,5 +1,5 @@
 use {
-    crate::{db::*, notifier::*, rpc_client_utils::get_signature_date},
+    crate::{db::*, rpc_client_utils::get_signature_date},
     log::*,
     solana_client::{rpc_client::RpcClient, rpc_config::RpcBlockConfig, rpc_custom_error},
     solana_sdk::{
@@ -21,7 +21,7 @@ use {
     },
     solana_transaction_status::Reward,
     std::collections::{BTreeMap, HashMap, HashSet},
-    sys::{send_transaction_until_expired, token::*},
+    sys::{notifier::*, send_transaction_until_expired, token::*},
 };
 
 const MAX_RPC_VOTE_ACCOUNT_INFO_EPOCH_CREDITS_HISTORY: usize = 5; // Remove once Solana 1.15 ships. Ref: https://github.com/solana-labs/solana/pull/28096

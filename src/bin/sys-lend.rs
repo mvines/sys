@@ -19,6 +19,7 @@ use {
     },
     sys::{
         app_version,
+        notifier::*,
         priority_fee::{apply_priority_fee, PriorityFee},
         send_transaction_until_expired,
         token::*,
@@ -125,6 +126,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let mut wallet_manager = None;
+    let notifier = Notifier::default();
 
     match matches.subcommand() {
         ("deposit", Some(matches)) => {
@@ -190,6 +192,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             if !send_transaction_until_expired(&rpc_client, &transaction, last_valid_block_height) {
                 return Err("Deposit failed".into());
             }
+
+            let msg = format!(
+                "Deposited {} from {} into {}",
+                token.format_amount(deposit_amount),
+                address,
+                pool
+            );
+            notifier.send(&msg).await;
+            println!("{msg}");
         }
         _ => unreachable!(),
     }

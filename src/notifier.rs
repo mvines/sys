@@ -5,15 +5,17 @@ pub struct Notifier {
     slack_webhook: Option<String>,
 }
 
-impl Notifier {
-    pub fn default() -> Self {
+impl Default for Notifier {
+    fn default() -> Self {
         let slack_webhook = env::var("SLACK_WEBHOOK").ok();
         Notifier {
             client: Client::new(),
             slack_webhook,
         }
     }
+}
 
+impl Notifier {
     pub async fn send(&self, msg: &str) {
         if let Some(ref slack_webhook) = self.slack_webhook {
             let data = json!({ "text": msg });
