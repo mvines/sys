@@ -21,6 +21,8 @@ clap = "2.33"
 coinbase-rs = { git = "https://github.com/mvines/coinbase-rs.git", rev = "f9647efa5386e24238a0b9baee3012e6d431271f" }
 console = "0.14.1"
 fd-lock = "3.0.0"
+fixed = "1.12.0"
+fixed-macro = "1.2.0"
 ftx = { git = "https://github.com/fabianboesiger/ftx", rev = "bb98235d356dd1a2becc5bdf32a4b738311ed434" }
 #ftx = { git = "https://github.com/mvines/ftx", rev = "22dea8cf63269645eb220c9ce5ffdd0b746a9ceb" }
 #ftx = { path = "../ftx" }
@@ -57,8 +59,10 @@ spl-associated-token-account = "2.3.0"
 spl-token = "4.0.0"
 spl-token-2022 = "2.0.1"
 spl-token-lending = { git = "https://github.com/solana-labs/solana-program-library.git", rev = "1d1c2b178b8cf2ed3e28006c27b2ba5b3d039d67" }
+static_assertions = "1.1.0"
 strum = { version = "0.23", features = ["derive"] }
 thiserror = "1.0"
 tokio = { version = "1", features = ["macros", "time"] }
 #tulipv2-sdk-common = "0.9.5"
+uint = "0.9.5"
 

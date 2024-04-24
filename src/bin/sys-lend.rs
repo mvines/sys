@@ -1,6 +1,6 @@
 use {
     clap::{value_t, value_t_or_exit, App, AppSettings, Arg, SubCommand},
-    solana_account_decoder::{UiAccountEncoding, UiDataSliceConfig},
+    solana_account_decoder::UiAccountEncoding,
     solana_clap_utils::{self, input_parsers::*, input_validators::*},
     solana_client::{
         rpc_client::RpcClient,
@@ -17,12 +17,14 @@ use {
         system_program, sysvar,
         transaction::Transaction,
     },
+    std::collections::HashMap,
     sys::{
         app_version,
         notifier::*,
         priority_fee::{apply_priority_fee, PriorityFee},
         send_transaction_until_expired,
         token::*,
+        vendor::{kamino, marginfi_v2},
     },
 };
 
@@ -76,7 +78,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .value_name("POOL")
                         .takes_value(true)
                         .required(true)
-                        .possible_values(&["kamino-main", "kamino-altcoins", "kamino-jup", "mfi"])
+                        .possible_values(&["kamino-main", "kamino-altcoins", "kamino-jlp", "mfi"])
                         .help("Lending pool"),
                 )
                 .arg(
@@ -88,6 +90,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .help("Account holding the deposit"),
                 )
                 .arg(
+                    Arg::with_name("amount")
+                        .value_name("AMOUNT")
+                        .takes_value(true)
+                        .validator(is_amount_or_all)
+                        .required(true)
+                        .help("The amount to deposit; accepts keyword ALL"),
+                )
+                .arg(
                     Arg::with_name("token")
                         .value_name("SOL or SPL Token")
                         .takes_value(true)
@@ -95,16 +105,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .validator(is_valid_token_or_sol)
                         .default_value("USDC")
                         .help("Token to deposit"),
-                )
-                .arg(
-                    Arg::with_name("retain")
-                        .short("r")
-                        .long("retain")
-                        .value_name("UI_AMOUNT")
-                        .takes_value(true)
-                        .validator(is_parsable::<f64>)
-                        .default_value("0.01")
-                        .help("Amount of tokens to retain in the account"),
                 ),
         );
 
@@ -136,32 +136,57 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let pool = value_t_or_exit!(matches, "pool", String);
             let token = MaybeToken::from(value_t!(matches, "token", Token).ok());
-            let retain_amount = token.amount(value_t_or_exit!(matches, "retain", f64));
 
-            let balance = token.balance(&rpc_client, &address)?;
-            let deposit_amount = balance.saturating_sub(retain_amount);
+            let token_balance = token.balance(&rpc_client, &address)?;
+            let deposit_amount = match matches.value_of("amount").unwrap() {
+                "ALL" => token_balance,
+                amount => token.amount(amount.parse::<f64>().unwrap()),
+            };
 
-            if deposit_amount == 0 {
+            if deposit_amount > token_balance {
                 println!(
-                    "Current balance: {}\n\
-                    Retain amount: {}\n\
-                    \n\
-                    Nothing to deposit",
-                    token.format_amount(balance),
-                    token.format_amount(retain_amount)
+                    "Deposit amount of {} is greater than current balance of {}",
+                    token.format_amount(deposit_amount),
+                    token.format_amount(token_balance),
                 );
-                return Ok(());
+                println!(
+                    "Deposit amount of {} is greater than current balance of {}",
+                    token.format_amount(deposit_amount),
+                    token.format_amount(token_balance),
+                );
+                println!(
+                    "Deposit amount of {} is greater than current balance of {}",
+                    token.format_amount(deposit_amount),
+                    token.format_amount(token_balance),
+                );
+                println!(
+                    "Deposit amount of {} is greater than current balance of {}",
+                    token.format_amount(deposit_amount),
+                    token.format_amount(token_balance),
+                );
+                println!(
+                    "Deposit amount of {} is greater than current balance of {}",
+                    token.format_amount(deposit_amount),
+                    token.format_amount(token_balance),
+                );
+                /*
+                return Err(format!(
+                    "Deposit amount of {} is greater than current balance of {}",
+                    token.format_amount(deposit_amount),
+                    token.format_amount(token_balance),
+                ).into());
+                */
             }
             println!(
                 "Depositing {} into {}",
                 token.format_amount(deposit_amount),
-                pool
+                pool,
             );
 
-            let (mut instructions, required_compute_units) = if pool.starts_with("kamino-") {
-                kamino_deposit(&pool, address, token, deposit_amount)?
+            let (mut instructions, required_compute_units, apr) = if pool.starts_with("kamino-") {
+                kamino_deposit(&rpc_client, &pool, address, token, deposit_amount)?
             } else if pool == "mfi" {
-                mfi_deposit(address, token, deposit_amount)?
+                mfi_deposit(address, token, deposit_amount, false)?
             } else {
                 unreachable!();
             };
@@ -187,20 +212,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             transaction.try_sign(&vec![signer], recent_blockhash)?;
             let signature = transaction.signatures[0];
-            println!("Transaction signature: {signature}");
-
-            if !send_transaction_until_expired(&rpc_client, &transaction, last_valid_block_height) {
-                return Err("Deposit failed".into());
-            }
 
             let msg = format!(
-                "Deposited {} from {} into {}",
+                "Depositing {} from {} into {} for {:.1}% APR via {}",
                 token.format_amount(deposit_amount),
                 address,
-                pool
+                pool,
+                apr * 100.,
+                signature
             );
             notifier.send(&msg).await;
             println!("{msg}");
+
+            if !send_transaction_until_expired(&rpc_client, &transaction, last_valid_block_height) {
+                let msg = format!("Deposit failed: {signature}");
+                notifier.send(&msg).await;
+                return Err(msg.into());
+            }
         }
         _ => unreachable!(),
     }
@@ -212,7 +240,8 @@ fn mfi_deposit(
     address: Pubkey,
     token: MaybeToken,
     deposit_amount: u64,
-) -> Result<(Vec<Instruction>, u32), Box<dyn std::error::Error>> {
+    verbose: bool,
+) -> Result<(Vec<Instruction>, u32, f64), Box<dyn std::error::Error>> {
     const MFI_LEND_PROGRAM: Pubkey = pubkey!["MFv2hWf31Z9kbCa1snEPYctwafyhdvnV7FZnsebVacA"];
 
     // Big mistake to require using `getProgramAccounts` to locate a MarginFi account for a wallet
@@ -226,42 +255,7 @@ fn mfi_deposit(
 
     let marginfi_group = pubkey!["4qp6Fx6tnZkY5Wropq9wUYgtFxXKwE6viZxFHg3rdAG8"];
 
-    let marginfi_accounts = rpc_client.get_program_accounts_with_config(
-        &MFI_LEND_PROGRAM,
-        RpcProgramAccountsConfig {
-            filters: Some(vec![
-                RpcFilterType::DataSize(2312),
-                RpcFilterType::Memcmp(rpc_filter::Memcmp::new_raw_bytes(
-                    40,
-                    address.to_bytes().to_vec(),
-                )),
-                RpcFilterType::Memcmp(rpc_filter::Memcmp::new_raw_bytes(
-                    8,
-                    marginfi_group.to_bytes().to_vec(),
-                )),
-            ]),
-            account_config: RpcAccountInfoConfig {
-                encoding: Some(UiAccountEncoding::Base64),
-                data_slice: Some(UiDataSliceConfig {
-                    offset: 0,
-                    length: 0,
-                }),
-                commitment: None,
-                min_context_slot: None,
-            },
-            ..RpcProgramAccountsConfig::default()
-        },
-    )?;
-
-    if marginfi_accounts.is_empty() {
-        return Err(format!("No MarginFi account found for {}", address).into());
-    }
-    if marginfi_accounts.len() > 1 {
-        return Err(format!("Multiple MarginFi account found for {}", address).into());
-    }
-    let marginfi_account = marginfi_accounts[0].0;
-
-    let (bank, bank_liquidity_vault) = match token.token() {
+    let (bank_address, bank_liquidity_vault) = match token.token() {
         Some(Token::USDC) => Some((
             pubkey!["2s37akK2eyBbp8DZgCm7RtsaEz8eJP3Nxd4urLHQv7yB"],
             pubkey!["7jaiZR5Sk8hdYN9MxTpczTcwbWpb5WEoxSANuUwveuat"],
@@ -278,6 +272,97 @@ fn mfi_deposit(
     }
     .ok_or_else(|| format!("Depositing {token} into mfi is not supported"))?;
 
+    let mut user_accounts = rpc_client
+        .get_program_accounts_with_config(
+            &MFI_LEND_PROGRAM,
+            RpcProgramAccountsConfig {
+                filters: Some(vec![
+                    RpcFilterType::DataSize(2312),
+                    RpcFilterType::Memcmp(rpc_filter::Memcmp::new_raw_bytes(
+                        40,
+                        address.to_bytes().to_vec(),
+                    )),
+                    RpcFilterType::Memcmp(rpc_filter::Memcmp::new_raw_bytes(
+                        8,
+                        marginfi_group.to_bytes().to_vec(),
+                    )),
+                ]),
+                account_config: RpcAccountInfoConfig {
+                    encoding: Some(UiAccountEncoding::Base64),
+                    ..RpcAccountInfoConfig::default()
+                },
+                ..RpcProgramAccountsConfig::default()
+            },
+        )?
+        .into_iter();
+
+    let (user_account_address, user_account_data) = user_accounts
+        .next()
+        .ok_or_else(|| format!("No MarginFi account found for {}", address))?;
+
+    if user_accounts.next().is_some() {
+        return Err(format!("Multiple MarginFi account found for {}", address).into());
+    }
+
+    fn unsafe_load_bank(
+        rpc_client: &RpcClient,
+        address: &Pubkey,
+    ) -> Result<marginfi_v2::Bank, Box<dyn std::error::Error>> {
+        const LEN: usize = std::mem::size_of::<marginfi_v2::Bank>();
+        let account_data: [u8; LEN] = rpc_client.get_account_data(address)?[8..LEN + 8]
+            .try_into()
+            .unwrap();
+        let reserve = unsafe { std::mem::transmute(account_data) };
+        Ok(reserve)
+    }
+
+    let bank = unsafe_load_bank(&rpc_client, &bank_address)?;
+
+    let total_deposits = bank.get_asset_amount(bank.total_asset_shares.into());
+    let total_borrow = bank.get_liability_amount(bank.total_liability_shares.into());
+    let apr = bank
+        .config
+        .interest_rate_config
+        .calc_interest_rate(total_borrow / total_deposits)
+        .unwrap()
+        .0
+        .to_num::<f64>();
+
+    if verbose {
+        let user_account = {
+            const LEN: usize = std::mem::size_of::<marginfi_v2::MarginfiAccount>();
+            let data: [u8; LEN] = user_account_data.data[8..LEN + 8].try_into().unwrap();
+            unsafe { std::mem::transmute::<[u8; LEN], marginfi_v2::MarginfiAccount>(data) }
+        };
+
+        if let Some(balance) = user_account.lending_account.get_balance(&bank_address) {
+            let deposit = bank.get_asset_amount(balance.asset_shares.into());
+            println!(
+                "Current user deposits: {}",
+                token.format_amount(deposit.floor().to_num::<u64>())
+            );
+
+            let liablilty = bank.get_liability_amount(balance.liability_shares.into());
+            println!(
+                "Current user liablilty: {}",
+                token.format_amount(liablilty.floor().to_num::<u64>())
+            );
+        }
+
+        println!(
+            "Deposit Limit: {}",
+            token.format_amount(bank.config.deposit_limit)
+        );
+        println!(
+            "Pool deposits: {}",
+            token.format_amount(total_deposits.floor().to_num::<u64>())
+        );
+        println!(
+            "Pool liability: {}",
+            token.format_amount(total_borrow.floor().to_num::<u64>())
+        );
+    }
+
     let marginfi_account_deposit_data = {
         let mut v = vec![0xab, 0x5e, 0xeb, 0x67, 0x52, 0x40, 0xd4, 0x8c];
         v.extend(deposit_amount.to_le_bytes());
@@ -292,11 +377,11 @@ fn mfi_deposit(
             // Marginfi Group
             AccountMeta::new_readonly(marginfi_group, false),
             // Marginfi Account
-            AccountMeta::new(marginfi_account, false),
+            AccountMeta::new(user_account_address, false),
             // Signer
             AccountMeta::new(address, true),
             // Bank
-            AccountMeta::new(bank, false),
+            AccountMeta::new(bank_address, false),
             // Signer Token Account
             AccountMeta::new(
                 spl_associated_token_account::get_associated_token_address(&address, &token.mint()),
@@ -309,154 +394,77 @@ fn mfi_deposit(
         ],
     )];
 
-    Ok((instructions, 50_000))
+    Ok((instructions, 50_000, apr))
 }
 
 fn kamino_deposit(
+    rpc_client: &RpcClient,
     pool: &str,
     address: Pubkey,
     token: MaybeToken,
     deposit_amount: u64,
-) -> Result<(Vec<Instruction>, u32), Box<dyn std::error::Error>> {
+) -> Result<(Vec<Instruction>, u32, f64), Box<dyn std::error::Error>> {
     const KAMINO_LEND_PROGRAM: Pubkey = pubkey!["KLend2g3cP87fffoy8q1mQqGKjrxjC8boSyAYavgmjD"];
     const FARMS_PROGRAM: Pubkey = pubkey!["FarmsPZpWu9i7Kky8tPN37rs2TpmMrAZrC7S7vJa91Hr"];
 
-    struct KaminoMarket {
-        market_reserve: Vec<KaminoMarketReserve>,
-        active_reserve: usize,
-        reverse_refresh_obligation_reserve: bool,
-        lending_market_authority: Pubkey,
-        lending_market: Pubkey,
-        reserve_farm_state: Pubkey,
-        scope_prices: Pubkey,
-        reserve_liquidity_supply: Pubkey,
-        reserve_collateral_mint: Pubkey,
-        reserve_destination_deposit_collateral: Pubkey,
+    let market_reserve_map = match pool {
+        "kamino-main" => HashMap::from([
+            (
+                Some(Token::USDC),
+                pubkey!["D6q6wuQSrifJKZYpR1M8R4YawnLDtDsMmWM1NbBmgJ59"],
+            ),
+            (
+                Some(Token::USDT),
+                pubkey!["H3t6qZ1JkguCNTi9uzVKqQ7dvt2cum4XiXWom6Gn5e5S"],
+            ),
+        ]),
+        "kamino-altcoins" => HashMap::from([(
+            Some(Token::USDC),
+            pubkey!["9TD2TSv4pENb8VwfbVYg25jvym7HN6iuAR6pFNSrKjqQ"],
+        )]),
+        "kamino-jlp" => HashMap::from([(
+            Some(Token::USDC),
+            pubkey!["Ga4rZytCpq1unD4DbEJ5bkHeUz9g3oh9AAFEi6vSauXp"],
+        )]),
+        _ => HashMap::default(),
+    };
+
+    let market_reserve_address = *market_reserve_map
+        .get(&token.token())
+        .ok_or_else(|| format!("Depositing {token} into {pool} is not supported"))?;
+
+    fn unsafe_load_reserve(
+        rpc_client: &RpcClient,
+        address: &Pubkey,
+    ) -> Result<kamino::Reserve, Box<dyn std::error::Error>> {
+        const LEN: usize = std::mem::size_of::<kamino::Reserve>();
+        let account_data: [u8; LEN] = rpc_client.get_account_data(address)?[8..LEN + 8]
+            .try_into()
+            .unwrap();
+        let reserve = unsafe { std::mem::transmute(account_data) };
+        Ok(reserve)
     }
 
-    struct KaminoMarketReserve {
-        reserve: Pubkey,
-        pyth_oracle: Pubkey,
-    }
+    let reserve = unsafe_load_reserve(rpc_client, &market_reserve_address)?;
+    let apr = reserve.current_supply_apr();
 
-    let market = match pool {
-        "kamino-main" => match token.token() {
-            Some(Token::USDC) => Some(KaminoMarket {
-                market_reserve: vec![
-                    KaminoMarketReserve {
-                        reserve: pubkey!["H3t6qZ1JkguCNTi9uzVKqQ7dvt2cum4XiXWom6Gn5e5S"],
-                        pyth_oracle: pubkey!["3vxLXJqLqF3JG5TCbYycbKWRBbCJQLxQmBGCkyqEEefL"],
-                    },
-                    KaminoMarketReserve {
-                        reserve: pubkey!["D6q6wuQSrifJKZYpR1M8R4YawnLDtDsMmWM1NbBmgJ59"],
-                        pyth_oracle: pubkey!["Gnt27xtC473ZT2Mw5u8wZ68Z3gULkSTb5DuxJy7eJotD"],
-                    },
-                ],
-                active_reserve: 1,
-                reverse_refresh_obligation_reserve: true,
-                lending_market_authority: pubkey!["9DrvZvyWh1HuAoZxvYWMvkf2XCzryCpGgHqrMjyDWpmo"],
-                lending_market: pubkey!["7u3HeHxYDLhnCoErrtycNokbQYbWGzLs6JSDqGAv5PfF"],
-                reserve_farm_state: pubkey!["JAvnB9AKtgPsTEoKmn24Bq64UMoYcrtWtq42HHBdsPkh"],
-                scope_prices: pubkey!["3NJYftD5sjVfxSnUdZ1wVML8f3aC6mp1CXCL6L7TnU8C"],
-                reserve_liquidity_supply: pubkey!["Bgq7trRgVMeq33yt235zM2onQ4bRDBsY5EWiTetF4qw6"],
-                reserve_collateral_mint: pubkey!["B8V6WVjPxW1UGwVDfxH2d2r8SyT4cqn7dQRK6XneVa7D"],
-                reserve_destination_deposit_collateral: pubkey![
-                    "3DzjXRfxRm6iejfyyMynR4tScddaanrePJ1NJU2XnPPL"
-                ],
-            }),
-            Some(Token::USDT) => Some(KaminoMarket {
-                market_reserve: vec![
-                    KaminoMarketReserve {
-                        reserve: pubkey!["D6q6wuQSrifJKZYpR1M8R4YawnLDtDsMmWM1NbBmgJ59"],
-                        pyth_oracle: pubkey!["Gnt27xtC473ZT2Mw5u8wZ68Z3gULkSTb5DuxJy7eJotD"],
-                    },
-                    KaminoMarketReserve {
-                        reserve: pubkey!["H3t6qZ1JkguCNTi9uzVKqQ7dvt2cum4XiXWom6Gn5e5S"],
-                        pyth_oracle: pubkey!["3vxLXJqLqF3JG5TCbYycbKWRBbCJQLxQmBGCkyqEEefL"],
-                    },
-                ],
-                active_reserve: 1,
-                reverse_refresh_obligation_reserve: false,
-                lending_market_authority: pubkey!["9DrvZvyWh1HuAoZxvYWMvkf2XCzryCpGgHqrMjyDWpmo"],
-                lending_market: pubkey!["7u3HeHxYDLhnCoErrtycNokbQYbWGzLs6JSDqGAv5PfF"],
-                reserve_farm_state: pubkey!["5pCqu9RFdL6QoN7KK4gKnAU6CjQFJot8nU7wpFK8Zwou"],
-                scope_prices: pubkey!["3NJYftD5sjVfxSnUdZ1wVML8f3aC6mp1CXCL6L7TnU8C"],
-                reserve_liquidity_supply: pubkey!["2Eff8Udy2G2gzNcf2619AnTx3xM4renEv4QrHKjS1o9N"],
-                reserve_collateral_mint: pubkey!["B8zf4kojJbwgCRKA7rLaLhRCZBGhgAJp8wPBVZZHMhSv"],
-                reserve_destination_deposit_collateral: pubkey![
-                    "CTCpzgNbPwWQSYamu4ZomgFuHf8DUGwq8hSYWVLurSJD"
-                ],
-            }),
-            _ => None,
-        },
-        "kamino-altcoins" => {
-            if token.token() == Some(Token::USDC) {
-                Some(KaminoMarket {
-                    market_reserve: vec![KaminoMarketReserve {
-                        reserve: pubkey!["9TD2TSv4pENb8VwfbVYg25jvym7HN6iuAR6pFNSrKjqQ"],
-                        pyth_oracle: pubkey!["Gnt27xtC473ZT2Mw5u8wZ68Z3gULkSTb5DuxJy7eJotD"],
-                    }],
-                    active_reserve: 0,
-                    reverse_refresh_obligation_reserve: false,
-                    lending_market_authority: pubkey![
-                        "81BgcfZuZf9bESLvw3zDkh7cZmMtDwTPgkCvYu7zx26o"
-                    ],
-                    lending_market: pubkey!["ByYiZxp8QrdN9qbdtaAiePN8AAr3qvTPppNJDpf5DVJ5"],
-                    reserve_farm_state: pubkey!["23UsLhyeuZBCRJNVFkPrmMCfXuka8hQa8S6spXwTEHcc"],
-                    scope_prices: pubkey!["3NJYftD5sjVfxSnUdZ1wVML8f3aC6mp1CXCL6L7TnU8C"],
-                    reserve_liquidity_supply: pubkey![
-                        "HTyrXvSvBbD7WstvU3oqFTBZM1fPZJPxVRvwLAmCTDyJ"
-                    ],
-                    reserve_collateral_mint: pubkey![
-                        "A2mcvn3kQXwG9XPUPgjghXJDqvYHTpkCJE3wtKqU1VRn"
-                    ],
-                    reserve_destination_deposit_collateral: pubkey![
-                        "8bGWMt65Y7RV2DV5sxNRxFM5jsUhBMSo8u24pbRPjQLY"
-                    ],
-                })
-            } else {
-                None
-            }
-        }
-        "kamino-jup" => {
-            if token.token() == Some(Token::USDC) {
-                Some(KaminoMarket {
-                    market_reserve: vec![KaminoMarketReserve {
-                        reserve: pubkey!["Ga4rZytCpq1unD4DbEJ5bkHeUz9g3oh9AAFEi6vSauXp"],
-                        pyth_oracle: pubkey!["Gnt27xtC473ZT2Mw5u8wZ68Z3gULkSTb5DuxJy7eJotD"],
-                    }],
-                    active_reserve: 0,
-                    reverse_refresh_obligation_reserve: false,
-                    lending_market_authority: pubkey![
-                        "B9spsrMK6pJicYtukaZzDyzsUQLgc3jbx5gHVwdDxb6y"
-                    ],
-                    lending_market: pubkey!["DxXdAyU3kCjnyggvHmY5nAwg5cRbbmdyX3npfDMjjMek"],
-                    reserve_farm_state: pubkey!["EGDhupegCXLtonYDSY67c4dzw86S9eMxsntQ1yxWSoHv"],
-                    scope_prices: pubkey!["3NJYftD5sjVfxSnUdZ1wVML8f3aC6mp1CXCL6L7TnU8C"],
-                    reserve_liquidity_supply: pubkey![
-                        "GENey8es3EgGiNTM8H8gzA3vf98haQF8LHiYFyErjgrv"
-                    ],
-                    reserve_collateral_mint: pubkey![
-                        "32XLsweyeQwWgLKRVAzS72nxHGU1JmmNQQZ3C3q6fBjJ"
-                    ],
-                    reserve_destination_deposit_collateral: pubkey![
-                        "6WnymZBTAekuHf9DgsaDKJ397oEZ3qMApNMHg9qjqhgm"
-                    ],
-                })
-            } else {
-                None
-            }
-        }
-        _ => None,
-    }
-    .ok_or_else(|| format!("Depositing {token} into {pool} is not supported"))?;
+    let lending_market = reserve.lending_market;
+
+    let lending_market_authority =
+        Pubkey::find_program_address(&[b"lma", &lending_market.to_bytes()], &KAMINO_LEND_PROGRAM).0;
+
+    let reserve_farm_state = reserve.farm_collateral;
+    let scope_prices = reserve.config.token_info.scope_configuration.price_feed;
+    let reserve_liquidity_supply = reserve.liquidity.supply_vault;
+    let reserve_collateral_mint = reserve.collateral.mint_pubkey;
+    let reserve_destination_deposit_collateral = reserve.collateral.supply_vault;
 
     let market_obligation = Pubkey::find_program_address(
         &[
             &[0],
             &[0],
             &address.to_bytes(),
-            &market.lending_market.to_bytes(),
+            &lending_market.to_bytes(),
             &system_program::ID.to_bytes(),
             &system_program::ID.to_bytes(),
         ],
@@ -464,36 +472,71 @@ fn kamino_deposit(
     )
     .0;
 
-    let market_obligation_farm_user_state = Pubkey::find_program_address(
-        &[
-            b"user",
-            &market.reserve_farm_state.to_bytes(),
-            &market_obligation.to_bytes(),
-        ],
-        &FARMS_PROGRAM,
-    )
-    .0;
+    fn unsafe_load_obligation(
+        rpc_client: &RpcClient,
+        address: &Pubkey,
+    ) -> Result<kamino::Obligation, Box<dyn std::error::Error>> {
+        const LEN: usize = std::mem::size_of::<kamino::Obligation>();
+        let account_data: [u8; LEN] = rpc_client.get_account_data(address)?[8..LEN + 8]
+            .try_into()
+            .unwrap();
+        let obligation = unsafe { std::mem::transmute(account_data) };
+        Ok(obligation)
+    }
+
+    let obligation = unsafe_load_obligation(rpc_client, &market_obligation)?;
+
+    let obligation_market_reserves = obligation
+        .deposits
+        .iter()
+        .filter(|c| c.deposit_reserve != Pubkey::default())
+        .map(|c| c.deposit_reserve)
+        .collect::<Vec<_>>();
 
     let mut instructions = vec![];
 
     // Instruction: Kamino: Refresh Reserve
-    for market_reserve in &market.market_reserve {
+
+    let mut refresh_reserves: Vec<(Pubkey, Pubkey)> = obligation_market_reserves
+        .iter()
+        .filter_map(|reserve_address| {
+            if *reserve_address != market_reserve_address {
+                let reserve =
+                    unsafe_load_reserve(rpc_client, reserve_address).unwrap_or_else(|err| {
+                        // TODO: propagate failure up instead of panic..
+                        panic!("unable to load reserve {reserve_address}: {err}")
+                    });
+
+                Some((
+                    *reserve_address,
+                    reserve.config.token_info.pyth_configuration.price,
+                ))
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    refresh_reserves.push((
+        market_reserve_address,
+        reserve.config.token_info.pyth_configuration.price,
+    ));
+    for (refresh_reserve, pyth_oracle) in refresh_reserves.iter() {
         instructions.push(Instruction::new_with_bytes(
             KAMINO_LEND_PROGRAM,
             &[0x02, 0xda, 0x8a, 0xeb, 0x4f, 0xc9, 0x19, 0x66],
             vec![
                 // Reserve
-                AccountMeta::new(market_reserve.reserve, false),
+                AccountMeta::new(*refresh_reserve, false),
                 // Lending Market
-                AccountMeta::new_readonly(market.lending_market, false),
+                AccountMeta::new_readonly(lending_market, false),
                 // Pyth Oracle
-                AccountMeta::new_readonly(market_reserve.pyth_oracle, false),
-                // Switchboard Price Oracle
+                AccountMeta::new_readonly(*pyth_oracle, false),
                 AccountMeta::new_readonly(KAMINO_LEND_PROGRAM, false),
                 // Switchboard Twap Oracle
                 AccountMeta::new_readonly(KAMINO_LEND_PROGRAM, false),
                 // Scope Prices
-                AccountMeta::new_readonly(market.scope_prices, false),
+                AccountMeta::new_readonly(scope_prices, false),
             ],
         ));
     }
@@ -501,20 +544,13 @@ fn kamino_deposit(
     // Instruction: Kamino: Refresh Obligation
     let mut refresh_obligation_account_metas = vec![
         // Lending Market
-        AccountMeta::new_readonly(market.lending_market, false),
+        AccountMeta::new_readonly(lending_market, false),
         // Obligation
         AccountMeta::new(market_obligation, false),
     ];
 
-    let market_reserve_iter: Vec<&KaminoMarketReserve> =
-        if market.reverse_refresh_obligation_reserve {
-            market.market_reserve.iter().rev().collect()
-        } else {
-            market.market_reserve.iter().collect()
-        };
-
-    for market_reserve in &market_reserve_iter {
-        refresh_obligation_account_metas.push(AccountMeta::new(market_reserve.reserve, false));
+    for obligation_market_reserve in &obligation_market_reserves {
+        refresh_obligation_account_metas.push(AccountMeta::new(*obligation_market_reserve, false));
     }
 
     instructions.push(Instruction::new_with_bytes(
@@ -536,15 +572,26 @@ fn kamino_deposit(
             // Obligation
             AccountMeta::new(market_obligation, false),
             // Lending Market Authority
-            AccountMeta::new(market.lending_market_authority, false),
+            AccountMeta::new(lending_market_authority, false),
             // Reserve
-            AccountMeta::new(market.market_reserve[market.active_reserve].reserve, false),
+            AccountMeta::new(market_reserve_address, false),
             // Reserve Farm State
-            AccountMeta::new(market.reserve_farm_state, false),
+            AccountMeta::new(reserve_farm_state, false),
             // Obligation Farm User State
-            AccountMeta::new(market_obligation_farm_user_state, false),
+            AccountMeta::new(
+                Pubkey::find_program_address(
+                    &[
+                        b"user",
+                        &reserve_farm_state.to_bytes(),
+                        &market_obligation.to_bytes(),
+                    ],
+                    &FARMS_PROGRAM,
+                )
+                .0,
+                false,
+            ),
             // Lending Market
-            AccountMeta::new_readonly(market.lending_market, false),
+            AccountMeta::new_readonly(lending_market, false),
             // Farms Program
             AccountMeta::new_readonly(FARMS_PROGRAM, false),
             // Rent
@@ -573,17 +620,17 @@ fn kamino_deposit(
             // Obligation
             AccountMeta::new(market_obligation, false),
             // Lending Market
-            AccountMeta::new_readonly(market.lending_market, false),
+            AccountMeta::new_readonly(lending_market, false),
             // Lending Market Authority
-            AccountMeta::new(market.lending_market_authority, false),
+            AccountMeta::new(lending_market_authority, false),
             // Reserve
-            AccountMeta::new(market.market_reserve[market.active_reserve].reserve, false),
+            AccountMeta::new(market_reserve_address, false),
             // Reserve Liquidity Supply
-            AccountMeta::new(market.reserve_liquidity_supply, false),
+            AccountMeta::new(reserve_liquidity_supply, false),
             // Reserve Collateral Mint
-            AccountMeta::new(market.reserve_collateral_mint, false),
+            AccountMeta::new(reserve_collateral_mint, false),
             // Reserve Destination Deposit Collateral
-            AccountMeta::new(market.reserve_destination_deposit_collateral, false),
+            AccountMeta::new(reserve_destination_deposit_collateral, false),
             // User Source Liquidity
             AccountMeta::new(
                 spl_associated_token_account::get_associated_token_address(&address, &token.mint()),
@@ -601,5 +648,5 @@ fn kamino_deposit(
     // Instruction: Kamino: Refresh Obligation Farms For Reserve
     instructions.push(kamino_refresh_obligation_farms_for_reserve);
 
-    Ok((instructions, 1_500_000))
+    Ok((instructions, 500_000, apr))
 }

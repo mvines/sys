@@ -10,6 +10,7 @@ pub mod metrics;
 pub mod notifier;
 pub mod priority_fee;
 pub mod token;
+pub mod vendor;
 //pub mod tulip;
 
 pub fn app_version() -> String {
