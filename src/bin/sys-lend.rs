@@ -28,6 +28,8 @@ use {
     },
 };
 
+const POOLS: &[&str] = &["kamino-main", "kamino-altcoins", "kamino-jlp", "mfi"];
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     solana_logger::setup_with_default("solana=info");
@@ -78,7 +80,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .value_name("POOL")
                         .takes_value(true)
                         .required(true)
-                        .possible_values(&["kamino-main", "kamino-altcoins", "kamino-jlp", "mfi"])
+                        .possible_values(POOLS)
                         .help("Lending pool"),
                 )
                 .arg(
@@ -96,6 +98,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .validator(is_amount_or_all)
                         .required(true)
                         .help("The amount to deposit; accepts keyword ALL"),
+                )
+                .arg(
+                    Arg::with_name("token")
+                        .value_name("SOL or SPL Token")
+                        .takes_value(true)
+                        .required(true)
+                        .validator(is_valid_token_or_sol)
+                        .default_value("USDC")
+                        .help("Token to deposit"),
+                ),
+        )
+        .subcommand(
+            SubCommand::with_name("supply-apy")
+                .about("Display the current supply APY for a lending pool")
+                .arg(
+                    Arg::with_name("pool")
+                        .value_name("POOL")
+                        .takes_value(true)
+                        .required(true)
+                        .possible_values(POOLS)
+                        .help("Lending pool"),
                 )
                 .arg(
                     Arg::with_name("token")
@@ -129,6 +152,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let notifier = Notifier::default();
 
     match matches.subcommand() {
+        ("supply-apy", Some(matches)) => {
+            let pool = value_t_or_exit!(matches, "pool", String);
+            let token = MaybeToken::from(value_t!(matches, "token", Token).ok());
+
+            let apr = if pool.starts_with("kamino-") {
+                kamino_apr(&rpc_client, &pool, token)?
+            } else if pool == "mfi" {
+                mfi_apr(&rpc_client, token)?
+            } else {
+                unreachable!();
+            };
+
+            let msg = format!("Current APY for {}: {:.2}%", pool, apr_to_apy(apr) * 100.);
+            notifier.send(&msg).await;
+            println!("{msg}");
+        }
         ("deposit", Some(matches)) => {
             let (signer, address) = signer_of(matches, "from", &mut wallet_manager)?;
             let address = address.expect("address");
@@ -144,38 +183,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
 
             if deposit_amount > token_balance {
-                println!(
-                    "Deposit amount of {} is greater than current balance of {}",
-                    token.format_amount(deposit_amount),
-                    token.format_amount(token_balance),
-                );
-                println!(
-                    "Deposit amount of {} is greater than current balance of {}",
-                    token.format_amount(deposit_amount),
-                    token.format_amount(token_balance),
-                );
-                println!(
-                    "Deposit amount of {} is greater than current balance of {}",
-                    token.format_amount(deposit_amount),
-                    token.format_amount(token_balance),
-                );
-                println!(
-                    "Deposit amount of {} is greater than current balance of {}",
-                    token.format_amount(deposit_amount),
-                    token.format_amount(token_balance),
-                );
-                println!(
-                    "Deposit amount of {} is greater than current balance of {}",
-                    token.format_amount(deposit_amount),
-                    token.format_amount(token_balance),
-                );
-                /*
                 return Err(format!(
                     "Deposit amount of {} is greater than current balance of {}",
                     token.format_amount(deposit_amount),
                     token.format_amount(token_balance),
-                ).into());
-                */
+                )
+                .into());
             }
             println!(
                 "Depositing {} into {}",
@@ -218,7 +231,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 token.format_amount(deposit_amount),
                 address,
                 pool,
-                apr * 100.,
+                apr_to_apy(apr) * 100.,
                 signature
             );
             notifier.send(&msg).await;
@@ -234,6 +247,77 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
+}
+
+fn apr_to_apy(apr: f64) -> f64 {
+    let compounding_periods = 365. * 24.; // hourly compounding
+    (1. + apr / compounding_periods).powf(compounding_periods) - 1.
+}
+
+fn mfi_load_bank(
+    rpc_client: &RpcClient,
+    token: MaybeToken,
+) -> Result<(Pubkey, marginfi_v2::Bank, Pubkey), Box<dyn std::error::Error>> {
+    let (bank_address, bank_liquidity_vault) = match token.token() {
+        Some(Token::USDC) => Some((
+            pubkey!["2s37akK2eyBbp8DZgCm7RtsaEz8eJP3Nxd4urLHQv7yB"],
+            pubkey!["7jaiZR5Sk8hdYN9MxTpczTcwbWpb5WEoxSANuUwveuat"],
+        )),
+        Some(Token::USDT) => Some((
+            pubkey!["HmpMfL8942u22htC4EMiWgLX931g3sacXFR6KjuLgKLV"],
+            pubkey!["77t6Fi9qj4s4z22K1toufHtstM8rEy7Y3ytxik7mcsTy"],
+        )),
+        Some(Token::UXD) => Some((
+            pubkey!["BeNBJrAh1tZg5sqgt8D6AWKJLD5KkBrfZvtcgd7EuiAR"],
+            pubkey!["D3kBozm2vqgroJwkBquvDySkkZBn5usu6rYhbgPfdDEA"],
+        )),
+        _ => None,
+    }
+    .ok_or_else(|| format!("Depositing {token} into mfi is not supported"))?;
+
+    fn unsafe_load_bank(
+        rpc_client: &RpcClient,
+        address: &Pubkey,
+    ) -> Result<marginfi_v2::Bank, Box<dyn std::error::Error>> {
+        const LEN: usize = std::mem::size_of::<marginfi_v2::Bank>();
+        let account_data: [u8; LEN] = rpc_client.get_account_data(address)?[8..LEN + 8]
+            .try_into()
+            .unwrap();
+        let reserve = unsafe { std::mem::transmute(account_data) };
+        Ok(reserve)
+    }
+
+    let bank = unsafe_load_bank(rpc_client, &bank_address)?;
+
+    Ok((bank_address, bank, bank_liquidity_vault))
+}
+
+fn mfi_calc_bank_apr(bank: &marginfi_v2::Bank) -> f64 {
+    let total_deposits = bank.get_asset_amount(bank.total_asset_shares.into());
+    let total_borrow = bank.get_liability_amount(bank.total_liability_shares.into());
+
+    /*
+    println!(
+        "Pool deposits: {}",
+        token.format_amount(total_deposits.floor().to_num::<u64>())
+    );
+    println!(
+        "Pool liability: {}",
+        token.format_amount(total_borrow.floor().to_num::<u64>())
+    );
+    */
+
+    bank.config
+        .interest_rate_config
+        .calc_interest_rate(total_borrow / total_deposits)
+        .unwrap()
+        .0
+        .to_num::<f64>()
+}
+
+fn mfi_apr(rpc_client: &RpcClient, token: MaybeToken) -> Result<f64, Box<dyn std::error::Error>> {
+    let (_bank_address, bank, _bank_liquidity_vault) = mfi_load_bank(rpc_client, token)?;
+    Ok(mfi_calc_bank_apr(&bank))
 }
 
 fn mfi_deposit(
@@ -255,22 +339,8 @@ fn mfi_deposit(
 
     let marginfi_group = pubkey!["4qp6Fx6tnZkY5Wropq9wUYgtFxXKwE6viZxFHg3rdAG8"];
 
-    let (bank_address, bank_liquidity_vault) = match token.token() {
-        Some(Token::USDC) => Some((
-            pubkey!["2s37akK2eyBbp8DZgCm7RtsaEz8eJP3Nxd4urLHQv7yB"],
-            pubkey!["7jaiZR5Sk8hdYN9MxTpczTcwbWpb5WEoxSANuUwveuat"],
-        )),
-        Some(Token::USDT) => Some((
-            pubkey!["HmpMfL8942u22htC4EMiWgLX931g3sacXFR6KjuLgKLV"],
-            pubkey!["77t6Fi9qj4s4z22K1toufHtstM8rEy7Y3ytxik7mcsTy"],
-        )),
-        Some(Token::UXD) => Some((
-            pubkey!["BeNBJrAh1tZg5sqgt8D6AWKJLD5KkBrfZvtcgd7EuiAR"],
-            pubkey!["D3kBozm2vqgroJwkBquvDySkkZBn5usu6rYhbgPfdDEA"],
-        )),
-        _ => None,
-    }
-    .ok_or_else(|| format!("Depositing {token} into mfi is not supported"))?;
+    let (bank_address, bank, bank_liquidity_vault) = mfi_load_bank(&rpc_client, token)?;
+    let apr = mfi_calc_bank_apr(&bank);
 
     let mut user_accounts = rpc_client
         .get_program_accounts_with_config(
@@ -304,30 +374,6 @@ fn mfi_deposit(
         return Err(format!("Multiple MarginFi account found for {}", address).into());
     }
 
-    fn unsafe_load_bank(
-        rpc_client: &RpcClient,
-        address: &Pubkey,
-    ) -> Result<marginfi_v2::Bank, Box<dyn std::error::Error>> {
-        const LEN: usize = std::mem::size_of::<marginfi_v2::Bank>();
-        let account_data: [u8; LEN] = rpc_client.get_account_data(address)?[8..LEN + 8]
-            .try_into()
-            .unwrap();
-        let reserve = unsafe { std::mem::transmute(account_data) };
-        Ok(reserve)
-    }
-
-    let bank = unsafe_load_bank(&rpc_client, &bank_address)?;
-
-    let total_deposits = bank.get_asset_amount(bank.total_asset_shares.into());
-    let total_borrow = bank.get_liability_amount(bank.total_liability_shares.into());
-    let apr = bank
-        .config
-        .interest_rate_config
-        .calc_interest_rate(total_borrow / total_deposits)
-        .unwrap()
-        .0
-        .to_num::<f64>();
-
     if verbose {
         let user_account = {
             const LEN: usize = std::mem::size_of::<marginfi_v2::MarginfiAccount>();
@@ -352,14 +398,6 @@ fn mfi_deposit(
         println!(
             "Deposit Limit: {}",
             token.format_amount(bank.config.deposit_limit)
-        );
-        println!(
-            "Pool deposits: {}",
-            token.format_amount(total_deposits.floor().to_num::<u64>())
-        );
-        println!(
-            "Pool liability: {}",
-            token.format_amount(total_borrow.floor().to_num::<u64>())
         );
     }
 
@@ -397,16 +435,23 @@ fn mfi_deposit(
     Ok((instructions, 50_000, apr))
 }
 
-fn kamino_deposit(
+fn kamino_unsafe_load_reserve(
+    rpc_client: &RpcClient,
+    address: &Pubkey,
+) -> Result<kamino::Reserve, Box<dyn std::error::Error>> {
+    const LEN: usize = std::mem::size_of::<kamino::Reserve>();
+    let account_data: [u8; LEN] = rpc_client.get_account_data(address)?[8..LEN + 8]
+        .try_into()
+        .unwrap();
+    let reserve = unsafe { std::mem::transmute(account_data) };
+    Ok(reserve)
+}
+
+fn kamino_load_pool_reserve(
     rpc_client: &RpcClient,
     pool: &str,
-    address: Pubkey,
     token: MaybeToken,
-    deposit_amount: u64,
-) -> Result<(Vec<Instruction>, u32, f64), Box<dyn std::error::Error>> {
-    const KAMINO_LEND_PROGRAM: Pubkey = pubkey!["KLend2g3cP87fffoy8q1mQqGKjrxjC8boSyAYavgmjD"];
-    const FARMS_PROGRAM: Pubkey = pubkey!["FarmsPZpWu9i7Kky8tPN37rs2TpmMrAZrC7S7vJa91Hr"];
-
+) -> Result<(Pubkey, kamino::Reserve), Box<dyn std::error::Error>> {
     let market_reserve_map = match pool {
         "kamino-main" => HashMap::from([
             (
@@ -433,21 +478,33 @@ fn kamino_deposit(
         .get(&token.token())
         .ok_or_else(|| format!("Depositing {token} into {pool} is not supported"))?;
 
-    fn unsafe_load_reserve(
-        rpc_client: &RpcClient,
-        address: &Pubkey,
-    ) -> Result<kamino::Reserve, Box<dyn std::error::Error>> {
-        const LEN: usize = std::mem::size_of::<kamino::Reserve>();
-        let account_data: [u8; LEN] = rpc_client.get_account_data(address)?[8..LEN + 8]
-            .try_into()
-            .unwrap();
-        let reserve = unsafe { std::mem::transmute(account_data) };
-        Ok(reserve)
-    }
+    let reserve = kamino_unsafe_load_reserve(rpc_client, &market_reserve_address)?;
 
-    let reserve = unsafe_load_reserve(rpc_client, &market_reserve_address)?;
+    Ok((market_reserve_address, reserve))
+}
+
+fn kamino_apr(
+    rpc_client: &RpcClient,
+    pool: &str,
+    token: MaybeToken,
+) -> Result<f64, Box<dyn std::error::Error>> {
+    let (_market_reserve_address, reserve) = kamino_load_pool_reserve(rpc_client, pool, token)?;
+    Ok(reserve.current_supply_apr())
+}
+
+fn kamino_deposit(
+    rpc_client: &RpcClient,
+    pool: &str,
+    address: Pubkey,
+    token: MaybeToken,
+    deposit_amount: u64,
+) -> Result<(Vec<Instruction>, u32, f64), Box<dyn std::error::Error>> {
+    const KAMINO_LEND_PROGRAM: Pubkey = pubkey!["KLend2g3cP87fffoy8q1mQqGKjrxjC8boSyAYavgmjD"];
+    const FARMS_PROGRAM: Pubkey = pubkey!["FarmsPZpWu9i7Kky8tPN37rs2TpmMrAZrC7S7vJa91Hr"];
+
+    let (market_reserve_address, reserve) = kamino_load_pool_reserve(rpc_client, pool, token)?;
+
     let apr = reserve.current_supply_apr();
-
     let lending_market = reserve.lending_market;
 
     let lending_market_authority =
@@ -501,8 +558,8 @@ fn kamino_deposit(
         .iter()
         .filter_map(|reserve_address| {
             if *reserve_address != market_reserve_address {
-                let reserve =
-                    unsafe_load_reserve(rpc_client, reserve_address).unwrap_or_else(|err| {
+                let reserve = kamino_unsafe_load_reserve(rpc_client, reserve_address)
+                    .unwrap_or_else(|err| {
                         // TODO: propagate failure up instead of panic..
                         panic!("unable to load reserve {reserve_address}: {err}")
                     });
