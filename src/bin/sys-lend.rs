@@ -1,5 +1,5 @@
 use {
-    clap::{value_t, value_t_or_exit, App, AppSettings, Arg, SubCommand},
+    clap::{value_t, value_t_or_exit, values_t_or_exit, App, AppSettings, Arg, SubCommand},
     solana_account_decoder::UiAccountEncoding,
     solana_clap_utils::{self, input_parsers::*, input_validators::*},
     solana_client::{
@@ -17,7 +17,7 @@ use {
         system_program, sysvar,
         transaction::Transaction,
     },
-    std::collections::HashMap,
+    std::collections::{HashMap, HashSet},
     sys::{
         app_version,
         notifier::*,
@@ -28,12 +28,21 @@ use {
     },
 };
 
-const POOLS: &[&str] = &["kamino-main", "kamino-altcoins", "kamino-jlp", "mfi"];
+lazy_static::lazy_static! {
+    static ref SUPPORTED_TOKENS: HashMap<&'static str, HashSet::<MaybeToken>> = HashMap::from([
+        ("mfi", HashSet::from([Token::USDC.into(), Token::USDT.into(), Token::UXD.into()])) ,
+        ("kamino-main", HashSet::from([Token::USDC.into(), Token::USDT.into()])) ,
+        ("kamino-jlp", HashSet::from([Token::USDC.into()])) ,
+        ("kamino-altcoins", HashSet::from([Token::USDC.into()]))
+    ]);
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     solana_logger::setup_with_default("solana=info");
     let default_json_rpc_url = "https://api.mainnet-beta.solana.com";
+
+    let pools = SUPPORTED_TOKENS.keys().copied().collect::<Vec<_>>();
 
     let app_version = &*app_version();
     let app = App::new("sys-lend")
@@ -77,11 +86,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .about("Deposit tokens into a lending pool")
                 .arg(
                     Arg::with_name("pool")
+                        .long("into")
                         .value_name("POOL")
                         .takes_value(true)
                         .required(true)
-                        .possible_values(POOLS)
-                        .help("Lending pool"),
+                        .multiple(true)
+                        .possible_values(&pools)
+                        .help("Lending pool to deposit into. If multiple pools are provided, the pool with the highest APY is selected"),
                 )
                 .arg(
                     Arg::with_name("from")
@@ -117,7 +128,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .value_name("POOL")
                         .takes_value(true)
                         .required(true)
-                        .possible_values(POOLS)
+                        .possible_values(&pools)
                         .help("Lending pool"),
                 )
                 .arg(
@@ -151,19 +162,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut wallet_manager = None;
     let notifier = Notifier::default();
 
+    fn pool_apr(
+        rpc_client: &RpcClient,
+        pool: &str,
+        token: MaybeToken,
+    ) -> Result<f64, Box<dyn std::error::Error>> {
+        Ok(if pool.starts_with("kamino-") {
+            kamino_apr(rpc_client, pool, token)?
+        } else if pool == "mfi" {
+            mfi_apr(rpc_client, token)?
+        } else {
+            unreachable!()
+        })
+    }
+
     match matches.subcommand() {
         ("supply-apy", Some(matches)) => {
             let pool = value_t_or_exit!(matches, "pool", String);
             let token = MaybeToken::from(value_t!(matches, "token", Token).ok());
 
-            let apr = if pool.starts_with("kamino-") {
-                kamino_apr(&rpc_client, &pool, token)?
-            } else if pool == "mfi" {
-                mfi_apr(&rpc_client, token)?
-            } else {
-                unreachable!();
-            };
-
+            let apr = pool_apr(&rpc_client, &pool, token)?;
             let msg = format!("Current APY for {}: {:.2}%", pool, apr_to_apy(apr) * 100.);
             notifier.send(&msg).await;
             println!("{msg}");
@@ -173,7 +191,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let address = address.expect("address");
             let signer = signer.expect("signer");
 
-            let pool = value_t_or_exit!(matches, "pool", String);
             let token = MaybeToken::from(value_t!(matches, "token", Token).ok());
 
             let token_balance = token.balance(&rpc_client, &address)?;
@@ -181,6 +198,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "ALL" => token_balance,
                 amount => token.amount(amount.parse::<f64>().unwrap()),
             };
+
+            let pools = values_t_or_exit!(matches, "pool", String);
 
             if deposit_amount > token_balance {
                 return Err(format!(
@@ -190,6 +209,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 )
                 .into());
             }
+
+            for pool in &pools {
+                if !SUPPORTED_TOKENS
+                    .get(pool.as_str())
+                    .unwrap()
+                    .contains(&token)
+                {
+                    return Err(format!("Depositing {token} into {pool} is not supported").into());
+                }
+            }
+
+            let pool = if pools.len() > 1 {
+                let mut best_pool = None;
+                let mut best_apr = None;
+
+                for pool in &pools {
+                    let apr = pool_apr(&rpc_client, pool, token)?;
+                    if Some(apr) > best_apr {
+                        best_pool = Some(pool);
+                        best_apr = Some(apr);
+                    }
+                }
+
+                match best_pool {
+                    None => return Err("Bug? No pools available".into()),
+                    Some(pool) => pool,
+                }
+            } else {
+                &pools[0]
+            }
+            .clone();
+
             println!(
                 "Depositing {} into {}",
                 token.format_amount(deposit_amount),
@@ -273,7 +324,7 @@ fn mfi_load_bank(
         )),
         _ => None,
     }
-    .ok_or_else(|| format!("Depositing {token} into mfi is not supported"))?;
+    .ok_or_else(|| format!("mfi_load_bank: {token} is not supported"))?;
 
     fn unsafe_load_bank(
         rpc_client: &RpcClient,
@@ -476,7 +527,7 @@ fn kamino_load_pool_reserve(
 
     let market_reserve_address = *market_reserve_map
         .get(&token.token())
-        .ok_or_else(|| format!("Depositing {token} into {pool} is not supported"))?;
+        .ok_or_else(|| format!("{pool}: {token} is not supported"))?;
 
     let reserve = kamino_unsafe_load_reserve(rpc_client, &market_reserve_address)?;
 
