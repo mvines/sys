@@ -562,7 +562,6 @@ fn kamino_deposit(
         Pubkey::find_program_address(&[b"lma", &lending_market.to_bytes()], &KAMINO_LEND_PROGRAM).0;
 
     let reserve_farm_state = reserve.farm_collateral;
-    let scope_prices = reserve.config.token_info.scope_configuration.price_feed;
     let reserve_liquidity_supply = reserve.liquidity.supply_vault;
     let reserve_collateral_mint = reserve.collateral.mint_pubkey;
     let reserve_destination_deposit_collateral = reserve.collateral.supply_vault;
@@ -605,7 +604,7 @@ fn kamino_deposit(
 
     // Instruction: Kamino: Refresh Reserve
 
-    let mut refresh_reserves: Vec<(Pubkey, Pubkey)> = obligation_market_reserves
+    let mut refresh_reserves: Vec<(Pubkey, Pubkey, Pubkey)> = obligation_market_reserves
         .iter()
         .filter_map(|reserve_address| {
             if *reserve_address != market_reserve_address {
@@ -617,7 +616,17 @@ fn kamino_deposit(
 
                 Some((
                     *reserve_address,
-                    reserve.config.token_info.pyth_configuration.price,
+                    if reserve.config.token_info.pyth_configuration.price == Pubkey::default() {
+                        KAMINO_LEND_PROGRAM
+                    } else {
+                        reserve.config.token_info.pyth_configuration.price
+                    },
+                    if reserve.config.token_info.scope_configuration.price_feed == Pubkey::default()
+                    {
+                        KAMINO_LEND_PROGRAM
+                    } else {
+                        reserve.config.token_info.scope_configuration.price_feed
+                    },
                 ))
             } else {
                 None
@@ -628,18 +637,19 @@ fn kamino_deposit(
     refresh_reserves.push((
         market_reserve_address,
         reserve.config.token_info.pyth_configuration.price,
+        reserve.config.token_info.scope_configuration.price_feed,
     ));
-    for (refresh_reserve, pyth_oracle) in refresh_reserves.iter() {
+    for (reserve_address, pyth_oracle, scope_prices) in refresh_reserves {
         instructions.push(Instruction::new_with_bytes(
             KAMINO_LEND_PROGRAM,
             &[0x02, 0xda, 0x8a, 0xeb, 0x4f, 0xc9, 0x19, 0x66],
             vec![
                 // Reserve
-                AccountMeta::new(*refresh_reserve, false),
+                AccountMeta::new(reserve_address, false),
                 // Lending Market
                 AccountMeta::new_readonly(lending_market, false),
                 // Pyth Oracle
-                AccountMeta::new_readonly(*pyth_oracle, false),
+                AccountMeta::new_readonly(pyth_oracle, false),
                 AccountMeta::new_readonly(KAMINO_LEND_PROGRAM, false),
                 // Switchboard Twap Oracle
                 AccountMeta::new_readonly(KAMINO_LEND_PROGRAM, false),
