@@ -95,12 +95,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .help("Lending pool to deposit into. If multiple pools are provided, the pool with the highest APY is selected"),
                 )
                 .arg(
-                    Arg::with_name("from")
-                        .value_name("FROM_ADDRESS")
+                    Arg::with_name("keypair")
+                        .value_name("KEYPAIR")
                         .takes_value(true)
                         .required(true)
                         .validator(is_valid_signer)
-                        .help("Account holding the deposit"),
+                        .help("Wallet"),
                 )
                 .arg(
                     Arg::with_name("amount")
@@ -109,6 +109,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .validator(is_amount_or_all)
                         .required(true)
                         .help("The amount to deposit; accepts keyword ALL"),
+                )
+                .arg(
+                    Arg::with_name("token")
+                        .value_name("SOL or SPL Token")
+                        .takes_value(true)
+                        .required(true)
+                        .validator(is_valid_token_or_sol)
+                        .default_value("USDC")
+                        .help("Token to deposit"),
+                ),
+        )
+        .subcommand(
+            SubCommand::with_name("supply-balance")
+                .about("Display the current supplied balance for a lending pool")
+                .arg(
+                    Arg::with_name("pool")
+                        .value_name("POOL")
+                        .takes_value(true)
+                        .required(true)
+                        .possible_values(&pools)
+                        .help("Lending pool"),
+                )
+                .arg(
+                    Arg::with_name("address")
+                        .value_name("ADDRESS")
+                        .takes_value(true)
+                        .required(true)
+                        .validator(is_valid_pubkey)
+                        .help("Wallet address"),
                 )
                 .arg(
                     Arg::with_name("token")
@@ -186,8 +215,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             notifier.send(&msg).await;
             println!("{msg}");
         }
+        ("supply-balance", Some(matches)) => {
+            let pool = value_t_or_exit!(matches, "pool", String);
+            let address = pubkey_of(matches, "address").unwrap();
+            let token = MaybeToken::from(value_t!(matches, "token", Token).ok());
+
+            let supply_balance = if pool.starts_with("kamino-") {
+                kamino_deposited_amount(&rpc_client, &pool, address, token)?
+            } else if pool == "mfi" {
+                mfi_balance(&rpc_client, address, token)?.0
+            } else {
+                unreachable!()
+            };
+
+            let msg = format!("{}: {} supplied", pool, token.format_amount(supply_balance));
+            notifier.send(&msg).await;
+            println!("{msg}");
+        }
         ("deposit", Some(matches)) => {
-            let (signer, address) = signer_of(matches, "from", &mut wallet_manager)?;
+            let (signer, address) = signer_of(matches, "signer", &mut wallet_manager)?;
             let address = address.expect("address");
             let signer = signer.expect("signer");
 
@@ -250,7 +296,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let (mut instructions, required_compute_units, apr) = if pool.starts_with("kamino-") {
                 kamino_deposit(&rpc_client, &pool, address, token, deposit_amount)?
             } else if pool == "mfi" {
-                mfi_deposit(address, token, deposit_amount, false)?
+                mfi_deposit(&rpc_client, address, token, deposit_amount, false)?
             } else {
                 unreachable!();
             };
@@ -305,11 +351,23 @@ fn apr_to_apy(apr: f64) -> f64 {
     (1. + apr / compounding_periods).powf(compounding_periods) - 1.
 }
 
-fn mfi_load_bank(
-    rpc_client: &RpcClient,
+//////////////////////////////////////////////////////////////////////////////
+///[ MarginFi Stuff ] ////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////////
+
+const MFI_LEND_PROGRAM: Pubkey = pubkey!["MFv2hWf31Z9kbCa1snEPYctwafyhdvnV7FZnsebVacA"];
+const MARGINFI_GROUP: Pubkey = pubkey!["4qp6Fx6tnZkY5Wropq9wUYgtFxXKwE6viZxFHg3rdAG8"];
+
+fn mfi_lookup_bank(
     token: MaybeToken,
-) -> Result<(Pubkey, marginfi_v2::Bank, Pubkey), Box<dyn std::error::Error>> {
-    let (bank_address, bank_liquidity_vault) = match token.token() {
+) -> Result<
+    (
+        /*bank_address: */ Pubkey,
+        /*bank_liquidity_vault:*/ Pubkey,
+    ),
+    Box<dyn std::error::Error>,
+> {
+    match token.token() {
         Some(Token::USDC) => Some((
             pubkey!["2s37akK2eyBbp8DZgCm7RtsaEz8eJP3Nxd4urLHQv7yB"],
             pubkey!["7jaiZR5Sk8hdYN9MxTpczTcwbWpb5WEoxSANuUwveuat"],
@@ -324,23 +382,26 @@ fn mfi_load_bank(
         )),
         _ => None,
     }
-    .ok_or_else(|| format!("mfi_load_bank: {token} is not supported"))?;
+    .ok_or_else(|| format!("mfi_load_bank: {token} is not supported").into())
+}
 
+fn mfi_load_bank(
+    rpc_client: &RpcClient,
+    bank_address: Pubkey,
+) -> Result<marginfi_v2::Bank, Box<dyn std::error::Error>> {
     fn unsafe_load_bank(
         rpc_client: &RpcClient,
-        address: &Pubkey,
+        address: Pubkey,
     ) -> Result<marginfi_v2::Bank, Box<dyn std::error::Error>> {
         const LEN: usize = std::mem::size_of::<marginfi_v2::Bank>();
-        let account_data: [u8; LEN] = rpc_client.get_account_data(address)?[8..LEN + 8]
+        let account_data: [u8; LEN] = rpc_client.get_account_data(&address)?[8..LEN + 8]
             .try_into()
             .unwrap();
         let reserve = unsafe { std::mem::transmute(account_data) };
         Ok(reserve)
     }
 
-    let bank = unsafe_load_bank(rpc_client, &bank_address)?;
-
-    Ok((bank_address, bank, bank_liquidity_vault))
+    unsafe_load_bank(rpc_client, bank_address)
 }
 
 fn mfi_calc_bank_apr(bank: &marginfi_v2::Bank) -> f64 {
@@ -367,18 +428,14 @@ fn mfi_calc_bank_apr(bank: &marginfi_v2::Bank) -> f64 {
 }
 
 fn mfi_apr(rpc_client: &RpcClient, token: MaybeToken) -> Result<f64, Box<dyn std::error::Error>> {
-    let (_bank_address, bank, _bank_liquidity_vault) = mfi_load_bank(rpc_client, token)?;
+    let (bank_address, _bank_liquidity_vault) = mfi_lookup_bank(token)?;
+    let bank = mfi_load_bank(rpc_client, bank_address)?;
     Ok(mfi_calc_bank_apr(&bank))
 }
 
-fn mfi_deposit(
-    address: Pubkey,
-    token: MaybeToken,
-    deposit_amount: u64,
-    verbose: bool,
-) -> Result<(Vec<Instruction>, u32, f64), Box<dyn std::error::Error>> {
-    const MFI_LEND_PROGRAM: Pubkey = pubkey!["MFv2hWf31Z9kbCa1snEPYctwafyhdvnV7FZnsebVacA"];
-
+fn mfi_load_user_account(
+    wallet_address: Pubkey,
+) -> Result<(Pubkey, marginfi_v2::MarginfiAccount), Box<dyn std::error::Error>> {
     // Big mistake to require using `getProgramAccounts` to locate a MarginFi account for a wallet
     // address. Most public RPC endpoints have disabled this method. Leach off MarginFi's RPC
     // endpoint for this expensive call since they designed their shit wrong
@@ -388,11 +445,6 @@ fn mfi_deposit(
         CommitmentConfig::confirmed(),
     );
 
-    let marginfi_group = pubkey!["4qp6Fx6tnZkY5Wropq9wUYgtFxXKwE6viZxFHg3rdAG8"];
-
-    let (bank_address, bank, bank_liquidity_vault) = mfi_load_bank(&rpc_client, token)?;
-    let apr = mfi_calc_bank_apr(&bank);
-
     let mut user_accounts = rpc_client
         .get_program_accounts_with_config(
             &MFI_LEND_PROGRAM,
@@ -401,11 +453,11 @@ fn mfi_deposit(
                     RpcFilterType::DataSize(2312),
                     RpcFilterType::Memcmp(rpc_filter::Memcmp::new_raw_bytes(
                         40,
-                        address.to_bytes().to_vec(),
+                        wallet_address.to_bytes().to_vec(),
                     )),
                     RpcFilterType::Memcmp(rpc_filter::Memcmp::new_raw_bytes(
                         8,
-                        marginfi_group.to_bytes().to_vec(),
+                        MARGINFI_GROUP.to_bytes().to_vec(),
                     )),
                 ]),
                 account_config: RpcAccountInfoConfig {
@@ -419,38 +471,59 @@ fn mfi_deposit(
 
     let (user_account_address, user_account_data) = user_accounts
         .next()
-        .ok_or_else(|| format!("No MarginFi account found for {}", address))?;
+        .ok_or_else(|| format!("No MarginFi account found for {}", wallet_address))?;
 
     if user_accounts.next().is_some() {
-        return Err(format!("Multiple MarginFi account found for {}", address).into());
+        return Err(format!("Multiple MarginFi account found for {}", wallet_address).into());
     }
 
-    if verbose {
-        let user_account = {
-            const LEN: usize = std::mem::size_of::<marginfi_v2::MarginfiAccount>();
-            let data: [u8; LEN] = user_account_data.data[8..LEN + 8].try_into().unwrap();
-            unsafe { std::mem::transmute::<[u8; LEN], marginfi_v2::MarginfiAccount>(data) }
-        };
+    Ok((user_account_address, {
+        const LEN: usize = std::mem::size_of::<marginfi_v2::MarginfiAccount>();
+        let data: [u8; LEN] = user_account_data.data[8..LEN + 8].try_into().unwrap();
+        unsafe { std::mem::transmute::<[u8; LEN], marginfi_v2::MarginfiAccount>(data) }
+    }))
+}
 
-        if let Some(balance) = user_account.lending_account.get_balance(&bank_address) {
+fn mfi_balance(
+    rpc_client: &RpcClient,
+    wallet_address: Pubkey,
+    token: MaybeToken,
+) -> Result<(u64, u64), Box<dyn std::error::Error>> {
+    let (bank_address, _bank_liquidity_vault) = mfi_lookup_bank(token)?;
+    let bank = mfi_load_bank(rpc_client, bank_address)?;
+    let (_user_account_address, user_account) = mfi_load_user_account(wallet_address)?;
+
+    match user_account.lending_account.get_balance(&bank_address) {
+        None => Ok((0, 0)),
+        Some(balance) => {
             let deposit = bank.get_asset_amount(balance.asset_shares.into());
-            println!(
-                "Current user deposits: {}",
-                token.format_amount(deposit.floor().to_num::<u64>())
-            );
-
             let liablilty = bank.get_liability_amount(balance.liability_shares.into());
-            println!(
-                "Current user liablilty: {}",
-                token.format_amount(liablilty.floor().to_num::<u64>())
-            );
+            Ok((
+                deposit.floor().to_num::<u64>(),
+                liablilty.floor().to_num::<u64>(),
+            ))
         }
+    }
+}
 
+fn mfi_deposit(
+    rpc_client: &RpcClient,
+    wallet_address: Pubkey,
+    token: MaybeToken,
+    deposit_amount: u64,
+    verbose: bool,
+) -> Result<(Vec<Instruction>, u32, f64), Box<dyn std::error::Error>> {
+    let (bank_address, bank_liquidity_vault) = mfi_lookup_bank(token)?;
+    let bank = mfi_load_bank(rpc_client, bank_address)?;
+    let apr = mfi_calc_bank_apr(&bank);
+    if verbose {
         println!(
             "Deposit Limit: {}",
             token.format_amount(bank.config.deposit_limit)
         );
     }
+
+    let (user_account_address, _user_account) = mfi_load_user_account(wallet_address)?;
 
     let marginfi_account_deposit_data = {
         let mut v = vec![0xab, 0x5e, 0xeb, 0x67, 0x52, 0x40, 0xd4, 0x8c];
@@ -464,16 +537,19 @@ fn mfi_deposit(
         &marginfi_account_deposit_data,
         vec![
             // Marginfi Group
-            AccountMeta::new_readonly(marginfi_group, false),
+            AccountMeta::new_readonly(MARGINFI_GROUP, false),
             // Marginfi Account
             AccountMeta::new(user_account_address, false),
             // Signer
-            AccountMeta::new(address, true),
+            AccountMeta::new(wallet_address, true),
             // Bank
             AccountMeta::new(bank_address, false),
             // Signer Token Account
             AccountMeta::new(
-                spl_associated_token_account::get_associated_token_address(&address, &token.mint()),
+                spl_associated_token_account::get_associated_token_address(
+                    &wallet_address,
+                    &token.mint(),
+                ),
                 false,
             ),
             // Bank Liquidity Vault
@@ -486,12 +562,19 @@ fn mfi_deposit(
     Ok((instructions, 50_000, apr))
 }
 
+//////////////////////////////////////////////////////////////////////////////
+///[ Kamino Stuff ] //////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////////
+
+const KAMINO_LEND_PROGRAM: Pubkey = pubkey!["KLend2g3cP87fffoy8q1mQqGKjrxjC8boSyAYavgmjD"];
+const FARMS_PROGRAM: Pubkey = pubkey!["FarmsPZpWu9i7Kky8tPN37rs2TpmMrAZrC7S7vJa91Hr"];
+
 fn kamino_unsafe_load_reserve(
     rpc_client: &RpcClient,
-    address: &Pubkey,
+    address: Pubkey,
 ) -> Result<kamino::Reserve, Box<dyn std::error::Error>> {
     const LEN: usize = std::mem::size_of::<kamino::Reserve>();
-    let account_data: [u8; LEN] = rpc_client.get_account_data(address)?[8..LEN + 8]
+    let account_data: [u8; LEN] = rpc_client.get_account_data(&address)?[8..LEN + 8]
         .try_into()
         .unwrap();
     let reserve = unsafe { std::mem::transmute(account_data) };
@@ -529,7 +612,7 @@ fn kamino_load_pool_reserve(
         .get(&token.token())
         .ok_or_else(|| format!("{pool}: {token} is not supported"))?;
 
-    let reserve = kamino_unsafe_load_reserve(rpc_client, &market_reserve_address)?;
+    let reserve = kamino_unsafe_load_reserve(rpc_client, market_reserve_address)?;
 
     Ok((market_reserve_address, reserve))
 }
@@ -543,16 +626,63 @@ fn kamino_apr(
     Ok(reserve.current_supply_apr())
 }
 
+fn kamino_find_obligation_address(wallet_address: Pubkey, lending_market: Pubkey) -> Pubkey {
+    Pubkey::find_program_address(
+        &[
+            &[0],
+            &[0],
+            &wallet_address.to_bytes(),
+            &lending_market.to_bytes(),
+            &system_program::ID.to_bytes(),
+            &system_program::ID.to_bytes(),
+        ],
+        &KAMINO_LEND_PROGRAM,
+    )
+    .0
+}
+
+fn kamino_unsafe_load_obligation(
+    rpc_client: &RpcClient,
+    wallet_address: Pubkey,
+) -> Result<kamino::Obligation, Box<dyn std::error::Error>> {
+    const LEN: usize = std::mem::size_of::<kamino::Obligation>();
+    let account_data: [u8; LEN] = rpc_client.get_account_data(&wallet_address)?[8..LEN + 8]
+        .try_into()
+        .unwrap();
+    let obligation = unsafe { std::mem::transmute(account_data) };
+    Ok(obligation)
+}
+
+fn kamino_deposited_amount(
+    rpc_client: &RpcClient,
+    pool: &str,
+    wallet_address: Pubkey,
+    token: MaybeToken,
+) -> Result<u64, Box<dyn std::error::Error>> {
+    let (market_reserve_address, reserve) = kamino_load_pool_reserve(rpc_client, pool, token)?;
+    let lending_market = reserve.lending_market;
+    let market_obligation = kamino_find_obligation_address(wallet_address, lending_market);
+    let obligation = kamino_unsafe_load_obligation(rpc_client, market_obligation)?;
+
+    let collateral_deposited_amount = obligation
+        .deposits
+        .iter()
+        .find(|collateral| collateral.deposit_reserve == market_reserve_address)
+        .map(|collateral| collateral.deposited_amount)
+        .unwrap_or_default();
+
+    let collateral_exchange_rate = reserve.collateral_exchange_rate();
+
+    Ok(collateral_exchange_rate.collateral_to_liquidity(collateral_deposited_amount))
+}
+
 fn kamino_deposit(
     rpc_client: &RpcClient,
     pool: &str,
-    address: Pubkey,
+    wallet_address: Pubkey,
     token: MaybeToken,
     deposit_amount: u64,
 ) -> Result<(Vec<Instruction>, u32, f64), Box<dyn std::error::Error>> {
-    const KAMINO_LEND_PROGRAM: Pubkey = pubkey!["KLend2g3cP87fffoy8q1mQqGKjrxjC8boSyAYavgmjD"];
-    const FARMS_PROGRAM: Pubkey = pubkey!["FarmsPZpWu9i7Kky8tPN37rs2TpmMrAZrC7S7vJa91Hr"];
-
     let (market_reserve_address, reserve) = kamino_load_pool_reserve(rpc_client, pool, token)?;
 
     let apr = reserve.current_supply_apr();
@@ -566,32 +696,8 @@ fn kamino_deposit(
     let reserve_collateral_mint = reserve.collateral.mint_pubkey;
     let reserve_destination_deposit_collateral = reserve.collateral.supply_vault;
 
-    let market_obligation = Pubkey::find_program_address(
-        &[
-            &[0],
-            &[0],
-            &address.to_bytes(),
-            &lending_market.to_bytes(),
-            &system_program::ID.to_bytes(),
-            &system_program::ID.to_bytes(),
-        ],
-        &KAMINO_LEND_PROGRAM,
-    )
-    .0;
-
-    fn unsafe_load_obligation(
-        rpc_client: &RpcClient,
-        address: &Pubkey,
-    ) -> Result<kamino::Obligation, Box<dyn std::error::Error>> {
-        const LEN: usize = std::mem::size_of::<kamino::Obligation>();
-        let account_data: [u8; LEN] = rpc_client.get_account_data(address)?[8..LEN + 8]
-            .try_into()
-            .unwrap();
-        let obligation = unsafe { std::mem::transmute(account_data) };
-        Ok(obligation)
-    }
-
-    let obligation = unsafe_load_obligation(rpc_client, &market_obligation)?;
+    let market_obligation = kamino_find_obligation_address(wallet_address, lending_market);
+    let obligation = kamino_unsafe_load_obligation(rpc_client, market_obligation)?;
 
     let obligation_market_reserves = obligation
         .deposits
@@ -608,7 +714,7 @@ fn kamino_deposit(
         .iter()
         .filter_map(|reserve_address| {
             if *reserve_address != market_reserve_address {
-                let reserve = kamino_unsafe_load_reserve(rpc_client, reserve_address)
+                let reserve = kamino_unsafe_load_reserve(rpc_client, *reserve_address)
                     .unwrap_or_else(|err| {
                         // TODO: propagate failure up instead of panic..
                         panic!("unable to load reserve {reserve_address}: {err}")
@@ -686,7 +792,7 @@ fn kamino_deposit(
         ],
         vec![
             // Crank
-            AccountMeta::new(address, true),
+            AccountMeta::new(wallet_address, true),
             // Obligation
             AccountMeta::new(market_obligation, false),
             // Lending Market Authority
@@ -734,7 +840,7 @@ fn kamino_deposit(
         &kamino_deposit_reserve_liquidity_and_obligation_collateral_data,
         vec![
             // Owner
-            AccountMeta::new(address, true),
+            AccountMeta::new(wallet_address, true),
             // Obligation
             AccountMeta::new(market_obligation, false),
             // Lending Market
@@ -751,7 +857,10 @@ fn kamino_deposit(
             AccountMeta::new(reserve_destination_deposit_collateral, false),
             // User Source Liquidity
             AccountMeta::new(
-                spl_associated_token_account::get_associated_token_address(&address, &token.mint()),
+                spl_associated_token_account::get_associated_token_address(
+                    &wallet_address,
+                    &token.mint(),
+                ),
                 false,
             ),
             // User Destination Collateral

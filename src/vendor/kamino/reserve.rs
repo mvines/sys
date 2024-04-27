@@ -1,6 +1,9 @@
 pub use fixed::types::U68F60 as Fraction;
 use {
-    super::{borrow_rate_curve::BorrowRateCurve, last_update::LastUpdate, token_info::TokenInfo},
+    super::{
+        borrow_rate_curve::BorrowRateCurve, fraction::FractionExtra, last_update::LastUpdate,
+        token_info::TokenInfo,
+    },
     solana_sdk::pubkey::Pubkey,
 };
 
@@ -56,6 +59,11 @@ impl Reserve {
             * (Fraction::ONE - Fraction::from_num(protocol_take_rate_pct)))
         .checked_to_num()
         .unwrap_or(0.)
+    }
+
+    pub fn collateral_exchange_rate(&self) -> CollateralExchangeRate {
+        let total_liquidity = self.liquidity.total_supply();
+        self.collateral.exchange_rate(total_liquidity)
     }
 }
 
@@ -113,6 +121,36 @@ pub struct ReserveCollateral {
     pub supply_vault: Pubkey,
     pub padding1: [u128; 32],
     pub padding2: [u128; 32],
+}
+
+impl ReserveCollateral {
+    fn exchange_rate(&self, total_liquidity: Fraction) -> CollateralExchangeRate {
+        let rate = if self.mint_total_supply == 0 || total_liquidity == Fraction::ZERO {
+            Fraction::ONE
+        } else {
+            Fraction::from(self.mint_total_supply) / total_liquidity
+        };
+
+        CollateralExchangeRate(rate)
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct CollateralExchangeRate(Fraction);
+
+impl CollateralExchangeRate {
+    pub fn collateral_to_liquidity(&self, collateral_amount: u64) -> u64 {
+        self.fraction_collateral_to_liquidity(collateral_amount.into())
+            .to_floor()
+    }
+
+    pub fn fraction_collateral_to_liquidity(&self, collateral_amount: Fraction) -> Fraction {
+        collateral_amount / self.0
+    }
+
+    pub fn liquidity_to_collateral(&self, liquidity_amount: u64) -> u64 {
+        (self.0 * u128::from(liquidity_amount)).to_floor()
+    }
 }
 
 static_assertions::const_assert_eq!(648, std::mem::size_of::<ReserveConfig>());
