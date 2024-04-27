@@ -95,7 +95,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .help("Lending pool to deposit into. If multiple pools are provided, the pool with the highest APY is selected"),
                 )
                 .arg(
-                    Arg::with_name("keypair")
+                    Arg::with_name("signer")
                         .value_name("KEYPAIR")
                         .takes_value(true)
                         .required(true)
