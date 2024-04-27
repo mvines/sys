@@ -20,7 +20,7 @@ Aggregator for when you're not quite ready to part with your SOL yet.
 You can also run `./fetch-release.sh` to download the latest Linux and macOS binary produced by Github Actions.
 
 ## Features
-* Exchange integration with Kraken, Binance and Binance US
+* Exchange deposit integration with Coinbase, Kraken, Binance and Binance US
   * Fetch market info, SOL balance and sell order status
   * Deposit from a vote, stake or system account
   * Initiate and cancel basic limit orders
@@ -32,6 +32,7 @@ You can also run `./fetch-release.sh` to download the latest Linux and macOS bin
 * Historical and spot price via CoinGecko for SOL and supported tokens.
 * Data is contained in a local `sell-your-sol/` subdirectory that can be easily backed up, and is editable by hand if necessary
 * Full Excel export, useful to hand off to a CPA or your entity's finance department. Sorry no TurboTax import!
+* Companion `sys-lend` program for basic stablecoin lending into MarginFi and Kamino
 
 ## Examples
 Explore the help system instead:
