@@ -37,6 +37,12 @@ lazy_static::lazy_static! {
     ]);
 }
 
+#[derive(PartialEq, Clone, Copy)]
+enum Operation {
+    Deposit,
+    Withdraw,
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     solana_logger::setup_with_default("solana=info");
@@ -121,6 +127,45 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ),
         )
         .subcommand(
+            SubCommand::with_name("withdraw")
+                .about("Withdraw tokens from a lending pool")
+                .arg(
+                    Arg::with_name("pool")
+                        .long("from")
+                        .value_name("POOL")
+                        .takes_value(true)
+                        .required(true)
+                        .multiple(true)
+                        .possible_values(&pools)
+                        .help("Lending pool to withdraw from. If multiple pools are provided, the pool with the lowest APY is selected"),
+                )
+                .arg(
+                    Arg::with_name("signer")
+                        .value_name("KEYPAIR")
+                        .takes_value(true)
+                        .required(true)
+                        .validator(is_valid_signer)
+                        .help("Wallet"),
+                )
+                .arg(
+                    Arg::with_name("amount")
+                        .value_name("AMOUNT")
+                        .takes_value(true)
+                        .validator(is_amount_or_all)
+                        .required(true)
+                        .help("The amount to withdraw; accepts keyword ALL"),
+                )
+                .arg(
+                    Arg::with_name("token")
+                        .value_name("SOL or SPL Token")
+                        .takes_value(true)
+                        .required(true)
+                        .validator(is_valid_token_or_sol)
+                        .default_value("USDC")
+                        .help("Token to withdraw"),
+                ),
+        )
+        .subcommand(
             SubCommand::with_name("supply-balance")
                 .about("Display the current supplied balance for a lending pool")
                 .arg(
@@ -171,16 +216,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ),
         );
 
-    let matches = app.get_matches();
+    let app_matches = app.get_matches();
     let rpc_client = RpcClient::new_with_commitment(
-        normalize_to_url_if_moniker(value_t_or_exit!(matches, "json_rpc_url", String)),
+        normalize_to_url_if_moniker(value_t_or_exit!(app_matches, "json_rpc_url", String)),
         CommitmentConfig::confirmed(),
     );
-    let priority_fee = if let Ok(ui_priority_fee) = value_t!(matches, "priority_fee_exact", f64) {
+    let priority_fee = if let Ok(ui_priority_fee) = value_t!(app_matches, "priority_fee_exact", f64)
+    {
         PriorityFee::Exact {
             lamports: sol_to_lamports(ui_priority_fee),
         }
-    } else if let Ok(ui_priority_fee) = value_t!(matches, "priority_fee_auto", f64) {
+    } else if let Ok(ui_priority_fee) = value_t!(app_matches, "priority_fee_auto", f64) {
         PriorityFee::Auto {
             max_lamports: sol_to_lamports(ui_priority_fee),
         }
@@ -191,7 +237,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut wallet_manager = None;
     let notifier = Notifier::default();
 
-    fn pool_apr(
+    fn pool_supply_apr(
         rpc_client: &RpcClient,
         pool: &str,
         token: MaybeToken,
@@ -205,13 +251,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         })
     }
 
-    match matches.subcommand() {
+    fn pool_supply_balance(
+        rpc_client: &RpcClient,
+        pool: &str,
+        token: MaybeToken,
+        address: Pubkey,
+    ) -> Result<u64, Box<dyn std::error::Error>> {
+        Ok(if pool.starts_with("kamino-") {
+            kamino_deposited_amount(rpc_client, pool, address, token)?
+        } else if pool == "mfi" {
+            mfi_balance(rpc_client, address, token)?.0
+        } else {
+            unreachable!()
+        })
+    }
+
+    match app_matches.subcommand() {
         ("supply-apy", Some(matches)) => {
             let pool = value_t_or_exit!(matches, "pool", String);
             let token = MaybeToken::from(value_t!(matches, "token", Token).ok());
 
-            let apr = pool_apr(&rpc_client, &pool, token)?;
-            let msg = format!("Current APY for {}: {:.2}%", pool, apr_to_apy(apr) * 100.);
+            let apr = pool_supply_apr(&rpc_client, &pool, token)?;
+            let msg = format!("{}: {:.2}%", pool, apr_to_apy(apr) * 100.);
             notifier.send(&msg).await;
             println!("{msg}");
         }
@@ -220,37 +281,48 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let address = pubkey_of(matches, "address").unwrap();
             let token = MaybeToken::from(value_t!(matches, "token", Token).ok());
 
-            let supply_balance = if pool.starts_with("kamino-") {
-                kamino_deposited_amount(&rpc_client, &pool, address, token)?
-            } else if pool == "mfi" {
-                mfi_balance(&rpc_client, address, token)?.0
-            } else {
-                unreachable!()
-            };
+            let supply_balance = pool_supply_balance(&rpc_client, &pool, token, address)?;
+            let apr = pool_supply_apr(&rpc_client, &pool, token)?;
 
-            let msg = format!("{}: {} supplied", pool, token.format_amount(supply_balance));
+            let msg = format!(
+                "{}: {} supplied at {:.2}%",
+                pool,
+                token.format_amount(supply_balance),
+                apr_to_apy(apr) * 100.
+            );
             notifier.send(&msg).await;
             println!("{msg}");
         }
-        ("deposit", Some(matches)) => {
+        ("deposit" | "withdraw", Some(matches)) => {
+            let op = match app_matches.subcommand().0 {
+                "withdraw" => Operation::Withdraw,
+                "deposit" => Operation::Deposit,
+                _ => unreachable!(),
+            };
+
             let (signer, address) = signer_of(matches, "signer", &mut wallet_manager)?;
             let address = address.expect("address");
             let signer = signer.expect("signer");
 
             let token = MaybeToken::from(value_t!(matches, "token", Token).ok());
+            let pools = values_t_or_exit!(matches, "pool", String);
 
             let token_balance = token.balance(&rpc_client, &address)?;
-            let deposit_amount = match matches.value_of("amount").unwrap() {
-                "ALL" => token_balance,
+            let amount = match matches.value_of("amount").unwrap() {
+                "ALL" => {
+                    if op == Operation::Deposit {
+                        token_balance
+                    } else {
+                        u64::MAX
+                    }
+                }
                 amount => token.amount(amount.parse::<f64>().unwrap()),
             };
 
-            let pools = values_t_or_exit!(matches, "pool", String);
-
-            if deposit_amount > token_balance {
+            if op == Operation::Deposit && amount > token_balance {
                 return Err(format!(
                     "Deposit amount of {} is greater than current balance of {}",
-                    token.format_amount(deposit_amount),
+                    token.format_amount(amount),
                     token.format_amount(token_balance),
                 )
                 .into());
@@ -262,23 +334,53 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .unwrap()
                     .contains(&token)
                 {
-                    return Err(format!("Depositing {token} into {pool} is not supported").into());
+                    return Err(format!("{token} is not supported by {pool}").into());
                 }
             }
 
+            let pools = match op {
+                Operation::Deposit => pools,
+                Operation::Withdraw => pools
+                    .into_iter()
+                    .filter(|pool| {
+                        let supply_balance = pool_supply_balance(&rpc_client, pool, token, address)
+                            .unwrap_or_else(|err| {
+                                panic!("Unable to read balance for {pool}: {err}")
+                            });
+
+                        if amount == u64::MAX {
+                            supply_balance > 0
+                        } else {
+                            supply_balance >= amount
+                        }
+                    })
+                    .collect(),
+            };
+            if pools.is_empty() {
+                return Err("No available pools".into());
+            }
+
+            let ordering = if op == Operation::Deposit {
+                std::cmp::Ordering::Less
+            } else {
+                std::cmp::Ordering::Greater
+            };
+
             let pool = if pools.len() > 1 {
-                let mut best_pool = None;
-                let mut best_apr = None;
+                let mut selected_pool = None;
+                let mut selected_apr = None;
 
                 for pool in &pools {
-                    let apr = pool_apr(&rpc_client, pool, token)?;
-                    if Some(apr) > best_apr {
-                        best_pool = Some(pool);
-                        best_apr = Some(apr);
+                    let apr = pool_supply_apr(&rpc_client, pool, token)?;
+                    if selected_pool.is_none()
+                        || selected_apr.partial_cmp(&Some(apr)) == Some(ordering)
+                    {
+                        selected_pool = Some(pool);
+                        selected_apr = Some(apr);
                     }
                 }
 
-                match best_pool {
+                match selected_pool {
                     None => return Err("Bug? No pools available".into()),
                     Some(pool) => pool,
                 }
@@ -287,19 +389,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             .clone();
 
-            println!(
-                "Depositing {} into {}",
-                token.format_amount(deposit_amount),
-                pool,
-            );
-
-            let (mut instructions, required_compute_units, apr) = if pool.starts_with("kamino-") {
-                kamino_deposit(&rpc_client, &pool, address, token, deposit_amount)?
+            let DepositOrWithdrawResult {
+                mut instructions,
+                required_compute_units,
+                amount,
+            } = if pool.starts_with("kamino-") {
+                kamino_deposit_or_withdraw(op, &rpc_client, &pool, address, token, amount)?
             } else if pool == "mfi" {
-                mfi_deposit(&rpc_client, address, token, deposit_amount, false)?
+                mfi_deposit_or_withdraw(op, &rpc_client, address, token, amount, false)?
             } else {
                 unreachable!();
             };
+
+            if op == Operation::Deposit {
+                println!("Depositing {} into {}", token.format_amount(amount), pool,);
+            } else {
+                println!("Withdrawing {} from {}", token.format_amount(amount), pool,);
+            }
 
             apply_priority_fee(
                 &rpc_client,
@@ -323,14 +429,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             transaction.try_sign(&vec![signer], recent_blockhash)?;
             let signature = transaction.signatures[0];
 
-            let msg = format!(
-                "Depositing {} from {} into {} for {:.1}% APR via {}",
-                token.format_amount(deposit_amount),
-                address,
-                pool,
-                apr_to_apy(apr) * 100.,
-                signature
-            );
+            let msg = if op == Operation::Deposit {
+                format!(
+                    "Depositing {} from {} into {} via {}",
+                    token.format_amount(amount),
+                    address,
+                    pool,
+                    signature
+                )
+            } else {
+                format!(
+                    "Withdrew {} from {} into {} via {}",
+                    token.format_amount(amount),
+                    pool,
+                    address,
+                    signature
+                )
+            };
             notifier.send(&msg).await;
             println!("{msg}");
 
@@ -358,28 +473,11 @@ fn apr_to_apy(apr: f64) -> f64 {
 const MFI_LEND_PROGRAM: Pubkey = pubkey!["MFv2hWf31Z9kbCa1snEPYctwafyhdvnV7FZnsebVacA"];
 const MARGINFI_GROUP: Pubkey = pubkey!["4qp6Fx6tnZkY5Wropq9wUYgtFxXKwE6viZxFHg3rdAG8"];
 
-fn mfi_lookup_bank(
-    token: MaybeToken,
-) -> Result<
-    (
-        /*bank_address: */ Pubkey,
-        /*bank_liquidity_vault:*/ Pubkey,
-    ),
-    Box<dyn std::error::Error>,
-> {
+fn mfi_lookup_bank_address(token: MaybeToken) -> Result<Pubkey, Box<dyn std::error::Error>> {
     match token.token() {
-        Some(Token::USDC) => Some((
-            pubkey!["2s37akK2eyBbp8DZgCm7RtsaEz8eJP3Nxd4urLHQv7yB"],
-            pubkey!["7jaiZR5Sk8hdYN9MxTpczTcwbWpb5WEoxSANuUwveuat"],
-        )),
-        Some(Token::USDT) => Some((
-            pubkey!["HmpMfL8942u22htC4EMiWgLX931g3sacXFR6KjuLgKLV"],
-            pubkey!["77t6Fi9qj4s4z22K1toufHtstM8rEy7Y3ytxik7mcsTy"],
-        )),
-        Some(Token::UXD) => Some((
-            pubkey!["BeNBJrAh1tZg5sqgt8D6AWKJLD5KkBrfZvtcgd7EuiAR"],
-            pubkey!["D3kBozm2vqgroJwkBquvDySkkZBn5usu6rYhbgPfdDEA"],
-        )),
+        Some(Token::USDC) => Some(pubkey!["2s37akK2eyBbp8DZgCm7RtsaEz8eJP3Nxd4urLHQv7yB"]),
+        Some(Token::USDT) => Some(pubkey!["HmpMfL8942u22htC4EMiWgLX931g3sacXFR6KjuLgKLV"]),
+        Some(Token::UXD) => Some(pubkey!["BeNBJrAh1tZg5sqgt8D6AWKJLD5KkBrfZvtcgd7EuiAR"]),
         _ => None,
     }
     .ok_or_else(|| format!("mfi_load_bank: {token} is not supported").into())
@@ -428,7 +526,7 @@ fn mfi_calc_bank_apr(bank: &marginfi_v2::Bank) -> f64 {
 }
 
 fn mfi_apr(rpc_client: &RpcClient, token: MaybeToken) -> Result<f64, Box<dyn std::error::Error>> {
-    let (bank_address, _bank_liquidity_vault) = mfi_lookup_bank(token)?;
+    let bank_address = mfi_lookup_bank_address(token)?;
     let bank = mfi_load_bank(rpc_client, bank_address)?;
     Ok(mfi_calc_bank_apr(&bank))
 }
@@ -489,7 +587,7 @@ fn mfi_balance(
     wallet_address: Pubkey,
     token: MaybeToken,
 ) -> Result<(u64, u64), Box<dyn std::error::Error>> {
-    let (bank_address, _bank_liquidity_vault) = mfi_lookup_bank(token)?;
+    let bank_address = mfi_lookup_bank_address(token)?;
     let bank = mfi_load_bank(rpc_client, bank_address)?;
     let (_user_account_address, user_account) = mfi_load_user_account(wallet_address)?;
 
@@ -506,16 +604,16 @@ fn mfi_balance(
     }
 }
 
-fn mfi_deposit(
+fn mfi_deposit_or_withdraw(
+    op: Operation,
     rpc_client: &RpcClient,
     wallet_address: Pubkey,
     token: MaybeToken,
-    deposit_amount: u64,
+    amount: u64,
     verbose: bool,
-) -> Result<(Vec<Instruction>, u32, f64), Box<dyn std::error::Error>> {
-    let (bank_address, bank_liquidity_vault) = mfi_lookup_bank(token)?;
+) -> Result<DepositOrWithdrawResult, Box<dyn std::error::Error>> {
+    let bank_address = mfi_lookup_bank_address(token)?;
     let bank = mfi_load_bank(rpc_client, bank_address)?;
-    let apr = mfi_calc_bank_apr(&bank);
     if verbose {
         println!(
             "Deposit Limit: {}",
@@ -523,43 +621,144 @@ fn mfi_deposit(
         );
     }
 
-    let (user_account_address, _user_account) = mfi_load_user_account(wallet_address)?;
+    let (user_account_address, user_account) = mfi_load_user_account(wallet_address)?;
 
-    let marginfi_account_deposit_data = {
-        let mut v = vec![0xab, 0x5e, 0xeb, 0x67, 0x52, 0x40, 0xd4, 0x8c];
-        v.extend(deposit_amount.to_le_bytes());
-        v
+    let (instructions, required_compute_units, amount) = match op {
+        Operation::Deposit => {
+            // Marginfi: Lending Account Deposit
+            let marginfi_account_deposit_data = {
+                let mut v = vec![0xab, 0x5e, 0xeb, 0x67, 0x52, 0x40, 0xd4, 0x8c];
+                v.extend(amount.to_le_bytes());
+                v
+            };
+
+            let instruction = Instruction::new_with_bytes(
+                MFI_LEND_PROGRAM,
+                &marginfi_account_deposit_data,
+                vec![
+                    // Marginfi Group
+                    AccountMeta::new_readonly(MARGINFI_GROUP, false),
+                    // Marginfi Account
+                    AccountMeta::new(user_account_address, false),
+                    // Signer
+                    AccountMeta::new(wallet_address, true),
+                    // Bank
+                    AccountMeta::new(bank_address, false),
+                    // Signer Token Account
+                    AccountMeta::new(
+                        spl_associated_token_account::get_associated_token_address(
+                            &wallet_address,
+                            &token.mint(),
+                        ),
+                        false,
+                    ),
+                    // Bank Liquidity Vault
+                    AccountMeta::new(bank.liquidity_vault, false),
+                    // Token Program
+                    AccountMeta::new_readonly(spl_token::id(), false),
+                ],
+            );
+
+            (vec![instruction], 50_000, amount)
+        }
+        Operation::Withdraw => {
+            let withdraw_amount = if amount == u64::MAX {
+                let balance = user_account
+                    .lending_account
+                    .get_balance(&bank_address)
+                    .ok_or_else(|| format!("No {token} deposit found"))?;
+
+                let deposit = bank.get_asset_amount(balance.asset_shares.into());
+                deposit.floor().to_num::<u64>()
+            } else {
+                amount
+            };
+
+            let liquidity_vault_authority = Pubkey::create_program_address(
+                &[
+                    b"liquidity_vault_auth",
+                    &bank_address.to_bytes(),
+                    &[bank.liquidity_vault_authority_bump],
+                ],
+                &MFI_LEND_PROGRAM,
+            )
+            .expect("valid liquidity_vault_authority");
+
+            // Marginfi: Lending Account Withdraw
+            let marginfi_account_withdraw_data = {
+                let mut v = vec![0x24, 0x48, 0x4a, 0x13, 0xd2, 0xd2, 0xc0, 0xc0];
+                v.extend(withdraw_amount.to_le_bytes());
+                v.extend([1, if amount == u64::MAX { 1 } else { 0 }]); // WithdrawAll flag
+                v
+            };
+
+            let mut account_meta = vec![
+                // Marginfi Group
+                AccountMeta::new_readonly(MARGINFI_GROUP, false),
+                // Marginfi Account
+                AccountMeta::new(user_account_address, false),
+                // Signer
+                AccountMeta::new(wallet_address, true),
+                // Bank
+                AccountMeta::new(bank_address, false),
+                // Signer Token Account
+                AccountMeta::new(
+                    spl_associated_token_account::get_associated_token_address(
+                        &wallet_address,
+                        &token.mint(),
+                    ),
+                    false,
+                ),
+                // Bank Liquidity Vault Authority
+                AccountMeta::new(liquidity_vault_authority, false),
+                // Bank Liquidity Vault
+                AccountMeta::new(bank.liquidity_vault, false),
+                // Token Program
+                AccountMeta::new_readonly(spl_token::id(), false),
+            ];
+
+            for balance in &user_account.lending_account.balances {
+                if balance.active && !(amount == u64::MAX && balance.bank_pk == bank_address) {
+                    account_meta.push(AccountMeta::new_readonly(balance.bank_pk, false));
+
+                    let balance_bank = mfi_load_bank(rpc_client, balance.bank_pk)?;
+                    account_meta.push(AccountMeta::new_readonly(
+                        balance_bank.config.oracle_keys[0],
+                        false,
+                    ));
+                }
+            }
+
+            let instructions = vec![
+                spl_associated_token_account::instruction::create_associated_token_account_idempotent(
+                    &wallet_address,
+                    &wallet_address,
+                    &bank.mint,
+                    &spl_token::id(),
+                ),
+
+                Instruction::new_with_bytes(
+                    MFI_LEND_PROGRAM,
+                    &marginfi_account_withdraw_data,
+                    account_meta,
+                )
+            ];
+
+            (instructions, 110_000, withdraw_amount)
+        }
     };
 
-    // Marginfi: Lending Account Deposit
-    let instructions = vec![Instruction::new_with_bytes(
-        MFI_LEND_PROGRAM,
-        &marginfi_account_deposit_data,
-        vec![
-            // Marginfi Group
-            AccountMeta::new_readonly(MARGINFI_GROUP, false),
-            // Marginfi Account
-            AccountMeta::new(user_account_address, false),
-            // Signer
-            AccountMeta::new(wallet_address, true),
-            // Bank
-            AccountMeta::new(bank_address, false),
-            // Signer Token Account
-            AccountMeta::new(
-                spl_associated_token_account::get_associated_token_address(
-                    &wallet_address,
-                    &token.mint(),
-                ),
-                false,
-            ),
-            // Bank Liquidity Vault
-            AccountMeta::new(bank_liquidity_vault, false),
-            // Token Program
-            AccountMeta::new_readonly(spl_token::id(), false),
-        ],
-    )];
+    Ok(DepositOrWithdrawResult {
+        instructions,
+        required_compute_units,
+        amount,
+    })
+}
 
-    Ok((instructions, 50_000, apr))
+struct DepositOrWithdrawResult {
+    instructions: Vec<Instruction>,
+    required_compute_units: u32,
+    amount: u64,
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -672,20 +871,19 @@ fn kamino_deposited_amount(
         .unwrap_or_default();
 
     let collateral_exchange_rate = reserve.collateral_exchange_rate();
-
     Ok(collateral_exchange_rate.collateral_to_liquidity(collateral_deposited_amount))
 }
 
-fn kamino_deposit(
+fn kamino_deposit_or_withdraw(
+    op: Operation,
     rpc_client: &RpcClient,
     pool: &str,
     wallet_address: Pubkey,
     token: MaybeToken,
-    deposit_amount: u64,
-) -> Result<(Vec<Instruction>, u32, f64), Box<dyn std::error::Error>> {
+    amount: u64,
+) -> Result<DepositOrWithdrawResult, Box<dyn std::error::Error>> {
     let (market_reserve_address, reserve) = kamino_load_pool_reserve(rpc_client, pool, token)?;
 
-    let apr = reserve.current_supply_apr();
     let lending_market = reserve.lending_market;
 
     let lending_market_authority =
@@ -827,53 +1025,131 @@ fn kamino_deposit(
         ],
     );
 
-    let kamino_deposit_reserve_liquidity_and_obligation_collateral_data = {
-        let mut v = vec![0x81, 0xc7, 0x04, 0x02, 0xde, 0x27, 0x1a, 0x2e];
-        v.extend(deposit_amount.to_le_bytes());
-        v
-    };
     instructions.push(kamino_refresh_obligation_farms_for_reserve.clone());
 
-    // Instruction: Kamino: Deposit Reserve Liquidity and Obligation Collateral
-    instructions.push(Instruction::new_with_bytes(
-        KAMINO_LEND_PROGRAM,
-        &kamino_deposit_reserve_liquidity_and_obligation_collateral_data,
-        vec![
-            // Owner
-            AccountMeta::new(wallet_address, true),
-            // Obligation
-            AccountMeta::new(market_obligation, false),
-            // Lending Market
-            AccountMeta::new_readonly(lending_market, false),
-            // Lending Market Authority
-            AccountMeta::new(lending_market_authority, false),
-            // Reserve
-            AccountMeta::new(market_reserve_address, false),
-            // Reserve Liquidity Supply
-            AccountMeta::new(reserve_liquidity_supply, false),
-            // Reserve Collateral Mint
-            AccountMeta::new(reserve_collateral_mint, false),
-            // Reserve Destination Deposit Collateral
-            AccountMeta::new(reserve_destination_deposit_collateral, false),
-            // User Source Liquidity
-            AccountMeta::new(
-                spl_associated_token_account::get_associated_token_address(
-                    &wallet_address,
-                    &token.mint(),
-                ),
-                false,
-            ),
-            // User Destination Collateral
-            AccountMeta::new_readonly(KAMINO_LEND_PROGRAM, false),
-            // Token Program
-            AccountMeta::new_readonly(spl_token::id(), false),
-            // Sysvar: Instructions
-            AccountMeta::new_readonly(sysvar::instructions::ID, false),
-        ],
-    ));
+    let amount = match op {
+        Operation::Withdraw => {
+            let withdraw_amount = if amount == u64::MAX {
+                let collateral_deposited_amount = obligation
+                    .deposits
+                    .iter()
+                    .find(|collateral| collateral.deposit_reserve == market_reserve_address)
+                    .map(|collateral| collateral.deposited_amount)
+                    .unwrap_or_default();
+
+                let collateral_exchange_rate = reserve.collateral_exchange_rate();
+                collateral_exchange_rate.collateral_to_liquidity(collateral_deposited_amount)
+            } else {
+                amount
+            };
+
+            // Instruction: Withdraw Obligation Collateral And Redeem Reserve Collateral
+
+            let collateral_exchange_rate = reserve.collateral_exchange_rate();
+            let kamino_withdraw_obligation_collateral_and_redeem_reserve_collateral_data = {
+                let mut v = vec![0x4b, 0x5d, 0x5d, 0xdc, 0x22, 0x96, 0xda, 0xc4];
+                v.extend(
+                    collateral_exchange_rate
+                        .liquidity_to_collateral(amount)
+                        .to_le_bytes(),
+                );
+                v
+            };
+
+            instructions.push(Instruction::new_with_bytes(
+                KAMINO_LEND_PROGRAM,
+                &kamino_withdraw_obligation_collateral_and_redeem_reserve_collateral_data,
+                vec![
+                    // Owner
+                    AccountMeta::new(wallet_address, true),
+                    // Obligation
+                    AccountMeta::new(market_obligation, false),
+                    // Lending Market
+                    AccountMeta::new_readonly(lending_market, false),
+                    // Lending Market Authority
+                    AccountMeta::new(lending_market_authority, false),
+                    // Reserve
+                    AccountMeta::new(market_reserve_address, false),
+                    // Reserve Source Collateral
+                    AccountMeta::new(reserve_destination_deposit_collateral, false),
+                    // Reserve Collateral Mint
+                    AccountMeta::new(reserve_collateral_mint, false),
+                    // Reserve Liquidity Supply
+                    AccountMeta::new(reserve_liquidity_supply, false),
+                    // User Liquidity
+                    AccountMeta::new(
+                        spl_associated_token_account::get_associated_token_address(
+                            &wallet_address,
+                            &token.mint(),
+                        ),
+                        false,
+                    ),
+                    // User Destination Collateral
+                    AccountMeta::new_readonly(KAMINO_LEND_PROGRAM, false),
+                    // Token Program
+                    AccountMeta::new_readonly(spl_token::id(), false),
+                    // Sysvar: Instructions
+                    AccountMeta::new_readonly(sysvar::instructions::ID, false),
+                ],
+            ));
+
+            withdraw_amount
+        }
+        Operation::Deposit => {
+            // Instruction: Kamino: Deposit Reserve Liquidity and Obligation Collateral
+
+            let kamino_deposit_reserve_liquidity_and_obligation_collateral_data = {
+                let mut v = vec![0x81, 0xc7, 0x04, 0x02, 0xde, 0x27, 0x1a, 0x2e];
+                v.extend(amount.to_le_bytes());
+                v
+            };
+            instructions.push(Instruction::new_with_bytes(
+                KAMINO_LEND_PROGRAM,
+                &kamino_deposit_reserve_liquidity_and_obligation_collateral_data,
+                vec![
+                    // Owner
+                    AccountMeta::new(wallet_address, true),
+                    // Obligation
+                    AccountMeta::new(market_obligation, false),
+                    // Lending Market
+                    AccountMeta::new_readonly(lending_market, false),
+                    // Lending Market Authority
+                    AccountMeta::new(lending_market_authority, false),
+                    // Reserve
+                    AccountMeta::new(market_reserve_address, false),
+                    // Reserve Liquidity Supply
+                    AccountMeta::new(reserve_liquidity_supply, false),
+                    // Reserve Collateral Mint
+                    AccountMeta::new(reserve_collateral_mint, false),
+                    // Reserve Destination Deposit Collateral
+                    AccountMeta::new(reserve_destination_deposit_collateral, false),
+                    // User Source Liquidity
+                    AccountMeta::new(
+                        spl_associated_token_account::get_associated_token_address(
+                            &wallet_address,
+                            &token.mint(),
+                        ),
+                        false,
+                    ),
+                    // User Destination Collateral
+                    AccountMeta::new_readonly(KAMINO_LEND_PROGRAM, false),
+                    // Token Program
+                    AccountMeta::new_readonly(spl_token::id(), false),
+                    // Sysvar: Instructions
+                    AccountMeta::new_readonly(sysvar::instructions::ID, false),
+                ],
+            ));
+
+            amount
+        }
+    };
 
     // Instruction: Kamino: Refresh Obligation Farms For Reserve
     instructions.push(kamino_refresh_obligation_farms_for_reserve);
 
-    Ok((instructions, 500_000, apr))
+    Ok(DepositOrWithdrawResult {
+        instructions,
+        required_compute_units: 500_000,
+        amount,
+    })
 }
