@@ -140,6 +140,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .help("Lending pool to withdraw from. If multiple pools are provided, the pool with the lowest APY is selected"),
                 )
                 .arg(
+                    Arg::with_name("skip_withdraw_if_only_one_pool_remains")
+                        .long("skip-if-only-one-pool-remains")
+                        .takes_value(false)
+                        .help("Do not withdraw if only one lending pool remains"),
+                )
+                .arg(
                     Arg::with_name("signer")
                         .value_name("KEYPAIR")
                         .takes_value(true)
@@ -303,6 +309,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let (signer, address) = signer_of(matches, "signer", &mut wallet_manager)?;
             let address = address.expect("address");
             let signer = signer.expect("signer");
+            let skip_withdraw_if_only_one_pool_remains =
+                matches.is_present("skip_withdraw_if_only_one_pool_remains");
 
             let token = MaybeToken::from(value_t!(matches, "token", Token).ok());
             let pools = values_t_or_exit!(matches, "pool", String);
@@ -358,6 +366,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
             if pools.is_empty() {
                 return Err("No available pools".into());
+            }
+
+            if skip_withdraw_if_only_one_pool_remains && pools.len() == 1 {
+                println!("Taking no action due to --skip-if-only-one-pool-remains flag");
+                return Ok(());
             }
 
             let ordering = if op == Operation::Deposit {
