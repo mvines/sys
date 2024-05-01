@@ -4964,8 +4964,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         .value_name("LOT NUMBER")
                                         .takes_value(true)
                                         .required(true)
+                                        .multiple(true)
                                         .validator(is_parsable::<usize>)
-                                        .help("Lot number to delete. Must not be a disposed lot"),
+                                        .help("Lot numbers to delete. Must not be a disposed lot"),
                                 )
                                 .arg(
                                     Arg::with_name("confirm")
@@ -5961,14 +5962,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     db.move_lot(lot_number, to_address)?;
                 }
                 ("delete", Some(arg_matches)) => {
-                    let lot_number = value_t_or_exit!(arg_matches, "lot_number", usize);
+                    let lot_numbers = lot_numbers_of(arg_matches, "lot_numbers").unwrap();
                     let confirm = arg_matches.is_present("confirm");
 
                     if !confirm {
-                        println!("Add --confirm to remove lot {lot_number}");
+                        println!("Add --confirm to remove lot {lot_numbers:?}");
                         return Ok(());
                     }
-                    db.delete_lot(lot_number)?;
+                    for lot_number in lot_numbers {
+                        db.delete_lot(lot_number)?;
+                    }
                 }
                 _ => unreachable!(),
             },
