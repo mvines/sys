@@ -3523,6 +3523,7 @@ async fn process_account_sync(
     address: Option<Pubkey>,
     max_epochs_to_process: Option<u64>,
     reconcile_no_sync_account_balances: bool,
+    force_rescan_balances: bool,
     notifier: &Notifier,
 ) -> Result<(), Box<dyn std::error::Error>> {
     process_account_sync_pending_transfers(db, rpc_client).await?;
@@ -3611,13 +3612,13 @@ async fn process_account_sync(
         .unwrap_or(&stop_epoch)
         + 1;
 
-    if start_epoch > stop_epoch {
+    if start_epoch > stop_epoch && !force_rescan_balances {
         println!("Processed up to epoch {stop_epoch}");
         return Ok(());
     }
 
     if let Some(max_epochs_to_process) = max_epochs_to_process {
-        if max_epochs_to_process == 0 {
+        if max_epochs_to_process == 0 && !force_rescan_balances {
             return Ok(());
         }
         stop_epoch = stop_epoch.min(start_epoch.saturating_add(max_epochs_to_process - 1));
@@ -4858,6 +4859,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .takes_value(false)
                                 .help("Reconcile local account balances with on-chain state for --no-sync accounts (advanced; uncommon)"),
                         )
+                        .arg(
+                            Arg::with_name("force_rescan_balances")
+                                .long("force-rescan-balances")
+                                .takes_value(false)
+                                .help("Rescan for account balance changes even in same epoch (advanced; uncommon)"),
+                        )
                 )
                 .subcommand(
                     SubCommand::with_name("wrap")
@@ -5880,6 +5887,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 None,
                 max_epochs_to_process,
                 false,
+                false,
                 &notifier,
             )
             .await?;
@@ -6006,8 +6014,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     ui_negative_amount,
                 )
                 .await?;
-                process_account_sync(&mut db, &rpc_client, Some(address), None, false, &notifier)
-                    .await?;
+                process_account_sync(
+                    &mut db,
+                    &rpc_client,
+                    Some(address),
+                    None,
+                    false,
+                    false,
+                    &notifier,
+                )
+                .await?;
             }
             ("dispose", Some(arg_matches)) => {
                 let address = pubkey_of(arg_matches, "address").unwrap();
@@ -6283,6 +6299,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let address = pubkey_of(arg_matches, "address");
                 let reconcile_no_sync_account_balances =
                     arg_matches.is_present("reconcile_no_sync_account_balances");
+                let force_rescan_balances = arg_matches.is_present("force_rescan_balances");
                 let max_epochs_to_process =
                     value_t!(arg_matches, "max_epochs_to_process", u64).ok();
                 process_account_sync(
@@ -6291,6 +6308,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     address,
                     max_epochs_to_process,
                     reconcile_no_sync_account_balances,
+                    force_rescan_balances,
                     &notifier,
                 )
                 .await?;
