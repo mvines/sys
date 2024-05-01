@@ -137,10 +137,8 @@ async fn retry_get_historical_price(
     for _ in 1..NUM_RETRIES {
         let price = token.get_historical_price(rpc_client, block_date).await;
         if price.is_ok() {
-            println!("Got price");
             return price;
         }
-        println!("Retry get_historical_price");
         // Empirically observed cool down period is ~14s
         //
         // TODO: Move this retry logic into `coin_gecko::get_historical_price()`, and respect the
