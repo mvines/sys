@@ -19,6 +19,7 @@ mod uint_types {
 
 pub use uint_types::{U128, U256};
 
+/*
 pub fn pow_fraction(fraction: Fraction, power: u32) -> Option<Fraction> {
     if power == 0 {
         return Some(Fraction::ONE);
@@ -38,17 +39,19 @@ pub fn pow_fraction(fraction: Fraction, power: u32) -> Option<Fraction> {
 
     x.checked_mul(y)
 }
+*/
 
 pub trait FractionExtra {
-    fn to_percent<Dst: FromFixed>(&self) -> Option<Dst>;
     fn to_bps<Dst: FromFixed>(&self) -> Option<Dst>;
-    fn from_percent<Src: ToFixed>(percent: Src) -> Self;
     fn from_bps<Src: ToFixed>(bps: Src) -> Self;
+    fn to_floor<Dst: FromFixed>(&self) -> Dst;
+    /*
+    fn to_percent<Dst: FromFixed>(&self) -> Option<Dst>;
+    fn from_percent<Src: ToFixed>(percent: Src) -> Self;
     fn checked_pow(&self, power: u32) -> Option<Self>
     where
         Self: std::marker::Sized;
 
-    fn to_floor<Dst: FromFixed>(&self) -> Dst;
     fn to_ceil<Dst: FromFixed>(&self) -> Dst;
     fn to_round<Dst: FromFixed>(&self) -> Dst;
 
@@ -56,23 +59,13 @@ pub trait FractionExtra {
     fn from_sf(sf: u128) -> Self;
 
     fn to_display(&self) -> FractionDisplay;
+    */
 }
 
 impl FractionExtra for Fraction {
     #[inline]
-    fn to_percent<Dst: FromFixed>(&self) -> Option<Dst> {
-        (self * 100).round().checked_to_num()
-    }
-
-    #[inline]
     fn to_bps<Dst: FromFixed>(&self) -> Option<Dst> {
         (self * 10_000).round().checked_to_num()
-    }
-
-    #[inline]
-    fn from_percent<Src: ToFixed>(percent: Src) -> Self {
-        let percent = Fraction::from_num(percent);
-        percent / 100
     }
 
     #[inline]
@@ -82,16 +75,28 @@ impl FractionExtra for Fraction {
     }
 
     #[inline]
+    fn to_floor<Dst: FromFixed>(&self) -> Dst {
+        self.floor().to_num()
+    }
+
+    /*
+    #[inline]
+    fn to_percent<Dst: FromFixed>(&self) -> Option<Dst> {
+        (self * 100).round().checked_to_num()
+    }
+
+    #[inline]
+    fn from_percent<Src: ToFixed>(percent: Src) -> Self {
+        let percent = Fraction::from_num(percent);
+        percent / 100
+    }
+
+    #[inline]
     fn checked_pow(&self, power: u32) -> Option<Self>
     where
         Self: std::marker::Sized,
     {
         pow_fraction(*self, power)
-    }
-
-    #[inline]
-    fn to_floor<Dst: FromFixed>(&self) -> Dst {
-        self.floor().to_num()
     }
 
     #[inline]
@@ -118,6 +123,7 @@ impl FractionExtra for Fraction {
     fn to_display(&self) -> FractionDisplay {
         FractionDisplay(self)
     }
+    */
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, PartialOrd, Ord)]
