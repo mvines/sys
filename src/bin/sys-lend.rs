@@ -278,7 +278,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let token = MaybeToken::from(value_t!(matches, "token", Token).ok());
 
             let apr = pool_supply_apr(&rpc_client, &pool, token)?;
-            let msg = format!("{}: {:.2}%", pool, apr_to_apy(apr) * 100.);
+            let msg = format!("{} {} {:.2}%", pool, token, apr_to_apy(apr) * 100.);
             notifier.send(&msg).await;
             println!("{msg}");
         }
