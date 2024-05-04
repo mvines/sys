@@ -39,6 +39,7 @@ fn token_to_coin(token: &MaybeToken) -> Result<&'static str, Box<dyn std::error:
             Token::mSOL => "msol",
             Token::stSOL => "lido-staked-sol",
             Token::wSOL => "solana",
+            Token::JLP => "jupiter-perpetuals-liquidity-provider-token",
             unsupported_token => {
                 return Err(format!(
                     "Coin Gecko price data not available for {}",
@@ -89,6 +90,8 @@ pub async fn get_current_price(token: &MaybeToken) -> Result<Decimal, Box<dyn st
                 tether: Option<CurrencyList>,
                 #[serde(rename = "uxd-stablecoin")]
                 uxd: Option<CurrencyList>,
+                #[serde(rename = "jupiter-perpetuals-liquidity-provider-token")]
+                jlp: Option<CurrencyList>,
             }
 
             let coins = reqwest::get(url).await?.json::<Coins>().await?;
@@ -100,6 +103,7 @@ pub async fn get_current_price(token: &MaybeToken) -> Result<Decimal, Box<dyn st
                 .or(coins.tether)
                 .or(coins.uxd)
                 .or(coins.bsol)
+                .or(coins.jlp)
                 .ok_or_else(|| format!("Simple price data not available for {coin}").into())
                 .map(|price| {
                     let price = Decimal::from_f64(price.usd).unwrap();

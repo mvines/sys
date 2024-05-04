@@ -42,6 +42,7 @@ pub enum Token {
     tumSOL,
     tustSOL,
     wSOL,
+    JLP,
 }
 
 impl Token {
@@ -58,6 +59,7 @@ impl Token {
             Token::tumSOL => pubkey!("8cn7JcYVjDZesLa3RTt3NXne4WcDw9PdUneQWuByehwW"),
             Token::tustSOL => pubkey!("27CaAiuFW3EwLcTCaiBnexqm5pxht845AHgSuq36byKX"),
             Token::wSOL => spl_token::native_mint::id(),
+            Token::JLP => pubkey!("27G8MtK7VtTcCHkpASjSDdkWWYfoqT6ggEuKidVJidD4"),
         }
     }
 
@@ -78,12 +80,13 @@ impl Token {
             Token::tumSOL => "tum◎",
             Token::tustSOL => "tust◎",
             Token::wSOL => "(◎)",
+            Token::JLP => "JLP:",
         }
     }
 
     pub fn decimals(&self) -> u8 {
         match self {
-            Token::USDC | Token::USDT | Token::UXD | Token::tuUSDC => 6,
+            Token::USDC | Token::USDT | Token::UXD | Token::tuUSDC | Token::JLP => 6,
             Token::stSOL
             | Token::tuSOL
             | Token::bSOL
@@ -120,7 +123,8 @@ impl Token {
             | Token::bSOL
             | Token::mSOL
             | Token::stSOL
-            | Token::wSOL => None,
+            | Token::wSOL
+            | Token::JLP => None,
             Token::tuUSDC | Token::tuSOL | Token::tumSOL | Token::tustSOL => {
                 None
                 //                Some(crate::tulip::liquidity_token(self))
@@ -139,7 +143,8 @@ impl Token {
             | Token::bSOL
             | Token::mSOL
             | Token::stSOL
-            | Token::wSOL => {
+            | Token::wSOL
+            | Token::JLP => {
                 unreachable!()
             }
             Token::tuUSDC | Token::tuSOL | Token::tumSOL | Token::tustSOL => {
@@ -184,7 +189,8 @@ impl Token {
             | Token::bSOL
             | Token::mSOL
             | Token::stSOL
-            | Token::wSOL => coin_gecko::get_current_price(&MaybeToken(Some(*self))).await,
+            | Token::wSOL
+            | Token::JLP => coin_gecko::get_current_price(&MaybeToken(Some(*self))).await,
             Token::tuUSDC | Token::tuSOL | Token::tumSOL | Token::tustSOL => {
                 Err("tulip support disabled".into())
                 //crate::tulip::get_current_price(rpc_client, self).await
