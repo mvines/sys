@@ -80,7 +80,7 @@ impl Token {
             Token::tumSOL => "tum◎",
             Token::tustSOL => "tust◎",
             Token::wSOL => "(◎)",
-            Token::JLP => "JLP:",
+            Token::JLP => "JLP/",
         }
     }
 
