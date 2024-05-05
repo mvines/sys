@@ -219,6 +219,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .validator(is_valid_token_or_sol)
                         .default_value("USDC")
                         .help("Token to deposit"),
+                )
+                .arg(
+                    Arg::with_name("raw")
+                        .long("raw")
+                        .takes_value(false)
+                        .help("Only output raw numerical value"),
+                )
+                .arg(
+                    Arg::with_name("bps")
+                        .long("bps")
+                        .takes_value(false)
+                        .help("Display in Basis Points instead of Percent"),
                 ),
         );
 
@@ -276,9 +288,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ("supply-apy", Some(matches)) => {
             let pool = value_t_or_exit!(matches, "pool", String);
             let token = MaybeToken::from(value_t!(matches, "token", Token).ok());
+            let raw = matches.is_present("raw");
+            let bps = matches.is_present("bps");
 
-            let apr = pool_supply_apr(&rpc_client, &pool, token)?;
-            let msg = format!("{} {} {:.2}%", pool, token, apr_to_apy(apr) * 100.);
+            let apy = apr_to_apy(pool_supply_apr(&rpc_client, &pool, token)?) * 100.;
+
+            let value = if bps {
+                format!("{:.0}", apy * 100.)
+            } else {
+                format!("{:.2}", apy)
+            };
+
+            let msg = if raw {
+                value.to_string()
+            } else {
+                format!("{pool} {token} {value}{}", if bps { "bps" } else { "%" })
+            };
             notifier.send(&msg).await;
             println!("{msg}");
         }
