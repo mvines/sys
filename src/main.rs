@@ -607,7 +607,7 @@ async fn process_exchange_deposit<T: Signers>(
             (instructions, amount)
         }
     };
-    apply_priority_fee(rpc_client, &mut instructions, 10_000, priority_fee)?;
+    apply_priority_fee(rpc_client, &mut instructions, 20_000, priority_fee)?;
 
     if amount == 0 {
         return Err("Nothing to deposit".into());
