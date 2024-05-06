@@ -304,7 +304,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             } else {
                 format!("{pool} {token} {value}{}", if bps { "bps" } else { "%" })
             };
-            notifier.send(&msg).await;
+            if !raw {
+                notifier.send(&msg).await;
+            }
             println!("{msg}");
         }
         ("supply-balance", Some(matches)) => {
