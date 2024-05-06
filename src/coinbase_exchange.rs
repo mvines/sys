@@ -30,26 +30,26 @@ impl ExchangeClient for CoinbaseExchangeClient {
                         let addresses = self.client.list_addresses(&id);
                         pin_mut!(addresses);
 
-                        let mut pubkeys = vec![];
+                        let mut best_pubkey_updated_at = None;
+                        let mut best_pubkey = None;
                         while let Some(addresses_result) = addresses.next().await {
                             for address in addresses_result.unwrap() {
                                 let push = match address.network.as_str() {
                                     "solana" => true,
-
-                                    // SPL-USDC addresses are currently reported incorrectly
-                                    "ethereum" if token.name() == "USDC" => true,
                                     _ => false,
                                 };
 
                                 if push {
                                     if let Ok(pubkey) = address.address.parse::<Pubkey>() {
-                                        pubkeys.push(pubkey);
+                                        if address.updated_at > best_pubkey_updated_at {
+                                            best_pubkey_updated_at = address.updated_at;
+                                            best_pubkey = Some(pubkey);
+                                        }
                                     }
                                 }
                             }
                         }
-                        assert!(pubkeys.len() <= 1);
-                        if let Some(pubkey) = pubkeys.pop() {
+                        if let Some(pubkey) = best_pubkey {
                             return Ok(pubkey);
                         }
                         break;
