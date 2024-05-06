@@ -352,13 +352,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 amount => token.amount(amount.parse::<f64>().unwrap()),
             };
 
-            if op == Operation::Deposit && amount > token_balance {
-                return Err(format!(
-                    "Deposit amount of {} is greater than current balance of {}",
-                    token.format_amount(amount),
-                    token.format_amount(token_balance),
-                )
-                .into());
+            if op == Operation::Deposit {
+                if amount > token_balance {
+                    return Err(format!(
+                        "Deposit amount of {} is greater than current balance of {}",
+                        token.format_amount(amount),
+                        token.format_amount(token_balance),
+                    )
+                    .into());
+                }
+                if amount == 0 {
+                    println!("Nothing to deposit");
+                    return Ok(());
+                }
             }
 
             for pool in &pools {
