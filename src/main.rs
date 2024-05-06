@@ -512,7 +512,7 @@ async fn process_exchange_deposit<T: Signers>(
         .into());
     }
 
-    let (mut instructions, amount) = match token.token() {
+    let (mut instructions, amount, compute_units) = match token.token() {
         /*SOL*/
         None => {
             assert_eq!(from_account.lamports, from_account_balance);
@@ -533,6 +533,7 @@ async fn process_exchange_deposit<T: Signers>(
                         amount,
                     )],
                     amount,
+                    1_000,
                 )
             } else if from_account.owner == solana_vote_program::id() {
                 let minimum_balance = rpc_client.get_minimum_balance_for_rent_exemption(
@@ -550,6 +551,7 @@ async fn process_exchange_deposit<T: Signers>(
                         &deposit_address,
                     )],
                     amount,
+                    1_000,
                 )
             } else if from_account.owner == solana_sdk::stake::program::id() {
                 let amount = amount.unwrap_or(from_account_balance);
@@ -563,6 +565,7 @@ async fn process_exchange_deposit<T: Signers>(
                         None,
                     )],
                     amount,
+                    1_000,
                 )
             } else {
                 return Err(
@@ -574,6 +577,8 @@ async fn process_exchange_deposit<T: Signers>(
             let amount = amount.unwrap_or(from_account_balance);
 
             let mut instructions = vec![];
+
+            let mut compute_units = 7_500;
 
             if rpc_client
                 .get_account_with_commitment(&token.ata(&deposit_address), rpc_client.commitment())?
@@ -588,6 +593,7 @@ async fn process_exchange_deposit<T: Signers>(
                         &spl_token::id(),
                     ),
                 );
+                compute_units += 20_000
             }
 
             instructions.push(
@@ -604,10 +610,10 @@ async fn process_exchange_deposit<T: Signers>(
                 .unwrap(),
             );
 
-            (instructions, amount)
+            (instructions, amount, compute_units)
         }
     };
-    apply_priority_fee(rpc_client, &mut instructions, 20_000, priority_fee)?;
+    apply_priority_fee(rpc_client, &mut instructions, compute_units, priority_fee)?;
 
     if amount == 0 {
         return Err("Nothing to deposit".into());
