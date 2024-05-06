@@ -34,12 +34,7 @@ impl ExchangeClient for CoinbaseExchangeClient {
                         let mut best_pubkey = None;
                         while let Some(addresses_result) = addresses.next().await {
                             for address in addresses_result.unwrap() {
-                                let push = match address.network.as_str() {
-                                    "solana" => true,
-                                    _ => false,
-                                };
-
-                                if push {
+                                if address.network.as_str() == "solana" {
                                     if let Ok(pubkey) = address.address.parse::<Pubkey>() {
                                         if address.updated_at > best_pubkey_updated_at {
                                             best_pubkey_updated_at = address.updated_at;
