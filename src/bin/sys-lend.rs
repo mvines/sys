@@ -32,7 +32,7 @@ lazy_static::lazy_static! {
     static ref SUPPORTED_TOKENS: HashMap<&'static str, HashSet::<MaybeToken>> = HashMap::from([
         ("mfi", HashSet::from([Token::USDC.into(), Token::USDT.into(), Token::UXD.into()])) ,
         ("kamino-main", HashSet::from([Token::USDC.into(), Token::USDT.into()])) ,
-        ("kamino-jlp", HashSet::from([Token::USDC.into()])) ,
+        ("kamino-jlp", HashSet::from([Token::USDC.into(), Token::JLP.into()])) ,
         ("kamino-altcoins", HashSet::from([Token::USDC.into()]))
     ]);
 }
@@ -846,10 +846,16 @@ fn kamino_load_pool_reserve(
             Some(Token::USDC),
             pubkey!["9TD2TSv4pENb8VwfbVYg25jvym7HN6iuAR6pFNSrKjqQ"],
         )]),
-        "kamino-jlp" => HashMap::from([(
-            Some(Token::USDC),
-            pubkey!["Ga4rZytCpq1unD4DbEJ5bkHeUz9g3oh9AAFEi6vSauXp"],
-        )]),
+        "kamino-jlp" => HashMap::from([
+            (
+                Some(Token::USDC),
+                pubkey!["Ga4rZytCpq1unD4DbEJ5bkHeUz9g3oh9AAFEi6vSauXp"],
+            ),
+            (
+                Some(Token::JLP),
+                pubkey!["DdTmCCjv7zHRD1hJv3E8bpnSEQBzdKkzB1j9ApXX5QoP"],
+            ),
+        ]),
         _ => HashMap::default(),
     };
 
@@ -954,42 +960,34 @@ fn kamino_deposit_or_withdraw(
 
     // Instruction: Kamino: Refresh Reserve
 
-    let mut refresh_reserves: Vec<(Pubkey, Pubkey, Pubkey)> = obligation_market_reserves
-        .iter()
-        .filter_map(|reserve_address| {
-            if *reserve_address != market_reserve_address {
-                let reserve = kamino_unsafe_load_reserve(rpc_client, *reserve_address)
-                    .unwrap_or_else(|err| {
-                        // TODO: propagate failure up instead of panic..
-                        panic!("unable to load reserve {reserve_address}: {err}")
-                    });
+    let refresh_reserves = obligation_market_reserves.iter().map(|reserve_address| {
+        if *reserve_address != market_reserve_address {
+            (
+                *reserve_address,
+                kamino_unsafe_load_reserve(rpc_client, *reserve_address).unwrap_or_else(|err| {
+                    // TODO: propagate failure up instead of panic..
+                    panic!("unable to load reserve {reserve_address}: {err}")
+                }),
+            )
+        } else {
+            (*reserve_address, reserve)
+        }
+    });
 
-                Some((
-                    *reserve_address,
-                    if reserve.config.token_info.pyth_configuration.price == Pubkey::default() {
-                        KAMINO_LEND_PROGRAM
-                    } else {
-                        reserve.config.token_info.pyth_configuration.price
-                    },
-                    if reserve.config.token_info.scope_configuration.price_feed == Pubkey::default()
-                    {
-                        KAMINO_LEND_PROGRAM
-                    } else {
-                        reserve.config.token_info.scope_configuration.price_feed
-                    },
-                ))
+    for (reserve_address, reserve) in refresh_reserves {
+        let pyth_oracle = if reserve.config.token_info.pyth_configuration.price == Pubkey::default()
+        {
+            KAMINO_LEND_PROGRAM
+        } else {
+            reserve.config.token_info.pyth_configuration.price
+        };
+        let scope_prices =
+            if reserve.config.token_info.scope_configuration.price_feed == Pubkey::default() {
+                KAMINO_LEND_PROGRAM
             } else {
-                None
-            }
-        })
-        .collect();
+                reserve.config.token_info.scope_configuration.price_feed
+            };
 
-    refresh_reserves.push((
-        market_reserve_address,
-        reserve.config.token_info.pyth_configuration.price,
-        reserve.config.token_info.scope_configuration.price_feed,
-    ));
-    for (reserve_address, pyth_oracle, scope_prices) in refresh_reserves {
         instructions.push(Instruction::new_with_bytes(
             KAMINO_LEND_PROGRAM,
             &[0x02, 0xda, 0x8a, 0xeb, 0x4f, 0xc9, 0x19, 0x66],
