@@ -1,8 +1,8 @@
-pub use influxdb_client::Client;
+pub use influxdb_client::{Client, Point};
 use {
-    influxdb_client::{Point, Precision},
+    influxdb_client::Precision,
     serde::{Deserialize, Serialize},
-    std::sync::Arc,
+    std::{env, sync::Arc},
     tokio::sync::RwLock,
 };
 
@@ -14,8 +14,17 @@ lazy_static::lazy_static! {
 pub struct MetricsConfig {
     pub url: String,
     pub token: String,
-    pub org_id: String,
     pub bucket: String,
+}
+
+pub fn env_config() -> Option<MetricsConfig> {
+    Some(MetricsConfig {
+        url: env::var("INFLUX_URL").ok()?,
+        token: env::var("INFLUX_API_TOKEN").ok()?,
+        bucket: env::var("INFLUX_BUCKET")
+            .ok()
+            .unwrap_or_else(|| "sys".into()),
+    })
 }
 
 pub async fn push(point: Point) {
@@ -25,14 +34,13 @@ pub async fn push(point: Point) {
 pub async fn send(config: Option<MetricsConfig>) {
     if let Some(config) = config {
         let client = Client::new(config.url, config.token)
-            .with_org_id(config.org_id)
             .with_bucket(config.bucket)
             .with_precision(Precision::MS);
-        // let client = client.insert_to_stdout();
+        //let client = client.insert_to_stdout();
         client
             .insert_points(
                 &*POINTS.write().await,
-                influxdb_client::TimestampOptions::FromPoint,
+                influxdb_client::TimestampOptions::None,
             )
             .await
             .unwrap_or_else(|err| eprintln!("Failed to send metrics: {err:?}"));
@@ -50,11 +58,11 @@ pub mod dp {
         solana_sdk::pubkey::Pubkey,
     };
 
-    fn pubkey_to_value(p: &Pubkey) -> Value {
+    pub fn pubkey_to_value(p: &Pubkey) -> Value {
         Value::Str(p.to_string())
     }
 
-    fn now() -> Timestamp {
+    pub fn now() -> Timestamp {
         Timestamp::Int(Utc::now().timestamp_millis())
     }
 

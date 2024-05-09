@@ -4343,13 +4343,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .help("Access Token"),
                         )
                         .arg(
-                            Arg::with_name("org_id")
-                                .value_name("ORGANIZATION ID")
-                                .takes_value(true)
-                                .required(true)
-                                .help("Organization Id"),
-                        )
-                        .arg(
                             Arg::with_name("bucket")
                                 .value_name("BUCKET")
                                 .takes_value(true)
@@ -5940,12 +5933,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Some(MetricsConfig {
                     url,
                     token: _,
-                    org_id,
                     bucket,
                 }) => {
                     println!("Url: {url}");
                     println!("Token: ********");
-                    println!("Organization Id: {org_id}");
                     println!("Bucket: {bucket}");
                 }
             },
@@ -5953,7 +5944,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 db.set_metrics_config(MetricsConfig {
                     url: value_t_or_exit!(arg_matches, "url", String),
                     token: value_t_or_exit!(arg_matches, "token", String),
-                    org_id: value_t_or_exit!(arg_matches, "org_id", String),
                     bucket: value_t_or_exit!(arg_matches, "bucket", String),
                 })?;
                 println!("InfluxDb configuration set");

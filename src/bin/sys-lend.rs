@@ -19,7 +19,7 @@ use {
     },
     std::collections::{HashMap, HashSet},
     sys::{
-        app_version,
+        app_version, metrics,
         notifier::*,
         priority_fee::{apply_priority_fee, PriorityFee},
         send_transaction_until_expired,
@@ -41,6 +41,32 @@ lazy_static::lazy_static! {
 enum Operation {
     Deposit,
     Withdraw,
+}
+
+mod dp {
+    use super::*;
+
+    pub fn supply_balance(
+        pool: &str,
+        address: &Pubkey,
+        maybe_token: MaybeToken,
+        ui_amount: f64,
+    ) -> metrics::Point {
+        metrics::Point::new("sys_lend::supply_balance")
+            .tag("pool", pool)
+            .tag("address", metrics::dp::pubkey_to_value(address))
+            .tag("token", maybe_token.name())
+            .field("amount", ui_amount)
+            .timestamp(metrics::dp::now())
+    }
+
+    pub fn supply_apy(pool: &str, maybe_token: MaybeToken, apy_bps: u64) -> metrics::Point {
+        metrics::Point::new("sys_lend::supply_apy")
+            .tag("pool", pool)
+            .tag("token", maybe_token.name())
+            .field("apy_bps", apy_bps as f64)
+            .timestamp(metrics::dp::now())
+    }
 }
 
 #[tokio::main]
@@ -292,9 +318,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let bps = matches.is_present("bps");
 
             let apy = apr_to_apy(pool_supply_apr(&rpc_client, &pool, token)?) * 100.;
+            let apy_as_bps = (apy * 100.) as u64;
 
             let value = if bps {
-                format!("{:.0}", apy * 100.)
+                format!("{}", apy_as_bps)
             } else {
                 format!("{:.2}", apy)
             };
@@ -307,6 +334,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             if !raw {
                 notifier.send(&msg).await;
             }
+            metrics::push(dp::supply_apy(&pool, token, apy_as_bps)).await;
             println!("{msg}");
         }
         ("supply-balance", Some(matches)) => {
@@ -314,16 +342,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let address = pubkey_of(matches, "address").unwrap();
             let token = MaybeToken::from(value_t!(matches, "token", Token).ok());
 
-            let supply_balance = pool_supply_balance(&rpc_client, &pool, token, address)?;
+            let amount = pool_supply_balance(&rpc_client, &pool, token, address)?;
             let apr = pool_supply_apr(&rpc_client, &pool, token)?;
 
             let msg = format!(
                 "{}: {} supplied at {:.2}%",
                 pool,
-                token.format_amount(supply_balance),
+                token.format_amount(amount),
                 apr_to_apy(apr) * 100.
             );
             notifier.send(&msg).await;
+            metrics::push(dp::supply_balance(
+                &pool,
+                &address,
+                token,
+                token.ui_amount(amount),
+            ))
+            .await;
             println!("{msg}");
         }
         ("deposit" | "withdraw", Some(matches)) => {
@@ -504,6 +539,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         _ => unreachable!(),
     }
 
+    metrics::send(metrics::env_config()).await;
     Ok(())
 }
 
