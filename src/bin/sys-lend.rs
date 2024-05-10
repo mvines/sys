@@ -996,19 +996,25 @@ fn kamino_deposit_or_withdraw(
 
     // Instruction: Kamino: Refresh Reserve
 
-    let refresh_reserves = obligation_market_reserves.iter().map(|reserve_address| {
-        if *reserve_address != market_reserve_address {
-            (
-                *reserve_address,
-                kamino_unsafe_load_reserve(rpc_client, *reserve_address).unwrap_or_else(|err| {
-                    // TODO: propagate failure up instead of panic..
-                    panic!("unable to load reserve {reserve_address}: {err}")
-                }),
-            )
-        } else {
-            (*reserve_address, reserve)
-        }
-    });
+    let mut refresh_reserves = obligation_market_reserves
+        .iter()
+        .filter_map(|reserve_address| {
+            if *reserve_address != market_reserve_address {
+                Some((
+                    *reserve_address,
+                    kamino_unsafe_load_reserve(rpc_client, *reserve_address).unwrap_or_else(
+                        |err| {
+                            // TODO: propagate failure up instead of panic..
+                            panic!("unable to load reserve {reserve_address}: {err}")
+                        },
+                    ),
+                ))
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+    refresh_reserves.push((market_reserve_address, reserve));
 
     for (reserve_address, reserve) in refresh_reserves {
         let pyth_oracle = if reserve.config.token_info.pyth_configuration.price == Pubkey::default()
