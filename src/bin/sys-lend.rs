@@ -57,7 +57,6 @@ mod dp {
             .tag("address", metrics::dp::pubkey_to_value(address))
             .tag("token", maybe_token.name())
             .field("amount", ui_amount)
-            .timestamp(metrics::dp::now())
     }
 
     pub fn supply_apy(pool: &str, maybe_token: MaybeToken, apy_bps: u64) -> metrics::Point {
@@ -65,7 +64,6 @@ mod dp {
             .tag("pool", pool)
             .tag("token", maybe_token.name())
             .field("apy_bps", apy_bps as f64)
-            .timestamp(metrics::dp::now())
     }
 }
 

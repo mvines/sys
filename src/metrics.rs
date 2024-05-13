@@ -1,6 +1,7 @@
 pub use influxdb_client::{Client, Point};
 use {
-    influxdb_client::Precision,
+    chrono::Utc,
+    influxdb_client::{timestamp, Precision, Timestamp, TimestampOptions},
     serde::{Deserialize, Serialize},
     std::{env, sync::Arc},
     tokio::sync::RwLock,
@@ -37,11 +38,12 @@ pub async fn send(config: Option<MetricsConfig>) {
             .with_bucket(config.bucket)
             .with_precision(Precision::MS);
         //let client = client.insert_to_stdout();
+
+        // Write all metrics with the same timestamp to ensure multiple sys-lend APY and balance
+        // values line up
+        let timestamp = timestamp!(Utc::now().timestamp_millis());
         client
-            .insert_points(
-                &*POINTS.write().await,
-                influxdb_client::TimestampOptions::None,
-            )
+            .insert_points(&*POINTS.write().await, timestamp)
             .await
             .unwrap_or_else(|err| eprintln!("Failed to send metrics: {err:?}"));
     }
@@ -53,8 +55,7 @@ pub mod dp {
             exchange::{Exchange, OrderSide},
             token::MaybeToken,
         },
-        chrono::Utc,
-        influxdb_client::{Point, Timestamp, Value},
+        influxdb_client::{Point, Value},
         solana_sdk::pubkey::Pubkey,
     };
 
@@ -62,16 +63,11 @@ pub mod dp {
         Value::Str(p.to_string())
     }
 
-    pub fn now() -> Timestamp {
-        Timestamp::Int(Utc::now().timestamp_millis())
-    }
-
     pub fn exchange_deposit(exchange: Exchange, maybe_token: MaybeToken, ui_amount: f64) -> Point {
         Point::new("exchange_deposit")
             .tag("exchange", exchange.to_string().as_str())
             .tag("token", maybe_token.name())
             .field("amount", ui_amount)
-            .timestamp(now())
     }
 
     pub fn exchange_withdrawal(
@@ -85,7 +81,6 @@ pub mod dp {
             .tag("token", maybe_token.name())
             .tag("address", pubkey_to_value(address))
             .field("amount", ui_amount)
-            .timestamp(now())
     }
 
     pub fn exchange_fill(
@@ -103,6 +98,5 @@ pub mod dp {
             .tag("token", maybe_token.name())
             .field("price", price)
             .field("amount", amount)
-            .timestamp(now())
     }
 }
