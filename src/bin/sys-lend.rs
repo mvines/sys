@@ -67,6 +67,19 @@ mod dp {
     }
 }
 
+fn is_token_supported(
+    token: &MaybeToken,
+    pools: &[String],
+) -> Result<(), Box<dyn std::error::Error>> {
+    for pool in pools {
+        if !SUPPORTED_TOKENS.get(pool.as_str()).unwrap().contains(token) {
+            return Err(format!("{token} is not supported by {pool}").into());
+        }
+    }
+
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     solana_logger::setup_with_default("solana=info");
@@ -197,12 +210,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .subcommand(
             SubCommand::with_name("supply-balance")
-                .about("Display the current supplied balance for a lending pool")
+                .about("Display the current supplied balance for one or more lending pools")
                 .arg(
                     Arg::with_name("pool")
                         .value_name("POOL")
+                        .long("for")
                         .takes_value(true)
                         .required(true)
+                        .multiple(true)
                         .possible_values(&pools)
                         .help("Lending pool"),
                 )
@@ -226,11 +241,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .subcommand(
             SubCommand::with_name("supply-apy")
-                .about("Display the current supply APY for a lending pool")
+                .about("Display the current supply APY for one or more lending pools")
                 .arg(
                     Arg::with_name("pool")
                         .value_name("POOL")
+                        .long("for")
                         .takes_value(true)
+                        .multiple(true)
                         .required(true)
                         .possible_values(&pools)
                         .help("Lending pool"),
@@ -310,54 +327,60 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     match app_matches.subcommand() {
         ("supply-apy", Some(matches)) => {
-            let pool = value_t_or_exit!(matches, "pool", String);
+            let pools = values_t_or_exit!(matches, "pool", String);
             let token = MaybeToken::from(value_t!(matches, "token", Token).ok());
             let raw = matches.is_present("raw");
             let bps = matches.is_present("bps");
 
-            let apy = apr_to_apy(pool_supply_apr(&rpc_client, &pool, token)?) * 100.;
-            let apy_as_bps = (apy * 100.) as u64;
+            is_token_supported(&token, &pools)?;
+            for pool in pools {
+                let apy = apr_to_apy(pool_supply_apr(&rpc_client, &pool, token)?) * 100.;
+                let apy_as_bps = (apy * 100.) as u64;
 
-            let value = if bps {
-                format!("{}", apy_as_bps)
-            } else {
-                format!("{:.2}", apy)
-            };
+                let value = if bps {
+                    format!("{}", apy_as_bps)
+                } else {
+                    format!("{:.2}", apy)
+                };
 
-            let msg = if raw {
-                value.to_string()
-            } else {
-                format!("{pool} {token} {value}{}", if bps { "bps" } else { "%" })
-            };
-            if !raw {
-                notifier.send(&msg).await;
+                let msg = if raw {
+                    value.to_string()
+                } else {
+                    format!("{pool} {token} {value}{}", if bps { "bps" } else { "%" })
+                };
+                if !raw {
+                    notifier.send(&msg).await;
+                }
+                metrics::push(dp::supply_apy(&pool, token, apy_as_bps)).await;
+                println!("{msg}");
             }
-            metrics::push(dp::supply_apy(&pool, token, apy_as_bps)).await;
-            println!("{msg}");
         }
         ("supply-balance", Some(matches)) => {
-            let pool = value_t_or_exit!(matches, "pool", String);
+            let pools = values_t_or_exit!(matches, "pool", String);
             let address = pubkey_of(matches, "address").unwrap();
             let token = MaybeToken::from(value_t!(matches, "token", Token).ok());
 
-            let amount = pool_supply_balance(&rpc_client, &pool, token, address)?;
-            let apr = pool_supply_apr(&rpc_client, &pool, token)?;
+            is_token_supported(&token, &pools)?;
+            for pool in pools {
+                let amount = pool_supply_balance(&rpc_client, &pool, token, address)?;
+                let apr = pool_supply_apr(&rpc_client, &pool, token)?;
 
-            let msg = format!(
-                "{}: {} supplied at {:.2}%",
-                pool,
-                token.format_amount(amount),
-                apr_to_apy(apr) * 100.
-            );
-            notifier.send(&msg).await;
-            metrics::push(dp::supply_balance(
-                &pool,
-                &address,
-                token,
-                token.ui_amount(amount),
-            ))
-            .await;
-            println!("{msg}");
+                let msg = format!(
+                    "{}: {} supplied at {:.2}%",
+                    pool,
+                    token.format_amount(amount),
+                    apr_to_apy(apr) * 100.
+                );
+                notifier.send(&msg).await;
+                metrics::push(dp::supply_balance(
+                    &pool,
+                    &address,
+                    token,
+                    token.ui_amount(amount),
+                ))
+                .await;
+                println!("{msg}");
+            }
         }
         ("deposit" | "withdraw", Some(matches)) => {
             let op = match app_matches.subcommand().0 {
@@ -402,15 +425,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
 
-            for pool in &pools {
-                if !SUPPORTED_TOKENS
-                    .get(pool.as_str())
-                    .unwrap()
-                    .contains(&token)
-                {
-                    return Err(format!("{token} is not supported by {pool}").into());
-                }
-            }
+            is_token_supported(&token, &pools)?;
 
             let pools = match op {
                 Operation::Deposit => pools,
