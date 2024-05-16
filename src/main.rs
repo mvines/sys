@@ -4973,7 +4973,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .about("Delete a lot from the local database only. \
                                         Useful if the on-chain state is out of sync with the database")
                                 .arg(
-                                    Arg::with_name("lot_number")
+                                    Arg::with_name("lot_numbers")
                                         .value_name("LOT NUMBER")
                                         .takes_value(true)
                                         .required(true)
