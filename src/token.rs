@@ -46,7 +46,9 @@ pub enum Token {
     JLP,
     JUP,
     JTO,
+    BONK,
     KMNO,
+    PYTH,
     WEN,
     WIF,
 }
@@ -69,7 +71,9 @@ impl Token {
             Token::JLP => pubkey!("27G8MtK7VtTcCHkpASjSDdkWWYfoqT6ggEuKidVJidD4"),
             Token::JUP => pubkey!("JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN"),
             Token::JTO => pubkey!("jtojtomepa8beP8AuQc6eXt5FriJwfFMwQx2v2f9mCL"),
+            Token::BONK => pubkey!("DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263"),
             Token::KMNO => pubkey!("KMNo3nJsBXfcpJTVhZcXLW7RmTwTt4GVFE7suUBo9sS"),
+            Token::PYTH => pubkey!("HZ1JovNiVvGrGNiiYvEozEVgZ58xaU3RKwX8eACQBCt3"),
             Token::WEN => pubkey!("WENWENvqqNya429ubCdR81ZmD69brwQaaBYY6p3LCpk"),
             Token::WIF => pubkey!("EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm"),
         }
@@ -96,7 +100,9 @@ impl Token {
             Token::JLP => "JLP/",
             Token::JUP => "JUP/",
             Token::JTO => "JTO/",
+            Token::BONK => "!",
             Token::KMNO => "KMNO/",
+            Token::PYTH => "PYTH/",
             Token::WEN => "WEN/",
             Token::WIF => "WIF/",
         }
@@ -104,7 +110,7 @@ impl Token {
 
     pub fn decimals(&self) -> u8 {
         match self {
-            Token::WEN => 5,
+            Token::BONK | Token::WEN => 5,
             Token::USDC
             | Token::USDT
             | Token::UXD
@@ -112,6 +118,7 @@ impl Token {
             | Token::JLP
             | Token::JUP
             | Token::KMNO
+            | Token::PYTH
             | Token::WIF => 6,
             Token::stSOL
             | Token::tuSOL
@@ -231,7 +238,9 @@ impl Token {
             | Token::JLP
             | Token::JUP
             | Token::JTO
+            | Token::BONK
             | Token::KMNO
+            | Token::PYTH
             | Token::WEN
             | Token::WIF => coin_gecko::get_current_price(&MaybeToken(Some(*self))).await,
             Token::tuUSDC | Token::tuSOL | Token::tumSOL | Token::tustSOL => {

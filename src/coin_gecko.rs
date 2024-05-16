@@ -43,7 +43,9 @@ fn token_to_coin(token: &MaybeToken) -> Result<&'static str, Box<dyn std::error:
             Token::JLP => "jupiter-perpetuals-liquidity-provider-token",
             Token::JUP => "jupiter-exchange-solana",
             Token::JTO => "jito-governance-token",
+            Token::BONK => "bonk",
             Token::KMNO => "kamino",
+            Token::PYTH => "pyth-network",
             Token::WEN => "wen-4",
             Token::WIF => "dogwifcoin",
             unsupported_token => {
@@ -104,8 +106,12 @@ pub async fn get_current_price(token: &MaybeToken) -> Result<Decimal, Box<dyn st
                 jup: Option<CurrencyList>,
                 #[serde(rename = "jito-governance-token")]
                 jto: Option<CurrencyList>,
+                #[serde(rename = "bonk")]
+                bonk: Option<CurrencyList>,
                 #[serde(rename = "kamino")]
                 kmno: Option<CurrencyList>,
+                #[serde(rename = "pyth-network")]
+                pyth: Option<CurrencyList>,
                 #[serde(rename = "wen-4")]
                 wen: Option<CurrencyList>,
                 #[serde(rename = "dogwifcoin")]
@@ -125,7 +131,9 @@ pub async fn get_current_price(token: &MaybeToken) -> Result<Decimal, Box<dyn st
                 .or(coins.jlp)
                 .or(coins.jup)
                 .or(coins.jto)
+                .or(coins.bonk)
                 .or(coins.kmno)
+                .or(coins.pyth)
                 .or(coins.wen)
                 .or(coins.wif)
                 .ok_or_else(|| format!("Simple price data not available for {coin}").into())
