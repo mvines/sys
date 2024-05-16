@@ -3753,7 +3753,7 @@ async fn process_account_wrap<T: Signers>(
     db: &mut Db,
     rpc_client: &RpcClient,
     address: Pubkey,
-    amount: Option<u64>,
+    amount: Amount,
     if_source_balance_exceeds: Option<u64>,
     lot_selection_method: LotSelectionMethod,
     lot_numbers: Option<HashSet<usize>>,
@@ -4887,9 +4887,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             Arg::with_name("amount")
                                 .value_name("AMOUNT")
                                 .takes_value(true)
-                                .validator(is_amount_or_all)
+                                .validator(is_amount_or_all_or_half)
                                 .required(true)
-                                .help("The amount to wrap, in SOL; accepts keyword ALL"),
+                                .help("The amount to wrap, in SOL; accepts keywords ALL and HALF"),
                         )
                         .arg(
                             Arg::with_name("by")
@@ -6327,8 +6327,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             ("wrap", Some(arg_matches)) => {
                 let address = pubkey_of(arg_matches, "address").unwrap();
                 let amount = match arg_matches.value_of("amount").unwrap() {
-                    "ALL" => None,
-                    amount => Some(MaybeToken::SOL().amount(amount.parse::<f64>().unwrap())),
+                    "ALL" => Amount::All,
+                    "HALF" => Amount::Half,
+                    amount => {
+                        Amount::Exact(MaybeToken::SOL().amount(amount.parse::<f64>().unwrap()))
+                    }
                 };
                 let if_source_balance_exceeds =
                     value_t!(arg_matches, "if_source_balance_exceeds", f64)
