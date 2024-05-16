@@ -37,12 +37,18 @@ pub enum Token {
     bSOL,
     mSOL,
     stSOL,
+    JitoSOL,
     tuSOL,
     tuUSDC,
     tumSOL,
     tustSOL,
     wSOL,
     JLP,
+    JUP,
+    JTO,
+    KMNO,
+    WEN,
+    WIF,
 }
 
 impl Token {
@@ -55,11 +61,17 @@ impl Token {
             Token::bSOL => pubkey!("bSo13r4TkiE4KumL71LsHTPpL2euBYLFx6h9HP3piy1"),
             Token::mSOL => pubkey!("mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So"),
             Token::stSOL => pubkey!("7dHbWXmci3dT8UFYWYZweBLXgycu7Y3iL6trKn1Y7ARj"),
+            Token::JitoSOL => pubkey!("J1toso1uCk3RLmjorhTtrVwY9HJ7X8V9yYac6Y7kGCPn"),
             Token::tuSOL => pubkey!("H4Q3hDbuMUw8Bu72Ph8oV2xMQ7BFNbekpfQZKS2xF7jW"),
             Token::tumSOL => pubkey!("8cn7JcYVjDZesLa3RTt3NXne4WcDw9PdUneQWuByehwW"),
             Token::tustSOL => pubkey!("27CaAiuFW3EwLcTCaiBnexqm5pxht845AHgSuq36byKX"),
             Token::wSOL => spl_token::native_mint::id(),
             Token::JLP => pubkey!("27G8MtK7VtTcCHkpASjSDdkWWYfoqT6ggEuKidVJidD4"),
+            Token::JUP => pubkey!("JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN"),
+            Token::JTO => pubkey!("jtojtomepa8beP8AuQc6eXt5FriJwfFMwQx2v2f9mCL"),
+            Token::KMNO => pubkey!("KMNo3nJsBXfcpJTVhZcXLW7RmTwTt4GVFE7suUBo9sS"),
+            Token::WEN => pubkey!("WENWENvqqNya429ubCdR81ZmD69brwQaaBYY6p3LCpk"),
+            Token::WIF => pubkey!("EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm"),
         }
     }
 
@@ -76,23 +88,39 @@ impl Token {
             Token::bSOL => "b◎",
             Token::mSOL => "m◎",
             Token::stSOL => "st◎",
+            Token::JitoSOL => "jito◎",
             Token::tuSOL => "tu◎",
             Token::tumSOL => "tum◎",
             Token::tustSOL => "tust◎",
             Token::wSOL => "(◎)",
             Token::JLP => "JLP/",
+            Token::JUP => "JUP/",
+            Token::JTO => "JTO/",
+            Token::KMNO => "KMNO/",
+            Token::WEN => "WEN/",
+            Token::WIF => "WIF/",
         }
     }
 
     pub fn decimals(&self) -> u8 {
         match self {
-            Token::USDC | Token::USDT | Token::UXD | Token::tuUSDC | Token::JLP => 6,
+            Token::WEN => 5,
+            Token::USDC
+            | Token::USDT
+            | Token::UXD
+            | Token::tuUSDC
+            | Token::JLP
+            | Token::JUP
+            | Token::KMNO
+            | Token::WIF => 6,
             Token::stSOL
             | Token::tuSOL
             | Token::bSOL
             | Token::mSOL
+            | Token::JitoSOL
             | Token::tumSOL
             | Token::tustSOL
+            | Token::JTO
             | Token::wSOL => 9,
         }
     }
@@ -116,6 +144,8 @@ impl Token {
     }
 
     pub fn liquidity_token(&self) -> Option<MaybeToken> {
+        None
+        /*
         match self {
             Token::USDC
             | Token::USDT
@@ -123,19 +153,24 @@ impl Token {
             | Token::bSOL
             | Token::mSOL
             | Token::stSOL
+            | Token::JitoSOL
             | Token::wSOL
             | Token::JLP => None,
+            | Token::JUP => None,
             Token::tuUSDC | Token::tuSOL | Token::tumSOL | Token::tustSOL => {
                 None
                 //                Some(crate::tulip::liquidity_token(self))
             }
         }
+        */
     }
 
     pub async fn get_current_liquidity_token_rate(
         &self,
         _rpc_client: &RpcClient,
     ) -> Result<Decimal, Box<dyn std::error::Error>> {
+        unreachable!()
+        /*
         match self {
             Token::USDC
             | Token::USDT
@@ -143,6 +178,7 @@ impl Token {
             | Token::bSOL
             | Token::mSOL
             | Token::stSOL
+            | Token::JitoSOL
             | Token::wSOL
             | Token::JLP => {
                 unreachable!()
@@ -152,6 +188,7 @@ impl Token {
                 //crate::tulip::get_current_liquidity_token_rate(rpc_client, self).await
             }
         }
+        */
     }
 
     pub fn balance(
@@ -189,8 +226,14 @@ impl Token {
             | Token::bSOL
             | Token::mSOL
             | Token::stSOL
+            | Token::JitoSOL
             | Token::wSOL
-            | Token::JLP => coin_gecko::get_current_price(&MaybeToken(Some(*self))).await,
+            | Token::JLP
+            | Token::JUP
+            | Token::JTO
+            | Token::KMNO
+            | Token::WEN
+            | Token::WIF => coin_gecko::get_current_price(&MaybeToken(Some(*self))).await,
             Token::tuUSDC | Token::tuSOL | Token::tumSOL | Token::tustSOL => {
                 Err("tulip support disabled".into())
                 //crate::tulip::get_current_price(rpc_client, self).await

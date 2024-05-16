@@ -38,8 +38,14 @@ fn token_to_coin(token: &MaybeToken) -> Result<&'static str, Box<dyn std::error:
             Token::bSOL => "blazestake-staked-sol",
             Token::mSOL => "msol",
             Token::stSOL => "lido-staked-sol",
+            Token::JitoSOL => "jito-staked-sol",
             Token::wSOL => "solana",
             Token::JLP => "jupiter-perpetuals-liquidity-provider-token",
+            Token::JUP => "jupiter-exchange-solana",
+            Token::JTO => "jito-governance-token",
+            Token::KMNO => "kamino",
+            Token::WEN => "wen-4",
+            Token::WIF => "dogwifcoin",
             unsupported_token => {
                 return Err(format!(
                     "Coin Gecko price data not available for {}",
@@ -86,12 +92,24 @@ pub async fn get_current_price(token: &MaybeToken) -> Result<Decimal, Box<dyn st
                 msol: Option<CurrencyList>,
                 #[serde(rename = "lido-staked-sol")]
                 stsol: Option<CurrencyList>,
+                #[serde(rename = "jito-staked-sol")]
+                jitosol: Option<CurrencyList>,
                 #[serde(rename = "tether")]
                 tether: Option<CurrencyList>,
                 #[serde(rename = "uxd-stablecoin")]
                 uxd: Option<CurrencyList>,
                 #[serde(rename = "jupiter-perpetuals-liquidity-provider-token")]
                 jlp: Option<CurrencyList>,
+                #[serde(rename = "jupiter-exchange-solana")]
+                jup: Option<CurrencyList>,
+                #[serde(rename = "jito-governance-token")]
+                jto: Option<CurrencyList>,
+                #[serde(rename = "kamino")]
+                kmno: Option<CurrencyList>,
+                #[serde(rename = "wen-4")]
+                wen: Option<CurrencyList>,
+                #[serde(rename = "dogwifcoin")]
+                wif: Option<CurrencyList>,
             }
 
             let coins = reqwest::get(url).await?.json::<Coins>().await?;
@@ -100,10 +118,16 @@ pub async fn get_current_price(token: &MaybeToken) -> Result<Decimal, Box<dyn st
                 .solana
                 .or(coins.msol)
                 .or(coins.stsol)
+                .or(coins.jitosol)
                 .or(coins.tether)
                 .or(coins.uxd)
                 .or(coins.bsol)
                 .or(coins.jlp)
+                .or(coins.jup)
+                .or(coins.jto)
+                .or(coins.kmno)
+                .or(coins.wen)
+                .or(coins.wif)
                 .ok_or_else(|| format!("Simple price data not available for {coin}").into())
                 .map(|price| {
                     let price = Decimal::from_f64(price.usd).unwrap();
