@@ -4559,6 +4559,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .subcommand(
                     SubCommand::with_name("remove")
                         .about("Unregister an account")
+                        .alias("delete")
                         .arg(
                             Arg::with_name("token")
                                 .value_name("SOL or SPL Token")
@@ -4580,6 +4581,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .long("confirm")
                                 .takes_value(false)
                                 .help("Confirm the operation"),
+                        )
+                        .arg(
+                            Arg::with_name("proceed_even_if_lots_exist")
+                                .long("proceed-even-if-lots-exist")
+                                .takes_value(false)
+                                .help("Proceed even if the account has lots (advanced; uncommon)"),
                         ),
                 )
                 .subcommand(
@@ -6081,21 +6088,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let address = pubkey_of(arg_matches, "address").unwrap();
                 let token = MaybeToken::from(value_t!(arg_matches, "token", Token).ok());
                 let confirm = arg_matches.is_present("confirm");
+                let proceed_even_if_lots_exist =
+                    arg_matches.is_present("proceed_even_if_lots_exist");
 
                 let account = db
                     .get_account(address, token)
                     .ok_or_else(|| format!("Account {address} ({token}) does not exist"))?;
                 if !account.lots.is_empty() {
-                    return Err(format!("Account {address} ({token}) is not empty").into());
+                    if proceed_even_if_lots_exist {
+                        println!(
+                            "Account {address} ({token}) is not empty.\
+                              Proceeding due to --proceed-even-if-lots-exist flag"
+                        );
+                    } else {
+                        return Err(format!("Account {address} ({token}) is not empty").into());
+                    }
                 }
 
-                if !confirm {
+                if confirm {
+                    db.remove_account(address, token)?;
+                    println!("Removed {address} ({token})");
+                } else {
                     println!("Add --confirm to remove {address} ({token})");
-                    return Ok(());
                 }
-
-                db.remove_account(address, token)?;
-                println!("Removed {address} ({token})");
             }
             ("set-sweep-stake-account", Some(arg_matches)) => {
                 let address = pubkey_of(arg_matches, "address").unwrap();
