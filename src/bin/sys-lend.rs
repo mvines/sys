@@ -1,5 +1,7 @@
 use {
-    clap::{value_t, value_t_or_exit, values_t_or_exit, App, AppSettings, Arg, SubCommand},
+    clap::{
+        value_t, value_t_or_exit, values_t, values_t_or_exit, App, AppSettings, Arg, SubCommand,
+    },
     solana_account_decoder::UiAccountEncoding,
     solana_clap_utils::{self, input_parsers::*, input_validators::*},
     solana_client::{
@@ -78,6 +80,21 @@ fn is_token_supported(
     }
 
     Ok(())
+}
+
+fn supported_pools_for_token(token: MaybeToken) -> Vec<String> {
+    let mut supported_tokens: Vec<_> = SUPPORTED_TOKENS
+        .iter()
+        .filter_map(|(pool, tokens)| {
+            if tokens.contains(&token) {
+                Some(pool.to_string())
+            } else {
+                None
+            }
+        })
+        .collect();
+    supported_tokens.sort();
+    supported_tokens
 }
 
 #[tokio::main]
@@ -216,10 +233,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .value_name("POOL")
                         .long("for")
                         .takes_value(true)
-                        .required(true)
                         .multiple(true)
                         .possible_values(&pools)
-                        .help("Lending pool"),
+                        .help("Lending pool [default: all support pools for the specified token]"),
                 )
                 .arg(
                     Arg::with_name("address")
@@ -248,9 +264,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .long("for")
                         .takes_value(true)
                         .multiple(true)
-                        .required(true)
                         .possible_values(&pools)
-                        .help("Lending pool"),
+                        .help("Lending pool [default: all support pools for the specified token]"),
                 )
                 .arg(
                     Arg::with_name("token")
@@ -327,10 +342,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     match app_matches.subcommand() {
         ("supply-apy", Some(matches)) => {
-            let pools = values_t_or_exit!(matches, "pool", String);
             let token = MaybeToken::from(value_t!(matches, "token", Token).ok());
             let raw = matches.is_present("raw");
             let bps = matches.is_present("bps");
+            let pools = values_t!(matches, "pool", String)
+                .ok()
+                .unwrap_or_else(|| supported_pools_for_token(token));
 
             is_token_supported(&token, &pools)?;
             for pool in pools {
@@ -346,7 +363,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let msg = if raw {
                     value.to_string()
                 } else {
-                    format!("{pool} {token} {value}{}", if bps { "bps" } else { "%" })
+                    format!(
+                        "{pool:>15}: {token} {value:>5}{}",
+                        if bps { "bps" } else { "%" }
+                    )
                 };
                 if !raw {
                     notifier.send(&msg).await;
@@ -356,9 +376,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         ("supply-balance", Some(matches)) => {
-            let pools = values_t_or_exit!(matches, "pool", String);
             let address = pubkey_of(matches, "address").unwrap();
             let token = MaybeToken::from(value_t!(matches, "token", Token).ok());
+            let pools = values_t!(matches, "pool", String)
+                .ok()
+                .unwrap_or_else(|| supported_pools_for_token(token));
 
             is_token_supported(&token, &pools)?;
             for pool in pools {
@@ -366,7 +388,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let apr = pool_supply_apr(&rpc_client, &pool, token)?;
 
                 let msg = format!(
-                    "{}: {} supplied at {:.2}%",
+                    "{:>15}: {} supplied at {:.2}%",
                     pool,
                     token.format_amount(amount),
                     apr_to_apy(apr) * 100.
@@ -628,7 +650,7 @@ fn mfi_apr(rpc_client: &RpcClient, token: MaybeToken) -> Result<f64, Box<dyn std
 
 fn mfi_load_user_account(
     wallet_address: Pubkey,
-) -> Result<(Pubkey, marginfi_v2::MarginfiAccount), Box<dyn std::error::Error>> {
+) -> Result<Option<(Pubkey, marginfi_v2::MarginfiAccount)>, Box<dyn std::error::Error>> {
     // Big mistake to require using `getProgramAccounts` to locate a MarginFi account for a wallet
     // address. Most public RPC endpoints have disabled this method. Leach off MarginFi's RPC
     // endpoint for this expensive call since they designed their shit wrong
@@ -662,19 +684,19 @@ fn mfi_load_user_account(
         )?
         .into_iter();
 
-    let (user_account_address, user_account_data) = user_accounts
-        .next()
-        .ok_or_else(|| format!("No MarginFi account found for {}", wallet_address))?;
-
+    let first_user_account = user_accounts.next();
     if user_accounts.next().is_some() {
         return Err(format!("Multiple MarginFi account found for {}", wallet_address).into());
     }
 
-    Ok((user_account_address, {
-        const LEN: usize = std::mem::size_of::<marginfi_v2::MarginfiAccount>();
-        let data: [u8; LEN] = user_account_data.data[8..LEN + 8].try_into().unwrap();
-        unsafe { std::mem::transmute::<[u8; LEN], marginfi_v2::MarginfiAccount>(data) }
-    }))
+    Ok(match first_user_account {
+        None => None,
+        Some((user_account_address, user_account_data)) => Some((user_account_address, {
+            const LEN: usize = std::mem::size_of::<marginfi_v2::MarginfiAccount>();
+            let data: [u8; LEN] = user_account_data.data[8..LEN + 8].try_into().unwrap();
+            unsafe { std::mem::transmute::<[u8; LEN], marginfi_v2::MarginfiAccount>(data) }
+        })),
+    })
 }
 
 fn mfi_balance(
@@ -684,7 +706,10 @@ fn mfi_balance(
 ) -> Result<(u64, u64), Box<dyn std::error::Error>> {
     let bank_address = mfi_lookup_bank_address(token)?;
     let bank = mfi_load_bank(rpc_client, bank_address)?;
-    let (_user_account_address, user_account) = mfi_load_user_account(wallet_address)?;
+    let user_account = match mfi_load_user_account(wallet_address)? {
+        None => return Ok((0, 0)),
+        Some((_user_account_address, user_account)) => user_account,
+    };
 
     match user_account.lending_account.get_balance(&bank_address) {
         None => Ok((0, 0)),
@@ -716,7 +741,8 @@ fn mfi_deposit_or_withdraw(
         );
     }
 
-    let (user_account_address, user_account) = mfi_load_user_account(wallet_address)?;
+    let (user_account_address, user_account) = mfi_load_user_account(wallet_address)?
+        .ok_or_else(|| format!("No MarginFi account found for {}", wallet_address))?;
 
     let (instructions, required_compute_units, amount) = match op {
         Operation::Deposit => {
@@ -943,10 +969,10 @@ fn kamino_find_obligation_address(wallet_address: Pubkey, lending_market: Pubkey
 
 fn kamino_unsafe_load_obligation(
     rpc_client: &RpcClient,
-    wallet_address: Pubkey,
+    obligation_address: Pubkey,
 ) -> Result<kamino::Obligation, Box<dyn std::error::Error>> {
     const LEN: usize = std::mem::size_of::<kamino::Obligation>();
-    let account_data: [u8; LEN] = rpc_client.get_account_data(&wallet_address)?[8..LEN + 8]
+    let account_data: [u8; LEN] = rpc_client.get_account_data(&obligation_address)?[8..LEN + 8]
         .try_into()
         .unwrap();
     let obligation = unsafe { std::mem::transmute(account_data) };
@@ -962,6 +988,9 @@ fn kamino_deposited_amount(
     let (market_reserve_address, reserve) = kamino_load_pool_reserve(rpc_client, pool, token)?;
     let lending_market = reserve.lending_market;
     let market_obligation = kamino_find_obligation_address(wallet_address, lending_market);
+    if matches!(rpc_client.get_balance(&market_obligation), Ok(0)) {
+        return Ok(0);
+    }
     let obligation = kamino_unsafe_load_obligation(rpc_client, market_obligation)?;
 
     let collateral_deposited_amount = obligation
