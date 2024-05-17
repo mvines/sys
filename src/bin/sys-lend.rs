@@ -204,17 +204,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .long("from")
                         .value_name("POOL")
                         .takes_value(true)
-                        .required(true)
                         .multiple(true)
                         .possible_values(&pools)
                         .help("Lending pool to withdraw from. \
-                               If multiple pools are provided, the pool with the lowest APY is selected"),
-                )
-                .arg(
-                    Arg::with_name("skip_withdraw_if_only_one_pool_remains")
-                        .long("skip-if-only-one-pool-remains")
-                        .takes_value(false)
-                        .help("Do not withdraw if only one lending pool remains"),
+                               If multiple pools are provided, the pool with the lowest APY is selected \
+                               [default: all support pools for the specified token]")
                 )
                 .arg(
                     Arg::with_name("signer")
@@ -243,6 +237,47 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ),
         )
         .subcommand(
+            SubCommand::with_name("rebalance")
+                .about("Rebalance tokens between lending pools")
+                .arg(
+                    Arg::with_name("pool")
+                        .long("with")
+                        .value_name("POOLS")
+                        .takes_value(true)
+                        .multiple(true)
+                        .possible_values(&pools)
+                        .help("Lending pool to rebalance with. \
+                              Tokens from the pool with the lowest APY will be moved \
+                              to the pool with the highest APY \
+                              [default: all supported pools for the specified token]")
+                )
+                .arg(
+                    Arg::with_name("signer")
+                        .value_name("KEYPAIR")
+                        .takes_value(true)
+                        .required(true)
+                        .validator(is_valid_signer)
+                        .help("Wallet"),
+                )
+                .arg(
+                    Arg::with_name("amount")
+                        .value_name("AMOUNT")
+                        .takes_value(true)
+                        .validator(is_amount_or_all)
+                        .required(true)
+                        .help("The amount to rebalance; accepts keyword ALL"),
+                )
+                .arg(
+                    Arg::with_name("token")
+                        .value_name("TOKEN")
+                        .takes_value(true)
+                        .required(true)
+                        .validator(is_valid_token)
+                        .default_value("USDC")
+                        .help("Token to rebalance"),
+                ),
+        )
+        .subcommand(
             SubCommand::with_name("supply-balance")
                 .about("Display the current supplied balance for one or more lending pools")
                 .arg(
@@ -252,7 +287,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .takes_value(true)
                         .multiple(true)
                         .possible_values(&pools)
-                        .help("Lending pool [default: all support pools for the specified token]"),
+                        .help("Lending pool [default: all supported pools for the specified token]"),
                 )
                 .arg(
                     Arg::with_name("address")
@@ -282,7 +317,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .takes_value(true)
                         .multiple(true)
                         .possible_values(&pools)
-                        .help("Lending pool [default: all support pools for the specified token]"),
+                        .help("Lending pool [default: all supported pools for the specified token]"),
                 )
                 .arg(
                     Arg::with_name("token")
@@ -359,7 +394,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     match app_matches.subcommand() {
         ("supply-apy", Some(matches)) => {
-            let token = Token::from(value_t_or_exit!(matches, "token", Token));
+            let token = value_t_or_exit!(matches, "token", Token);
             let raw = matches.is_present("raw");
             let bps = matches.is_present("bps");
             let pools = values_t!(matches, "pool", String)
@@ -394,7 +429,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         ("supply-balance", Some(matches)) => {
             let address = pubkey_of(matches, "address").unwrap();
-            let token = Token::from(value_t_or_exit!(matches, "token", Token));
+            let token = value_t_or_exit!(matches, "token", Token);
             let pools = values_t!(matches, "pool", String)
                 .ok()
                 .unwrap_or_else(|| supported_pools_for_token(token));
@@ -421,20 +456,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("{msg}");
             }
         }
-        ("deposit" | "withdraw", Some(matches)) => {
-            let op = match app_matches.subcommand().0 {
-                "withdraw" => Operation::Withdraw,
-                "deposit" => Operation::Deposit,
+        ("deposit" | "withdraw" | "rebalance", Some(matches)) => {
+            #[derive(PartialEq, Clone, Copy)]
+            enum Command {
+                Deposit,
+                Withdraw,
+                Rebalance,
+            }
+
+            let cmd = match app_matches.subcommand().0 {
+                "withdraw" => Command::Withdraw,
+                "deposit" => Command::Deposit,
+                "rebalance" => Command::Rebalance,
                 _ => unreachable!(),
             };
 
             let (signer, address) = signer_of(matches, "signer", &mut wallet_manager)?;
             let address = address.expect("address");
             let signer = signer.expect("signer");
-            let skip_withdraw_if_only_one_pool_remains =
-                matches.is_present("skip_withdraw_if_only_one_pool_remains");
 
-            let token = Token::from(value_t_or_exit!(matches, "token", Token));
+            let token = value_t_or_exit!(matches, "token", Token);
             let pools = values_t!(matches, "pool", String)
                 .ok()
                 .unwrap_or_else(|| supported_pools_for_token(token));
@@ -442,7 +483,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let token_balance = token.balance(&rpc_client, &address)?;
             let amount = match matches.value_of("amount").unwrap() {
                 "ALL" => {
-                    if op == Operation::Deposit {
+                    if cmd == Command::Deposit {
                         token_balance
                     } else {
                         u64::MAX
@@ -451,7 +492,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 amount => token.amount(amount.parse::<f64>().unwrap()),
             };
 
-            if op == Operation::Deposit {
+            if cmd == Command::Deposit {
                 if amount > token_balance {
                     return Err(format!(
                         "Deposit amount of {} is greater than current balance of {}",
@@ -468,79 +509,88 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             is_token_supported(&token, &pools)?;
 
-            let pools = match op {
-                Operation::Deposit => pools,
-                Operation::Withdraw => pools
-                    .into_iter()
-                    .filter(|pool| {
-                        let supply_balance = pool_supply_balance(&rpc_client, pool, token, address)
-                            .unwrap_or_else(|err| {
-                                panic!("Unable to read balance for {pool}: {err}")
-                            });
+            let supply_balance = pools
+                .iter()
+                .map(|pool| {
+                    let supply_balance = pool_supply_balance(&rpc_client, pool, token, address)
+                        .unwrap_or_else(|err| panic!("Unable to read balance for {pool}: {err}"));
+                    (pool.clone(), supply_balance)
+                })
+                .collect::<HashMap<_, _>>();
 
-                        if amount == u64::MAX {
-                            supply_balance > 0
-                        } else {
-                            supply_balance >= amount
-                        }
-                    })
-                    .collect(),
-            };
-            if pools.is_empty() {
-                return Err("No available pools".into());
-            }
+            let supply_apr = pools
+                .iter()
+                .map(|pool| {
+                    let supply_apr = pool_supply_apr(&rpc_client, pool, token)
+                        .unwrap_or_else(|err| panic!("Unable to read apr for {pool}: {err}"));
+                    (pool.clone(), supply_apr)
+                })
+                .collect::<HashMap<_, _>>();
 
-            if skip_withdraw_if_only_one_pool_remains && pools.len() == 1 {
-                println!("Taking no action due to --skip-if-only-one-pool-remains flag");
-                return Ok(());
-            }
-
-            let ordering = if op == Operation::Deposit {
-                std::cmp::Ordering::Less
-            } else {
-                std::cmp::Ordering::Greater
+            // Order pools by low to high APR
+            let pools = {
+                let mut pools = pools;
+                pools.sort_unstable_by(|a, b| {
+                    let a_bps = (supply_apr.get(a).unwrap() * 1000.) as u64;
+                    let b_bps = (supply_apr.get(b).unwrap() * 1000.) as u64;
+                    a_bps.cmp(&b_bps)
+                });
+                pools
             };
 
-            let pool = if pools.len() > 1 {
-                let mut selected_pool = None;
-                let mut selected_apr = None;
+            // Deposit pool has the highest APR
+            let deposit_pool = pools.last();
 
-                for pool in &pools {
-                    let apr = pool_supply_apr(&rpc_client, pool, token)?;
-                    if selected_pool.is_none()
-                        || selected_apr.partial_cmp(&Some(apr)) == Some(ordering)
-                    {
-                        selected_pool = Some(pool);
-                        selected_apr = Some(apr);
+            // Withdraw pool has the lowest APR and a balance >= the requested `amount`
+            let withdraw_pool = pools.iter().find(|pool| {
+                let balance = *supply_balance.get(*pool).unwrap();
+
+                if amount == u64::MAX {
+                    balance > 0
+                } else {
+                    balance >= amount
+                }
+            });
+
+            let ops = match cmd {
+                Command::Deposit => vec![(Operation::Deposit, deposit_pool)],
+                Command::Withdraw => vec![(Operation::Withdraw, withdraw_pool)],
+                Command::Rebalance => vec![
+                    (Operation::Withdraw, withdraw_pool),
+                    (Operation::Deposit, deposit_pool),
+                ],
+            };
+
+            let mut instructions = vec![];
+            let mut address_lookup_tables = vec![];
+            let mut required_compute_units = 0;
+            let mut amount = amount;
+            for (op, pool) in ops {
+                let pool = pool.ok_or("No available pool")?;
+
+                let result = if pool.starts_with("kamino-") {
+                    kamino_deposit_or_withdraw(op, &rpc_client, pool, address, token, amount)?
+                } else if pool == "mfi" {
+                    mfi_deposit_or_withdraw(op, &rpc_client, address, token, amount, false)?
+                } else {
+                    unreachable!();
+                };
+
+                instructions.extend(result.instructions);
+                if let Some(address_lookup_table) = result.address_lookup_table {
+                    address_lookup_tables.push(address_lookup_table);
+                }
+                required_compute_units += result.required_compute_units;
+                amount = result.amount;
+
+                match op {
+                    Operation::Deposit => {
+                        println!("Depositing {} into {}", token.format_amount(amount), pool)
+                    }
+                    Operation::Withdraw => {
+                        println!("Withdrawing {} from {}", token.format_amount(amount), pool)
                     }
                 }
-
-                match selected_pool {
-                    None => return Err("Bug? No pools available".into()),
-                    Some(pool) => pool,
-                }
-            } else {
-                &pools[0]
-            }
-            .clone();
-
-            let DepositOrWithdrawResult {
-                mut instructions,
-                required_compute_units,
-                amount,
-                address_lookup_table,
-            } = if pool.starts_with("kamino-") {
-                kamino_deposit_or_withdraw(op, &rpc_client, &pool, address, token, amount)?
-            } else if pool == "mfi" {
-                mfi_deposit_or_withdraw(op, &rpc_client, address, token, amount, false)?
-            } else {
-                unreachable!();
-            };
-
-            if op == Operation::Deposit {
-                println!("Depositing {} into {}", token.format_amount(amount), pool,);
-            } else {
-                println!("Withdrawing {} from {}", token.format_amount(amount), pool,);
             }
 
             apply_priority_fee(
@@ -549,11 +599,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 required_compute_units,
                 priority_fee,
             )?;
-
-            let mut address_lookup_tables = vec![];
-            if let Some(address_lookup_table) = address_lookup_table {
-                address_lookup_tables.push(address_lookup_table);
-            }
 
             let mut address_lookup_table_accounts = vec![];
             for address_lookup_table in address_lookup_tables {
@@ -592,22 +637,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let signature = transaction.signatures[0];
 
-            let msg = if op == Operation::Deposit {
-                format!(
+            let msg = match cmd {
+                Command::Deposit => format!(
                     "Depositing {} from {} into {} via {}",
                     token.format_amount(amount),
                     address,
-                    pool,
+                    deposit_pool.unwrap(),
                     signature
-                )
-            } else {
-                format!(
+                ),
+                Command::Withdraw => format!(
                     "Withdrew {} from {} into {} via {}",
                     token.format_amount(amount),
-                    pool,
+                    withdraw_pool.unwrap(),
                     address,
                     signature
-                )
+                ),
+                Command::Rebalance => format!(
+                    "Rebalancing {} from {} to {} via {}",
+                    token.format_amount(amount),
+                    withdraw_pool.unwrap(),
+                    deposit_pool.unwrap(),
+                    signature
+                ),
             };
             notifier.send(&msg).await;
             println!("{msg}");
@@ -1305,7 +1356,7 @@ fn kamino_deposit_or_withdraw(
                 ],
             ));
 
-            withdraw_amount
+            withdraw_amount - 1 // HACK!! Sometimes Kamino loses a lamport? This breaks `rebalance`...
         }
         Operation::Deposit => {
             // Instruction: Kamino: Deposit Reserve Liquidity and Obligation Collateral
