@@ -1,7 +1,5 @@
 use {
-    clap::{
-        value_t, value_t_or_exit, values_t, values_t_or_exit, App, AppSettings, Arg, SubCommand,
-    },
+    clap::{value_t, value_t_or_exit, values_t, App, AppSettings, Arg, SubCommand},
     solana_account_decoder::UiAccountEncoding,
     solana_clap_utils::{self, input_parsers::*, input_validators::*},
     solana_client::{
@@ -10,14 +8,15 @@ use {
         rpc_filter::{self, RpcFilterType},
     },
     solana_sdk::{
+        address_lookup_table::{state::AddressLookupTable, AddressLookupTableAccount},
         commitment_config::CommitmentConfig,
         instruction::{AccountMeta, Instruction},
-        message::Message,
+        message::{self, Message, VersionedMessage},
         native_token::sol_to_lamports,
         pubkey,
         pubkey::Pubkey,
         system_program, sysvar,
-        transaction::Transaction,
+        transaction::{Transaction, VersionedTransaction},
     },
     std::collections::{HashMap, HashSet},
     sys::{
@@ -32,10 +31,29 @@ use {
 
 lazy_static::lazy_static! {
     static ref SUPPORTED_TOKENS: HashMap<&'static str, HashSet::<MaybeToken>> = HashMap::from([
-        ("mfi", HashSet::from([Token::USDC.into(), Token::USDT.into(), Token::UXD.into()])) ,
-        ("kamino-main", HashSet::from([Token::USDC.into(), Token::USDT.into()])) ,
-        ("kamino-jlp", HashSet::from([Token::USDC.into(), Token::JLP.into()])) ,
-        ("kamino-altcoins", HashSet::from([Token::USDC.into()]))
+        ("mfi", HashSet::from([
+            Token::USDC.into(),
+            Token::USDT.into(),
+            Token::UXD.into()
+        ])) ,
+        ("kamino-main", HashSet::from([
+            Token::USDC.into(),
+            Token::USDT.into(),
+            Token::JitoSOL.into()
+        ])) ,
+        ("kamino-jlp", HashSet::from([
+            Token::USDC.into(),
+            Token::JLP.into()
+        ])) ,
+        ("kamino-altcoins", HashSet::from([
+            Token::USDC.into(),
+            Token::JUP.into(),
+            Token::JTO.into(),
+            Token::PYTH.into(),
+            Token::WEN.into(),
+            Token::WIF.into(),
+            Token::BONK.into(),
+        ]))
     ]);
 }
 
@@ -149,10 +167,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .long("into")
                         .value_name("POOL")
                         .takes_value(true)
-                        .required(true)
                         .multiple(true)
                         .possible_values(&pools)
-                        .help("Lending pool to deposit into. If multiple pools are provided, the pool with the highest APY is selected"),
+                        .help("Lending pool to deposit into. \
+                              If multiple pools are provided, the pool with the highest APY is selected \
+                              [default: all support pools for the specified token]")
                 )
                 .arg(
                     Arg::with_name("signer")
@@ -191,7 +210,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .required(true)
                         .multiple(true)
                         .possible_values(&pools)
-                        .help("Lending pool to withdraw from. If multiple pools are provided, the pool with the lowest APY is selected"),
+                        .help("Lending pool to withdraw from. \
+                               If multiple pools are provided, the pool with the lowest APY is selected"),
                 )
                 .arg(
                     Arg::with_name("skip_withdraw_if_only_one_pool_remains")
@@ -418,7 +438,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 matches.is_present("skip_withdraw_if_only_one_pool_remains");
 
             let token = MaybeToken::from(value_t!(matches, "token", Token).ok());
-            let pools = values_t_or_exit!(matches, "pool", String);
+            let pools = values_t!(matches, "pool", String)
+                .ok()
+                .unwrap_or_else(|| supported_pools_for_token(token));
 
             let token_balance = token.balance(&rpc_client, &address)?;
             let amount = match matches.value_of("amount").unwrap() {
@@ -509,6 +531,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 mut instructions,
                 required_compute_units,
                 amount,
+                address_lookup_table,
             } = if pool.starts_with("kamino-") {
                 kamino_deposit_or_withdraw(op, &rpc_client, &pool, address, token, amount)?
             } else if pool == "mfi" {
@@ -533,16 +556,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let (recent_blockhash, last_valid_block_height) =
                 rpc_client.get_latest_blockhash_with_commitment(rpc_client.commitment())?;
 
-            let mut message = Message::new(&instructions, Some(&address));
-            message.recent_blockhash = recent_blockhash;
-
-            let mut transaction = Transaction::new_unsigned(message);
+            let transaction = match address_lookup_table {
+                Some(address_lookup_table) => {
+                    let raw_account = rpc_client.get_account(&address_lookup_table)?;
+                    let address_lookup_table_data =
+                        AddressLookupTable::deserialize(&raw_account.data)?;
+                    let address_lookup_table_account = AddressLookupTableAccount {
+                        key: address_lookup_table,
+                        addresses: address_lookup_table_data.addresses.to_vec(),
+                    };
+                    VersionedTransaction::try_new(
+                        VersionedMessage::V0(message::v0::Message::try_compile(
+                            &signer.pubkey(),
+                            &instructions,
+                            &[address_lookup_table_account],
+                            recent_blockhash,
+                        )?),
+                        &vec![signer],
+                    )?
+                }
+                None => {
+                    let mut message = Message::new(&instructions, Some(&address));
+                    message.recent_blockhash = recent_blockhash;
+                    let mut transaction = Transaction::new_unsigned(message);
+                    transaction.try_sign(&vec![signer], recent_blockhash)?;
+                    transaction.into()
+                }
+            };
             let simulation_result = rpc_client.simulate_transaction(&transaction)?.value;
             if simulation_result.err.is_some() {
                 return Err(format!("Simulation failure: {simulation_result:?}").into());
             }
 
-            transaction.try_sign(&vec![signer], recent_blockhash)?;
             let signature = transaction.signatures[0];
 
             let msg = if op == Operation::Deposit {
@@ -873,6 +918,7 @@ fn mfi_deposit_or_withdraw(
         instructions,
         required_compute_units,
         amount,
+        address_lookup_table: None,
     })
 }
 
@@ -880,6 +926,7 @@ struct DepositOrWithdrawResult {
     instructions: Vec<Instruction>,
     required_compute_units: u32,
     amount: u64,
+    address_lookup_table: Option<Pubkey>,
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -916,11 +963,41 @@ fn kamino_load_pool_reserve(
                 Some(Token::USDT),
                 pubkey!["H3t6qZ1JkguCNTi9uzVKqQ7dvt2cum4XiXWom6Gn5e5S"],
             ),
+            (
+                Some(Token::JitoSOL),
+                pubkey!["EVbyPKrHG6WBfm4dLxLMJpUDY43cCAcHSpV3KYjKsktW"],
+            ),
         ]),
-        "kamino-altcoins" => HashMap::from([(
-            Some(Token::USDC),
-            pubkey!["9TD2TSv4pENb8VwfbVYg25jvym7HN6iuAR6pFNSrKjqQ"],
-        )]),
+        "kamino-altcoins" => HashMap::from([
+            (
+                Some(Token::USDC),
+                pubkey!["9TD2TSv4pENb8VwfbVYg25jvym7HN6iuAR6pFNSrKjqQ"],
+            ),
+            (
+                Some(Token::JUP),
+                pubkey!["3AKyRviT87dt9jP3RHpfFjxmSVNbR68Wx7UejnUyaSFH"],
+            ),
+            (
+                Some(Token::JTO),
+                pubkey!["8PYYKF4ZvteefFBmtb9SMHmhZKnDWQH86z59mPZBfhHu"],
+            ),
+            (
+                Some(Token::PYTH),
+                pubkey!["HXSE82voKcf8x2rdeLr73yASNhzWWGcTz3Shq6UFaEHA"],
+            ),
+            (
+                Some(Token::WEN),
+                pubkey!["G6wtWpanuKmtqqjkpHpLsp21d7DKJpWQydKojGs2kuHQ"],
+            ),
+            (
+                Some(Token::WIF),
+                pubkey!["GvPEtF7MsZceLbrrjprfcKN9quJ7EW221c4H9TVuWQUo"],
+            ),
+            (
+                Some(Token::BONK),
+                pubkey!["CoFdsnQeCUyJefhKK6GQaAPT9PEx8Xcs2jejtp9jgn38"],
+            ),
+        ]),
         "kamino-jlp" => HashMap::from([
             (
                 Some(Token::USDC),
@@ -931,9 +1008,8 @@ fn kamino_load_pool_reserve(
                 pubkey!["DdTmCCjv7zHRD1hJv3E8bpnSEQBzdKkzB1j9ApXX5QoP"],
             ),
         ]),
-        _ => HashMap::default(),
+        _ => unreachable!(),
     };
-
     let market_reserve_address = *market_reserve_map
         .get(&token.token())
         .ok_or_else(|| format!("{pool}: {token} is not supported"))?;
@@ -1026,6 +1102,16 @@ fn kamino_deposit_or_withdraw(
 
     let market_obligation = kamino_find_obligation_address(wallet_address, lending_market);
     let obligation = kamino_unsafe_load_obligation(rpc_client, market_obligation)?;
+
+    let obligation_farm_user_state = Pubkey::find_program_address(
+        &[
+            b"user",
+            &reserve_farm_state.to_bytes(),
+            &market_obligation.to_bytes(),
+        ],
+        &FARMS_PROGRAM,
+    )
+    .0;
 
     let obligation_market_reserves = obligation
         .deposits
@@ -1128,18 +1214,7 @@ fn kamino_deposit_or_withdraw(
             // Reserve Farm State
             AccountMeta::new(reserve_farm_state, false),
             // Obligation Farm User State
-            AccountMeta::new(
-                Pubkey::find_program_address(
-                    &[
-                        b"user",
-                        &reserve_farm_state.to_bytes(),
-                        &market_obligation.to_bytes(),
-                    ],
-                    &FARMS_PROGRAM,
-                )
-                .0,
-                false,
-            ),
+            AccountMeta::new(obligation_farm_user_state, false),
             // Lending Market
             AccountMeta::new_readonly(lending_market, false),
             // Farms Program
@@ -1153,7 +1228,14 @@ fn kamino_deposit_or_withdraw(
         ],
     );
 
-    instructions.push(kamino_refresh_obligation_farms_for_reserve.clone());
+    if reserve_farm_state != Pubkey::default() {
+        if rpc_client.get_balance(&obligation_farm_user_state)? == 0 {
+            return Err(
+                format!("Manually deposit {token} into Kamino before using sys-lend").into(),
+            );
+        }
+        instructions.push(kamino_refresh_obligation_farms_for_reserve.clone());
+    }
 
     let amount = match op {
         Operation::Withdraw => {
@@ -1273,11 +1355,19 @@ fn kamino_deposit_or_withdraw(
     };
 
     // Instruction: Kamino: Refresh Obligation Farms For Reserve
-    instructions.push(kamino_refresh_obligation_farms_for_reserve);
+    if reserve_farm_state != Pubkey::default() {
+        instructions.push(kamino_refresh_obligation_farms_for_reserve);
+    }
 
     Ok(DepositOrWithdrawResult {
         instructions,
         required_compute_units: 500_000,
         amount,
+        address_lookup_table: Some(match pool {
+            "kamino-main" => pubkey!["284iwGtA9X9aLy3KsyV8uT2pXLARhYbiSi5SiM2g47M2"],
+            "kamino-altcoins" => pubkey!["x2uEQSaqrZs5UnyXjiNktRhrAy6iNFeSKai9VNYFFuy"],
+            "kamino-jlp" => pubkey!["GprZNyWk67655JhX6Rq9KoebQ6WkQYRhATWzkx2P2LNc"],
+            _ => unreachable!(),
+        }),
     })
 }
