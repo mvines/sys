@@ -553,35 +553,40 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 priority_fee,
             )?;
 
+            let mut address_lookup_tables = vec![];
+            if let Some(address_lookup_table) = address_lookup_table {
+                address_lookup_tables.push(address_lookup_table);
+            }
+
+            let mut address_lookup_table_accounts = vec![];
+            for address_lookup_table in address_lookup_tables {
+                let raw_account = rpc_client.get_account(&address_lookup_table)?;
+                let address_lookup_table_data = AddressLookupTable::deserialize(&raw_account.data)?;
+                address_lookup_table_accounts.push(AddressLookupTableAccount {
+                    key: address_lookup_table,
+                    addresses: address_lookup_table_data.addresses.to_vec(),
+                });
+            }
+
             let (recent_blockhash, last_valid_block_height) =
                 rpc_client.get_latest_blockhash_with_commitment(rpc_client.commitment())?;
 
-            let transaction = match address_lookup_table {
-                Some(address_lookup_table) => {
-                    let raw_account = rpc_client.get_account(&address_lookup_table)?;
-                    let address_lookup_table_data =
-                        AddressLookupTable::deserialize(&raw_account.data)?;
-                    let address_lookup_table_account = AddressLookupTableAccount {
-                        key: address_lookup_table,
-                        addresses: address_lookup_table_data.addresses.to_vec(),
-                    };
-                    VersionedTransaction::try_new(
-                        VersionedMessage::V0(message::v0::Message::try_compile(
-                            &signer.pubkey(),
-                            &instructions,
-                            &[address_lookup_table_account],
-                            recent_blockhash,
-                        )?),
-                        &vec![signer],
-                    )?
-                }
-                None => {
-                    let mut message = Message::new(&instructions, Some(&address));
-                    message.recent_blockhash = recent_blockhash;
-                    let mut transaction = Transaction::new_unsigned(message);
-                    transaction.try_sign(&vec![signer], recent_blockhash)?;
-                    transaction.into()
-                }
+            let transaction = if address_lookup_table_accounts.is_empty() {
+                let mut message = Message::new(&instructions, Some(&address));
+                message.recent_blockhash = recent_blockhash;
+                let mut transaction = Transaction::new_unsigned(message);
+                transaction.try_sign(&vec![signer], recent_blockhash)?;
+                transaction.into()
+            } else {
+                VersionedTransaction::try_new(
+                    VersionedMessage::V0(message::v0::Message::try_compile(
+                        &signer.pubkey(),
+                        &instructions,
+                        &address_lookup_table_accounts,
+                        recent_blockhash,
+                    )?),
+                    &vec![signer],
+                )?
             };
             let simulation_result = rpc_client.simulate_transaction(&transaction)?.value;
             if simulation_result.err.is_some() {
@@ -918,7 +923,7 @@ fn mfi_deposit_or_withdraw(
         instructions,
         required_compute_units,
         amount,
-        address_lookup_table: None,
+        address_lookup_table: Some(pubkey!["2FyGQ8UZ6PegCSN2Lu7QD1U2UY28GpJdDfdwEfbwxN7p"]),
     })
 }
 
