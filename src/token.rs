@@ -267,6 +267,18 @@ impl Token {
             .into()),
         }
     }
+
+    pub fn format_amount(&self, amount: u64) -> String {
+        self.format_ui_amount(self.ui_amount(amount))
+    }
+
+    pub fn format_ui_amount(&self, ui_amount: f64) -> String {
+        format!(
+            "{}{}",
+            self.symbol(),
+            ui_amount.separated_string_with_fixed_place(2)
+        )
+    }
 }
 
 pub fn is_valid_token_or_sol(value: String) -> Result<(), String> {

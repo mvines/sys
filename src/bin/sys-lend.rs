@@ -30,29 +30,29 @@ use {
 };
 
 lazy_static::lazy_static! {
-    static ref SUPPORTED_TOKENS: HashMap<&'static str, HashSet::<MaybeToken>> = HashMap::from([
+    static ref SUPPORTED_TOKENS: HashMap<&'static str, HashSet::<Token>> = HashMap::from([
         ("mfi", HashSet::from([
-            Token::USDC.into(),
-            Token::USDT.into(),
-            Token::UXD.into()
+            Token::USDC,
+            Token::USDT,
+            Token::UXD
         ])) ,
         ("kamino-main", HashSet::from([
-            Token::USDC.into(),
-            Token::USDT.into(),
-            Token::JitoSOL.into()
+            Token::USDC,
+            Token::USDT,
+            Token::JitoSOL
         ])) ,
         ("kamino-jlp", HashSet::from([
-            Token::USDC.into(),
-            Token::JLP.into()
+            Token::USDC,
+            Token::JLP
         ])) ,
         ("kamino-altcoins", HashSet::from([
-            Token::USDC.into(),
-            Token::JUP.into(),
-            Token::JTO.into(),
-            Token::PYTH.into(),
-            Token::WEN.into(),
-            Token::WIF.into(),
-            Token::BONK.into(),
+            Token::USDC,
+            Token::JUP,
+            Token::JTO,
+            Token::PYTH,
+            Token::WEN,
+            Token::WIF,
+            Token::BONK,
         ]))
     ]);
 }
@@ -69,7 +69,7 @@ mod dp {
     pub fn supply_balance(
         pool: &str,
         address: &Pubkey,
-        maybe_token: MaybeToken,
+        maybe_token: Token,
         ui_amount: f64,
     ) -> metrics::Point {
         metrics::Point::new("sys_lend::supply_balance")
@@ -79,7 +79,7 @@ mod dp {
             .field("amount", ui_amount)
     }
 
-    pub fn supply_apy(pool: &str, maybe_token: MaybeToken, apy_bps: u64) -> metrics::Point {
+    pub fn supply_apy(pool: &str, maybe_token: Token, apy_bps: u64) -> metrics::Point {
         metrics::Point::new("sys_lend::supply_apy")
             .tag("pool", pool)
             .tag("token", maybe_token.name())
@@ -87,10 +87,7 @@ mod dp {
     }
 }
 
-fn is_token_supported(
-    token: &MaybeToken,
-    pools: &[String],
-) -> Result<(), Box<dyn std::error::Error>> {
+fn is_token_supported(token: &Token, pools: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     for pool in pools {
         if !SUPPORTED_TOKENS.get(pool.as_str()).unwrap().contains(token) {
             return Err(format!("{token} is not supported by {pool}").into());
@@ -100,7 +97,7 @@ fn is_token_supported(
     Ok(())
 }
 
-fn supported_pools_for_token(token: MaybeToken) -> Vec<String> {
+fn supported_pools_for_token(token: Token) -> Vec<String> {
     let mut supported_tokens: Vec<_> = SUPPORTED_TOKENS
         .iter()
         .filter_map(|(pool, tokens)| {
@@ -191,10 +188,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 )
                 .arg(
                     Arg::with_name("token")
-                        .value_name("SOL or SPL Token")
+                        .value_name("TOKEN")
                         .takes_value(true)
                         .required(true)
-                        .validator(is_valid_token_or_sol)
+                        .validator(is_valid_token)
                         .default_value("USDC")
                         .help("Token to deposit"),
                 ),
@@ -237,10 +234,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 )
                 .arg(
                     Arg::with_name("token")
-                        .value_name("SOL or SPL Token")
+                        .value_name("TOKEN")
                         .takes_value(true)
                         .required(true)
-                        .validator(is_valid_token_or_sol)
+                        .validator(is_valid_token)
                         .default_value("USDC")
                         .help("Token to withdraw"),
                 ),
@@ -267,10 +264,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 )
                 .arg(
                     Arg::with_name("token")
-                        .value_name("SOL or SPL Token")
+                        .value_name("TOKEN")
                         .takes_value(true)
                         .required(true)
-                        .validator(is_valid_token_or_sol)
+                        .validator(is_valid_token)
                         .default_value("USDC")
                         .help("Token to deposit"),
                 ),
@@ -289,10 +286,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 )
                 .arg(
                     Arg::with_name("token")
-                        .value_name("SOL or SPL Token")
+                        .value_name("TOKEN")
                         .takes_value(true)
                         .required(true)
-                        .validator(is_valid_token_or_sol)
+                        .validator(is_valid_token)
                         .default_value("USDC")
                         .help("Token to deposit"),
                 )
@@ -334,7 +331,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     fn pool_supply_apr(
         rpc_client: &RpcClient,
         pool: &str,
-        token: MaybeToken,
+        token: Token,
     ) -> Result<f64, Box<dyn std::error::Error>> {
         Ok(if pool.starts_with("kamino-") {
             kamino_apr(rpc_client, pool, token)?
@@ -348,7 +345,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     fn pool_supply_balance(
         rpc_client: &RpcClient,
         pool: &str,
-        token: MaybeToken,
+        token: Token,
         address: Pubkey,
     ) -> Result<u64, Box<dyn std::error::Error>> {
         Ok(if pool.starts_with("kamino-") {
@@ -362,7 +359,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     match app_matches.subcommand() {
         ("supply-apy", Some(matches)) => {
-            let token = MaybeToken::from(value_t!(matches, "token", Token).ok());
+            let token = Token::from(value_t_or_exit!(matches, "token", Token));
             let raw = matches.is_present("raw");
             let bps = matches.is_present("bps");
             let pools = values_t!(matches, "pool", String)
@@ -397,7 +394,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         ("supply-balance", Some(matches)) => {
             let address = pubkey_of(matches, "address").unwrap();
-            let token = MaybeToken::from(value_t!(matches, "token", Token).ok());
+            let token = Token::from(value_t_or_exit!(matches, "token", Token));
             let pools = values_t!(matches, "pool", String)
                 .ok()
                 .unwrap_or_else(|| supported_pools_for_token(token));
@@ -437,7 +434,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let skip_withdraw_if_only_one_pool_remains =
                 matches.is_present("skip_withdraw_if_only_one_pool_remains");
 
-            let token = MaybeToken::from(value_t!(matches, "token", Token).ok());
+            let token = Token::from(value_t_or_exit!(matches, "token", Token));
             let pools = values_t!(matches, "pool", String)
                 .ok()
                 .unwrap_or_else(|| supported_pools_for_token(token));
@@ -640,11 +637,11 @@ fn apr_to_apy(apr: f64) -> f64 {
 const MFI_LEND_PROGRAM: Pubkey = pubkey!["MFv2hWf31Z9kbCa1snEPYctwafyhdvnV7FZnsebVacA"];
 const MARGINFI_GROUP: Pubkey = pubkey!["4qp6Fx6tnZkY5Wropq9wUYgtFxXKwE6viZxFHg3rdAG8"];
 
-fn mfi_lookup_bank_address(token: MaybeToken) -> Result<Pubkey, Box<dyn std::error::Error>> {
-    match token.token() {
-        Some(Token::USDC) => Some(pubkey!["2s37akK2eyBbp8DZgCm7RtsaEz8eJP3Nxd4urLHQv7yB"]),
-        Some(Token::USDT) => Some(pubkey!["HmpMfL8942u22htC4EMiWgLX931g3sacXFR6KjuLgKLV"]),
-        Some(Token::UXD) => Some(pubkey!["BeNBJrAh1tZg5sqgt8D6AWKJLD5KkBrfZvtcgd7EuiAR"]),
+fn mfi_lookup_bank_address(token: Token) -> Result<Pubkey, Box<dyn std::error::Error>> {
+    match token {
+        Token::USDC => Some(pubkey!["2s37akK2eyBbp8DZgCm7RtsaEz8eJP3Nxd4urLHQv7yB"]),
+        Token::USDT => Some(pubkey!["HmpMfL8942u22htC4EMiWgLX931g3sacXFR6KjuLgKLV"]),
+        Token::UXD => Some(pubkey!["BeNBJrAh1tZg5sqgt8D6AWKJLD5KkBrfZvtcgd7EuiAR"]),
         _ => None,
     }
     .ok_or_else(|| format!("mfi_load_bank: {token} is not supported").into())
@@ -692,7 +689,7 @@ fn mfi_calc_bank_apr(bank: &marginfi_v2::Bank) -> f64 {
         .to_num::<f64>()
 }
 
-fn mfi_apr(rpc_client: &RpcClient, token: MaybeToken) -> Result<f64, Box<dyn std::error::Error>> {
+fn mfi_apr(rpc_client: &RpcClient, token: Token) -> Result<f64, Box<dyn std::error::Error>> {
     let bank_address = mfi_lookup_bank_address(token)?;
     let bank = mfi_load_bank(rpc_client, bank_address)?;
     Ok(mfi_calc_bank_apr(&bank))
@@ -752,7 +749,7 @@ fn mfi_load_user_account(
 fn mfi_balance(
     rpc_client: &RpcClient,
     wallet_address: Pubkey,
-    token: MaybeToken,
+    token: Token,
 ) -> Result<(u64, u64), Box<dyn std::error::Error>> {
     let bank_address = mfi_lookup_bank_address(token)?;
     let bank = mfi_load_bank(rpc_client, bank_address)?;
@@ -778,7 +775,7 @@ fn mfi_deposit_or_withdraw(
     op: Operation,
     rpc_client: &RpcClient,
     wallet_address: Pubkey,
-    token: MaybeToken,
+    token: Token,
     amount: u64,
     verbose: bool,
 ) -> Result<DepositOrWithdrawResult, Box<dyn std::error::Error>> {
@@ -956,67 +953,67 @@ fn kamino_unsafe_load_reserve(
 fn kamino_load_pool_reserve(
     rpc_client: &RpcClient,
     pool: &str,
-    token: MaybeToken,
+    token: Token,
 ) -> Result<(Pubkey, kamino::Reserve), Box<dyn std::error::Error>> {
     let market_reserve_map = match pool {
         "kamino-main" => HashMap::from([
             (
-                Some(Token::USDC),
+                Token::USDC,
                 pubkey!["D6q6wuQSrifJKZYpR1M8R4YawnLDtDsMmWM1NbBmgJ59"],
             ),
             (
-                Some(Token::USDT),
+                Token::USDT,
                 pubkey!["H3t6qZ1JkguCNTi9uzVKqQ7dvt2cum4XiXWom6Gn5e5S"],
             ),
             (
-                Some(Token::JitoSOL),
+                Token::JitoSOL,
                 pubkey!["EVbyPKrHG6WBfm4dLxLMJpUDY43cCAcHSpV3KYjKsktW"],
             ),
         ]),
         "kamino-altcoins" => HashMap::from([
             (
-                Some(Token::USDC),
+                Token::USDC,
                 pubkey!["9TD2TSv4pENb8VwfbVYg25jvym7HN6iuAR6pFNSrKjqQ"],
             ),
             (
-                Some(Token::JUP),
+                Token::JUP,
                 pubkey!["3AKyRviT87dt9jP3RHpfFjxmSVNbR68Wx7UejnUyaSFH"],
             ),
             (
-                Some(Token::JTO),
+                Token::JTO,
                 pubkey!["8PYYKF4ZvteefFBmtb9SMHmhZKnDWQH86z59mPZBfhHu"],
             ),
             (
-                Some(Token::PYTH),
+                Token::PYTH,
                 pubkey!["HXSE82voKcf8x2rdeLr73yASNhzWWGcTz3Shq6UFaEHA"],
             ),
             (
-                Some(Token::WEN),
+                Token::WEN,
                 pubkey!["G6wtWpanuKmtqqjkpHpLsp21d7DKJpWQydKojGs2kuHQ"],
             ),
             (
-                Some(Token::WIF),
+                Token::WIF,
                 pubkey!["GvPEtF7MsZceLbrrjprfcKN9quJ7EW221c4H9TVuWQUo"],
             ),
             (
-                Some(Token::BONK),
+                Token::BONK,
                 pubkey!["CoFdsnQeCUyJefhKK6GQaAPT9PEx8Xcs2jejtp9jgn38"],
             ),
         ]),
         "kamino-jlp" => HashMap::from([
             (
-                Some(Token::USDC),
+                Token::USDC,
                 pubkey!["Ga4rZytCpq1unD4DbEJ5bkHeUz9g3oh9AAFEi6vSauXp"],
             ),
             (
-                Some(Token::JLP),
+                Token::JLP,
                 pubkey!["DdTmCCjv7zHRD1hJv3E8bpnSEQBzdKkzB1j9ApXX5QoP"],
             ),
         ]),
         _ => unreachable!(),
     };
     let market_reserve_address = *market_reserve_map
-        .get(&token.token())
+        .get(&token)
         .ok_or_else(|| format!("{pool}: {token} is not supported"))?;
 
     let reserve = kamino_unsafe_load_reserve(rpc_client, market_reserve_address)?;
@@ -1027,7 +1024,7 @@ fn kamino_load_pool_reserve(
 fn kamino_apr(
     rpc_client: &RpcClient,
     pool: &str,
-    token: MaybeToken,
+    token: Token,
 ) -> Result<f64, Box<dyn std::error::Error>> {
     let (_market_reserve_address, reserve) = kamino_load_pool_reserve(rpc_client, pool, token)?;
     Ok(reserve.current_supply_apr())
@@ -1064,7 +1061,7 @@ fn kamino_deposited_amount(
     rpc_client: &RpcClient,
     pool: &str,
     wallet_address: Pubkey,
-    token: MaybeToken,
+    token: Token,
 ) -> Result<u64, Box<dyn std::error::Error>> {
     let (market_reserve_address, reserve) = kamino_load_pool_reserve(rpc_client, pool, token)?;
     let lending_market = reserve.lending_market;
@@ -1090,7 +1087,7 @@ fn kamino_deposit_or_withdraw(
     rpc_client: &RpcClient,
     pool: &str,
     wallet_address: Pubkey,
-    token: MaybeToken,
+    token: Token,
     amount: u64,
 ) -> Result<DepositOrWithdrawResult, Box<dyn std::error::Error>> {
     let (market_reserve_address, reserve) = kamino_load_pool_reserve(rpc_client, pool, token)?;
