@@ -2501,7 +2501,36 @@ async fn process_account_list(
         println!();
 
         println!("Current Holdings");
-        for (held_token, (current_token_price, total_held_amount, unrealized_gain)) in held_tokens {
+        let mut held_tokens = held_tokens
+            .into_iter()
+            .map(
+                |(held_token, (current_token_price, total_held_amount, unrealized_gain))| {
+                    let total_value = current_token_price.map(|current_token_price| {
+                        f64::try_from(
+                            Decimal::from_f64(held_token.ui_amount(total_held_amount)).unwrap()
+                                * current_token_price,
+                        )
+                        .unwrap()
+                    });
+
+                    (
+                        held_token,
+                        total_value,
+                        current_token_price,
+                        total_held_amount,
+                        unrealized_gain,
+                    )
+                },
+            )
+            .collect::<Vec<_>>();
+
+        // Order current holdings by `total_value`
+        held_tokens
+            .sort_unstable_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        for (held_token, total_value, current_token_price, total_held_amount, unrealized_gain) in
+            held_tokens
+        {
             if total_held_amount == 0 {
                 continue;
             }
@@ -2526,13 +2555,8 @@ async fn process_account_list(
                 "  {:<7}       {:<20} (${:14} ; ${} per {}{})",
                 held_token.to_string(),
                 held_token.format_amount(total_held_amount),
-                current_token_price
-                    .map(|current_token_price| f64::try_from(
-                        Decimal::from_f64(held_token.ui_amount(total_held_amount)).unwrap()
-                            * current_token_price
-                    )
-                    .unwrap()
-                    .separated_string_with_fixed_place(2))
+                total_value
+                    .map(|tv| tv.separated_string_with_fixed_place(2))
                     .unwrap_or_else(|| "?".into()),
                 current_token_price
                     .map(|current_token_price| f64::try_from(current_token_price)
