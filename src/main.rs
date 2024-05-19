@@ -934,7 +934,7 @@ async fn process_exchange_sell(
     println!("Placing sell order for ◎{amount} at ${price}");
     println!("Lots");
     for lot in &order_lots {
-        println_lot(
+        maybe_println_lot(
             deposit_account.token,
             lot,
             Decimal::from_f64(price),
@@ -944,6 +944,7 @@ async fn process_exchange_sell(
             &mut false,
             &mut 0.,
             None,
+            true,
             true,
         )
         .await;
@@ -1679,7 +1680,7 @@ fn liquidity_token_ui_amount(
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn println_lot(
+async fn maybe_println_lot(
     token: MaybeToken,
     lot: &Lot,
     current_price: Option<Decimal>,
@@ -1690,6 +1691,7 @@ async fn println_lot(
     total_current_value: &mut f64,
     notifier: Option<&Notifier>,
     verbose: bool,
+    print: bool,
 ) {
     let current_value = current_price.map(|current_price| {
         f64::try_from(Decimal::from_f64(token.ui_amount(lot.amount)).unwrap() * current_price)
@@ -1761,13 +1763,16 @@ async fn println_lot(
         description,
     );
 
-    if !token.fiat_fungible() {
-        if let Some(notifier) = notifier {
-            notifier.send(&msg).await;
-        }
+    // if !token.fiat_fungible() {
 
+    if let Some(notifier) = notifier {
+        notifier.send(&msg).await;
+    }
+
+    if print {
         println!("{msg}");
     }
+    // }
 }
 
 fn format_disposed_lot(
@@ -1920,7 +1925,7 @@ async fn process_account_add(
             acquisition: LotAcquistion::new(when.unwrap_or_else(today), decimal_price, kind),
             amount,
         };
-        println_lot(
+        maybe_println_lot(
             token,
             &lot,
             Some(current_price),
@@ -1930,6 +1935,7 @@ async fn process_account_add(
             &mut false,
             &mut 0.,
             None,
+            true,
             true,
         )
         .await;
@@ -2096,7 +2102,7 @@ async fn process_account_list(
     db: &Db,
     rpc_client: &RpcClient,
     account_filter: Option<Pubkey>,
-    show_all_disposed_lots: bool,
+    show_all_lots: bool,
     summary_only: bool,
     notifier: &Notifier,
     verbose: bool,
@@ -2219,10 +2225,15 @@ async fn process_account_list(
                 let mut account_unrealized_short_term_gain = 0.;
                 let mut account_unrealized_long_term_gain = 0.;
 
-                for lot in lots {
+                if !show_all_lots && lots.len() > 5 {
+                    println!("  ...");
+                }
+
+                for (i, lot) in lots.iter().enumerate() {
                     let mut account_unrealized_gain = 0.;
                     let mut long_term_cap_gain = false;
-                    println_lot(
+
+                    maybe_println_lot(
                         account.token,
                         lot,
                         current_token_price,
@@ -2233,6 +2244,11 @@ async fn process_account_list(
                         &mut account_current_value,
                         None,
                         verbose,
+                        if show_all_lots {
+                            true
+                        } else {
+                            lots.len() < 5 || (i > lots.len().saturating_sub(5))
+                        },
                     )
                     .await;
 
@@ -2271,7 +2287,7 @@ async fn process_account_list(
                     for lot in lots {
                         let mut account_unrealized_gain = 0.;
                         let mut long_term_cap_gain = false;
-                        println_lot(
+                        maybe_println_lot(
                             account.token,
                             lot,
                             current_token_price,
@@ -2282,6 +2298,7 @@ async fn process_account_list(
                             &mut account_current_value,
                             None,
                             verbose,
+                            true,
                         )
                         .await;
 
@@ -2366,7 +2383,7 @@ async fn process_account_list(
                     verbose,
                 );
 
-                if show_all_disposed_lots {
+                if show_all_lots {
                     println!("{msg}");
                 } else {
                     if disposed_lots.len() > 5 && i == disposed_lots.len().saturating_sub(5) {
@@ -3692,7 +3709,7 @@ async fn process_account_sync(
                 notifier.send(&msg).await;
                 println!("{msg}");
 
-                println_lot(
+                maybe_println_lot(
                     account.token,
                     &lot,
                     Some(current_sol_price),
@@ -3702,6 +3719,7 @@ async fn process_account_sync(
                     &mut false,
                     &mut 0.,
                     Some(notifier),
+                    true,
                     true,
                 )
                 .await;
@@ -3749,7 +3767,7 @@ async fn process_account_sync(
             notifier.send(&msg).await;
             println!("{msg}");
 
-            println_lot(
+            maybe_println_lot(
                 account.token,
                 &lot,
                 Some(current_token_price),
@@ -3759,6 +3777,7 @@ async fn process_account_sync(
                 &mut false,
                 &mut 0.,
                 Some(notifier),
+                true,
                 true,
             )
             .await;
