@@ -85,6 +85,19 @@ mod dp {
             .tag("token", maybe_token.name())
             .field("apy_bps", apy_bps as f64)
     }
+
+    pub fn principal_balance_change(
+        pool: &str,
+        address: &Pubkey,
+        maybe_token: Token,
+        ui_amount: f64,
+    ) -> metrics::Point {
+        metrics::Point::new("sys_lend::principal_balance_change")
+            .tag("pool", pool)
+            .tag("address", metrics::dp::pubkey_to_value(address))
+            .tag("token", maybe_token.name())
+            .field("amount", ui_amount)
+    }
 }
 
 fn is_token_supported(token: &Token, pools: &[String]) -> Result<(), Box<dyn std::error::Error>> {
@@ -615,14 +628,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 required_compute_units += result.required_compute_units;
                 amount = result.amount;
 
-                match op {
+                let principal_balance_change_ui_amount = match op {
                     Operation::Deposit => {
-                        println!("Depositing {} into {}", token.format_amount(amount), pool)
+                        println!("Depositing {} into {}", token.format_amount(amount), pool);
+                        token.ui_amount(amount)
                     }
                     Operation::Withdraw => {
-                        println!("Withdrawing {} from {}", token.format_amount(amount), pool)
+                        println!("Withdrawing {} from {}", token.format_amount(amount), pool);
+                        -token.ui_amount(amount)
                     }
-                }
+                };
+                metrics::push(dp::principal_balance_change(
+                    pool,
+                    &address,
+                    token,
+                    principal_balance_change_ui_amount,
+                ))
+                .await;
             }
 
             apply_priority_fee(
