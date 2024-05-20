@@ -275,7 +275,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .validator(is_valid_token)
                         .default_value("USDC")
                         .help("Token to rebalance"),
-                ),
+                )
+                .arg(
+                    Arg::with_name("minimum_apy_improvement")
+                        .long("minimum-apy-improvement")
+                        .value_name("0..100")
+                        .takes_value(true)
+                        .validator(is_valid_percentage)
+                        .default_value("2")
+                        .help("Skip rebalance if the APY improvement would be less than this percentage")
+                )
         )
         .subcommand(
             SubCommand::with_name("supply-balance")
@@ -479,6 +488,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let pools = values_t!(matches, "pool", String)
                 .ok()
                 .unwrap_or_else(|| supported_pools_for_token(token));
+            let minimum_apy_improvement =
+                value_t!(matches, "minimum_apy_improvement", f64).unwrap_or(100.);
 
             let token_balance = token.balance(&rpc_client, &address)?;
             let amount = match matches.value_of("amount").unwrap() {
@@ -539,18 +550,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
 
             // Deposit pool has the highest APR
-            let deposit_pool = pools.last();
+            let deposit_pool = pools.last().ok_or("No available pool")?;
 
             // Withdraw pool has the lowest APR and a balance >= the requested `amount`
-            let withdraw_pool = pools.iter().find(|pool| {
-                let balance = *supply_balance.get(*pool).unwrap();
+            let withdraw_pool = pools
+                .iter()
+                .find(|pool| {
+                    let balance = *supply_balance.get(*pool).unwrap();
 
-                if amount == u64::MAX {
-                    balance > 0
-                } else {
-                    balance >= amount
-                }
-            });
+                    if amount == u64::MAX {
+                        balance > 0
+                    } else {
+                        balance >= amount
+                    }
+                })
+                .expect("withdraw_pool");
+
+            let apy_improvement = apr_to_apy(
+                supply_apr.get(deposit_pool).unwrap() - supply_apr.get(withdraw_pool).unwrap(),
+            ) * 100.;
 
             let ops = match cmd {
                 Command::Deposit => vec![(Operation::Deposit, deposit_pool)],
@@ -560,6 +578,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         println!("Nothing to rebalance");
                         return Ok(());
                     }
+
+                    if apy_improvement < minimum_apy_improvement {
+                        println!(
+                            "Rebalance from {} to {} will only improve APY by {:.2}% \
+                                 (minimum required improvement: {:.2}%)",
+                            withdraw_pool, deposit_pool, apy_improvement, minimum_apy_improvement
+                        );
+                        return Ok(());
+                    }
+
                     vec![
                         (Operation::Withdraw, withdraw_pool),
                         (Operation::Deposit, deposit_pool),
@@ -572,8 +600,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut required_compute_units = 0;
             let mut amount = amount;
             for (op, pool) in ops {
-                let pool = pool.ok_or("No available pool")?;
-
                 let result = if pool.starts_with("kamino-") {
                     kamino_deposit_or_withdraw(op, &rpc_client, pool, address, token, amount)?
                 } else if pool == "mfi" {
@@ -648,22 +674,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "Depositing {} from {} into {} via {}",
                     token.format_amount(amount),
                     address,
-                    deposit_pool.unwrap(),
+                    deposit_pool,
                     signature
                 ),
                 Command::Withdraw => format!(
                     "Withdrew {} from {} into {} via {}",
                     token.format_amount(amount),
-                    withdraw_pool.unwrap(),
+                    withdraw_pool,
                     address,
                     signature
                 ),
                 Command::Rebalance => format!(
-                    "Rebalancing {} from {} to {} via {}",
+                    "Rebalancing {} from {} to {} via {} for an additional {:.2}%",
                     token.format_amount(amount),
-                    withdraw_pool.unwrap(),
-                    deposit_pool.unwrap(),
-                    signature
+                    withdraw_pool,
+                    deposit_pool,
+                    signature,
+                    apy_improvement,
                 ),
             };
             notifier.send(&msg).await;
