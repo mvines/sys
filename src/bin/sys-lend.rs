@@ -555,10 +555,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let ops = match cmd {
                 Command::Deposit => vec![(Operation::Deposit, deposit_pool)],
                 Command::Withdraw => vec![(Operation::Withdraw, withdraw_pool)],
-                Command::Rebalance => vec![
-                    (Operation::Withdraw, withdraw_pool),
-                    (Operation::Deposit, deposit_pool),
-                ],
+                Command::Rebalance => {
+                    if withdraw_pool == deposit_pool {
+                        println!("Nothing to rebalance");
+                        return Ok(());
+                    }
+                    vec![
+                        (Operation::Withdraw, withdraw_pool),
+                        (Operation::Deposit, deposit_pool),
+                    ]
+                }
             };
 
             let mut instructions = vec![];
