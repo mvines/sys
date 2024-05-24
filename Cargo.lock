@@ -4988,11 +4988,13 @@ dependencies = [
 name = "sys"
 version = "0.1.0"
 dependencies = [
+ "arrayref",
  "async-recursion",
  "async-trait",
  "binance-rs-async",
  "bincode",
  "bs58",
+ "bytemuck",
  "chrono",
  "chrono-humanize",
  "clap 2.33.3",
@@ -5009,6 +5011,8 @@ dependencies = [
  "kraken_sdk_rest",
  "lazy_static",
  "log",
+ "num-derive 0.3.3",
+ "num-traits",
  "pickledb",
  "reqwest",
  "rust_decimal",
@@ -5023,6 +5027,7 @@ dependencies = [
  "solana-cli-output",
  "solana-client",
  "solana-logger",
+ "solana-program",
  "solana-remote-wallet",
  "solana-sdk",
  "solana-transaction-status",

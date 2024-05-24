@@ -13,6 +13,7 @@ use {
         instruction::{AccountMeta, Instruction},
         message::{self, Message, VersionedMessage},
         native_token::sol_to_lamports,
+        program_pack::Pack,
         pubkey,
         pubkey::Pubkey,
         system_program, sysvar,
@@ -25,12 +26,25 @@ use {
         priority_fee::{apply_priority_fee, PriorityFee},
         send_transaction_until_expired,
         token::*,
-        vendor::{kamino, marginfi_v2},
+        vendor::{
+            kamino, marginfi_v2,
+            solend::{self, math::TryMul},
+        },
     },
 };
 
 lazy_static::lazy_static! {
     static ref SUPPORTED_TOKENS: HashMap<&'static str, HashSet::<Token>> = HashMap::from([
+        ("solend-main", HashSet::from([
+            Token::USDC,
+            Token::USDT,
+        ])) ,
+        ("solend-turbosol", HashSet::from([
+            Token::USDC,
+        ])) ,
+        ("solend-jlp", HashSet::from([
+            Token::USDC,
+        ])) ,
         ("mfi", HashSet::from([
             Token::USDC,
             Token::USDT,
@@ -57,7 +71,7 @@ lazy_static::lazy_static! {
     ]);
 }
 
-#[derive(PartialEq, Clone, Copy)]
+#[derive(PartialEq, Clone, Copy, Debug)]
 enum Operation {
     Deposit,
     Withdraw,
@@ -392,6 +406,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ) -> Result<f64, Box<dyn std::error::Error>> {
         Ok(if pool.starts_with("kamino-") {
             kamino_apr(rpc_client, pool, token)?
+        } else if pool.starts_with("solend-") {
+            solend_apr(rpc_client, pool, token)?
         } else if pool == "mfi" {
             mfi_apr(rpc_client, token)?
         } else {
@@ -407,6 +423,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ) -> Result<u64, Box<dyn std::error::Error>> {
         Ok(if pool.starts_with("kamino-") {
             kamino_deposited_amount(rpc_client, pool, address, token)?
+        } else if pool.starts_with("solend-") {
+            solend_deposited_amount(rpc_client, pool, address, token)?
         } else if pool == "mfi" {
             mfi_balance(rpc_client, address, token)?.0
         } else {
@@ -538,6 +556,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .map(|pool| {
                     let supply_balance = pool_supply_balance(&rpc_client, pool, token, address)
                         .unwrap_or_else(|err| panic!("Unable to read balance for {pool}: {err}"));
+
                     (pool.clone(), supply_balance)
                 })
                 .collect::<HashMap<_, _>>();
@@ -577,7 +596,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         balance >= amount
                     }
                 })
-                .expect("withdraw_pool");
+                .unwrap_or(deposit_pool);
 
             let apy_improvement = apr_to_apy(
                 supply_apr.get(deposit_pool).unwrap() - supply_apr.get(withdraw_pool).unwrap(),
@@ -615,6 +634,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             for (op, pool) in ops {
                 let result = if pool.starts_with("kamino-") {
                     kamino_deposit_or_withdraw(op, &rpc_client, pool, address, token, amount)?
+                } else if pool.starts_with("solend-") {
+                    solend_deposit_or_withdraw(op, &rpc_client, pool, address, token, amount)?
                 } else if pool == "mfi" {
                     mfi_deposit_or_withdraw(op, &rpc_client, address, token, amount, false)?
                 } else {
@@ -727,6 +748,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         _ => unreachable!(),
     }
 
+    // Only send metrics on success
     metrics::send(metrics::env_config()).await;
     Ok(())
 }
@@ -1477,5 +1499,355 @@ fn kamino_deposit_or_withdraw(
             "kamino-jlp" => pubkey!["GprZNyWk67655JhX6Rq9KoebQ6WkQYRhATWzkx2P2LNc"],
             _ => unreachable!(),
         }),
+    })
+}
+
+//////////////////////////////////////////////////////////////////////////////
+///[ Solend Stuff ] //////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////////
+
+fn solend_load_reserve(
+    rpc_client: &RpcClient,
+    reserve_address: Pubkey,
+) -> Result<solend::state::Reserve, Box<dyn std::error::Error>> {
+    let account_data = rpc_client.get_account_data(&reserve_address)?;
+    Ok(solend::state::Reserve::unpack(&account_data)?)
+}
+
+fn solend_load_reserve_for_pool(
+    rpc_client: &RpcClient,
+    pool: &str,
+    token: Token,
+) -> Result<(Pubkey, solend::state::Reserve), Box<dyn std::error::Error>> {
+    let market_reserve_map = match pool {
+        "solend-main" => HashMap::from([
+            (
+                Token::USDC,
+                pubkey!["BgxfHJDzm44T7XG68MYKx7YisTjZu73tVovyZSjJMpmw"],
+            ),
+            (
+                Token::USDT,
+                pubkey!["8K9WC8xoh2rtQNY7iEGXtPvfbDCi563SdWhCAhuMP2xE"],
+            ),
+        ]),
+        "solend-turbosol" => HashMap::from([(
+            Token::USDC,
+            pubkey!["EjUgEaPpKMg2nqex9obb46gZQ6Ar9mWSdVKbw9A6PyXA"],
+        )]),
+        "solend-jlp" => HashMap::from([(
+            Token::USDC,
+            pubkey!["GShhnkfbaYy41Fd8vSEk9zoiwZSKqbH1j16jZ2afV2GG"],
+        )]),
+        _ => unreachable!(),
+    };
+    let market_reserve_address = *market_reserve_map
+        .get(&token)
+        .ok_or_else(|| format!("{pool}: {token} is not supported"))?;
+
+    let reserve = solend_load_reserve(rpc_client, market_reserve_address)?;
+
+    Ok((market_reserve_address, reserve))
+}
+
+fn solend_apr(
+    rpc_client: &RpcClient,
+    pool: &str,
+    token: Token,
+) -> Result<f64, Box<dyn std::error::Error>> {
+    let (_market_reserve_address, reserve) = solend_load_reserve_for_pool(rpc_client, pool, token)?;
+
+    let utilization_rate = reserve.liquidity.utilization_rate()?;
+    let current_borrow_rate = reserve.current_borrow_rate().unwrap();
+
+    let supply_apr = format!(
+        "{}",
+        utilization_rate.try_mul(current_borrow_rate)?.try_mul(
+            solend::math::Rate::from_percent(100 - reserve.config.protocol_take_rate)
+        )?
+    );
+
+    Ok(supply_apr.parse::<f64>()?)
+}
+
+fn solend_find_obligation_address(wallet_address: Pubkey, lending_market: Pubkey) -> Pubkey {
+    Pubkey::create_with_seed(
+        &wallet_address,
+        &lending_market.to_string()[0..32],
+        &solend::solend_mainnet::ID,
+    )
+    .unwrap()
+}
+
+fn solend_load_obligation(
+    rpc_client: &RpcClient,
+    obligation_address: Pubkey,
+) -> Result<solend::state::Obligation, Box<dyn std::error::Error>> {
+    let account_data = rpc_client.get_account_data(&obligation_address)?;
+    Ok(solend::state::Obligation::unpack(&account_data)?)
+}
+
+fn solend_load_lending_market(
+    rpc_client: &RpcClient,
+    lending_market_address: Pubkey,
+) -> Result<solend::state::LendingMarket, Box<dyn std::error::Error>> {
+    let account_data = rpc_client.get_account_data(&lending_market_address)?;
+    Ok(solend::state::LendingMarket::unpack(&account_data)?)
+}
+
+fn solend_deposited_amount(
+    rpc_client: &RpcClient,
+    pool: &str,
+    wallet_address: Pubkey,
+    token: Token,
+) -> Result<u64, Box<dyn std::error::Error>> {
+    let (market_reserve_address, reserve) = solend_load_reserve_for_pool(rpc_client, pool, token)?;
+
+    let lending_market = reserve.lending_market;
+    let market_obligation = solend_find_obligation_address(wallet_address, lending_market);
+    if matches!(rpc_client.get_balance(&market_obligation), Ok(0)) {
+        return Ok(0);
+    }
+
+    let obligation = solend_load_obligation(rpc_client, market_obligation)?;
+
+    let collateral_deposited_amount = obligation
+        .deposits
+        .iter()
+        .find(|collateral| collateral.deposit_reserve == market_reserve_address)
+        .map(|collateral| collateral.deposited_amount)
+        .unwrap_or_default();
+
+    let collateral_exchange_rate = reserve.collateral_exchange_rate()?;
+    Ok(collateral_exchange_rate.collateral_to_liquidity(collateral_deposited_amount)?)
+}
+
+fn solend_deposit_or_withdraw(
+    op: Operation,
+    rpc_client: &RpcClient,
+    pool: &str,
+    wallet_address: Pubkey,
+    token: Token,
+    amount: u64,
+) -> Result<DepositOrWithdrawResult, Box<dyn std::error::Error>> {
+    let (market_reserve_address, reserve) = solend_load_reserve_for_pool(rpc_client, pool, token)?;
+
+    let market_obligation = solend_find_obligation_address(wallet_address, reserve.lending_market);
+    let obligation = solend_load_obligation(rpc_client, market_obligation)?;
+
+    let lending_market = solend_load_lending_market(rpc_client, reserve.lending_market)?;
+
+    let lending_market_authority = Pubkey::create_program_address(
+        &[
+            &reserve.lending_market.to_bytes(),
+            &[lending_market.bump_seed],
+        ],
+        &solend::solend_mainnet::ID,
+    )?;
+
+    let mut instructions = vec![];
+
+    let (amount, required_compute_units) = match op {
+        Operation::Deposit => {
+            // Solend: Deposit Reserve Liquidity and Obligation Collateral
+            let solend_deposit_reserve_liquidity_and_obligation_collateral_data = {
+                let mut v = vec![0x0e];
+                v.extend(amount.to_le_bytes());
+                v
+            };
+
+            instructions.push(Instruction::new_with_bytes(
+                solend::solend_mainnet::ID,
+                &solend_deposit_reserve_liquidity_and_obligation_collateral_data,
+                vec![
+                    // User Liquidity Token Account
+                    AccountMeta::new(
+                        spl_associated_token_account::get_associated_token_address(
+                            &wallet_address,
+                            &token.mint(),
+                        ),
+                        false,
+                    ),
+                    // User Collateral Token Account
+                    AccountMeta::new(
+                        spl_associated_token_account::get_associated_token_address(
+                            &wallet_address,
+                            &reserve.collateral.mint_pubkey,
+                        ),
+                        false,
+                    ),
+                    // Lending Market
+                    AccountMeta::new(market_reserve_address, false),
+                    // Reserve Liquidity Supply
+                    AccountMeta::new(reserve.liquidity.supply_pubkey, false),
+                    // Reserve Collateral Mint
+                    AccountMeta::new(reserve.collateral.mint_pubkey, false),
+                    // Lending Market
+                    AccountMeta::new(reserve.lending_market, false),
+                    // Lending Market Authority
+                    AccountMeta::new_readonly(lending_market_authority, false),
+                    // Reserve Destination Deposit Collateral
+                    AccountMeta::new(reserve.collateral.supply_pubkey, false),
+                    // Obligation
+                    AccountMeta::new(market_obligation, false),
+                    // Obligation Owner
+                    AccountMeta::new(wallet_address, true),
+                    // Pyth Oracle
+                    AccountMeta::new_readonly(reserve.liquidity.pyth_oracle_pubkey, false),
+                    // Switchboard Oracle
+                    AccountMeta::new_readonly(reserve.liquidity.switchboard_oracle_pubkey, false),
+                    // User Transfer Authority
+                    AccountMeta::new(wallet_address, true),
+                    // Token Program
+                    AccountMeta::new_readonly(spl_token::id(), false),
+                ],
+            ));
+            (amount, 100_000)
+        }
+        Operation::Withdraw => {
+            let withdraw_amount = if amount == u64::MAX {
+                let collateral_deposited_amount = obligation
+                    .deposits
+                    .iter()
+                    .find(|collateral| collateral.deposit_reserve == market_reserve_address)
+                    .map(|collateral| collateral.deposited_amount)
+                    .unwrap_or_default();
+
+                let collateral_exchange_rate = reserve.collateral_exchange_rate()?;
+                collateral_exchange_rate.collateral_to_liquidity(collateral_deposited_amount)?
+            } else {
+                amount
+            };
+
+            // Instruction: Solend: Refresh Reserve
+            let obligation_market_reserves = obligation
+                .deposits
+                .iter()
+                .filter(|c| c.deposit_reserve != Pubkey::default())
+                .map(|c| c.deposit_reserve)
+                .collect::<Vec<_>>();
+
+            let mut refresh_reserves = obligation_market_reserves
+                .iter()
+                .filter_map(|reserve_address| {
+                    if *reserve_address != market_reserve_address {
+                        Some((
+                            *reserve_address,
+                            solend_load_reserve(rpc_client, *reserve_address).unwrap_or_else(
+                                |err| {
+                                    // TODO: propagate failure up instead of panic..
+                                    panic!("unable to load reserve {reserve_address}: {err}")
+                                },
+                            ),
+                        ))
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>();
+            refresh_reserves.push((market_reserve_address, reserve.clone()));
+
+            for (reserve_address, reserve) in refresh_reserves {
+                instructions.push(Instruction::new_with_bytes(
+                    solend::solend_mainnet::ID,
+                    &[3],
+                    vec![
+                        // Reserve
+                        AccountMeta::new(reserve_address, false),
+                        // Pyth Oracle
+                        AccountMeta::new_readonly(reserve.liquidity.pyth_oracle_pubkey, false),
+                        // Switchboard Oracle
+                        AccountMeta::new_readonly(
+                            reserve.liquidity.switchboard_oracle_pubkey,
+                            false,
+                        ),
+                    ],
+                ));
+            }
+
+            // Instruction: Solend: Refresh Obligation
+            let mut refresh_obligation_account_metas = vec![
+                // Obligation
+                AccountMeta::new(market_obligation, false),
+            ];
+
+            for obligation_market_reserve in &obligation_market_reserves {
+                refresh_obligation_account_metas
+                    .push(AccountMeta::new(*obligation_market_reserve, false));
+            }
+
+            instructions.push(Instruction::new_with_bytes(
+                solend::solend_mainnet::ID,
+                &[0x7],
+                refresh_obligation_account_metas,
+            ));
+
+            // Instruction: Solend: Withdraw Obligation Collateral And Redeem Reserve Collateral
+
+            let collateral_exchange_rate = reserve.collateral_exchange_rate()?;
+            let solend_withdraw_obligation_collateral_and_redeem_reserve_collateral_data = {
+                let mut v = vec![0x0f];
+                v.extend(
+                    collateral_exchange_rate
+                        .liquidity_to_collateral(amount)?
+                        .to_le_bytes(),
+                );
+                v
+            };
+
+            instructions.push(Instruction::new_with_bytes(
+                solend::solend_mainnet::ID,
+                &solend_withdraw_obligation_collateral_and_redeem_reserve_collateral_data,
+                vec![
+                    // Reserve Collateral Supply
+                    AccountMeta::new(reserve.collateral.supply_pubkey, false),
+                    // User Collateral Token Account
+                    AccountMeta::new(
+                        spl_associated_token_account::get_associated_token_address(
+                            &wallet_address,
+                            &reserve.collateral.mint_pubkey,
+                        ),
+                        false,
+                    ),
+                    // Lending Market
+                    AccountMeta::new(market_reserve_address, false),
+                    // Obligation
+                    AccountMeta::new(market_obligation, false),
+                    // Lending Market
+                    AccountMeta::new(reserve.lending_market, false),
+                    // Lending Market Authority
+                    AccountMeta::new_readonly(lending_market_authority, false),
+                    // User Liquidity Token Account
+                    AccountMeta::new(
+                        spl_associated_token_account::get_associated_token_address(
+                            &wallet_address,
+                            &token.mint(),
+                        ),
+                        false,
+                    ),
+                    // Reserve Collateral Mint
+                    AccountMeta::new(reserve.collateral.mint_pubkey, false),
+                    // Reserve Liquidity Supply
+                    AccountMeta::new(reserve.liquidity.supply_pubkey, false),
+                    // Obligation Owner
+                    AccountMeta::new(wallet_address, true),
+                    // User Transfer Authority
+                    AccountMeta::new(wallet_address, true),
+                    // Token Program
+                    AccountMeta::new_readonly(spl_token::id(), false),
+                ],
+            ));
+
+            (
+                withdraw_amount - 1, // HACK!! Sometimes Solend loses a lamport? This breaks `rebalance`...
+                150_000,
+            )
+        }
+    };
+
+    Ok(DepositOrWithdrawResult {
+        instructions,
+        required_compute_units,
+        amount,
+        address_lookup_table: Some(pubkey!["89ig7Cu6Roi9mJMqpY8sBkPYL2cnqzpgP16sJxSUbvct"]),
     })
 }
