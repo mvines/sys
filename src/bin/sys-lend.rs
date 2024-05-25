@@ -19,7 +19,7 @@ use {
         system_program, sysvar,
         transaction::{Transaction, VersionedTransaction},
     },
-    std::collections::{HashMap, HashSet},
+    std::collections::{BTreeMap, HashMap, HashSet},
     sys::{
         app_version, metrics,
         notifier::*,
@@ -362,7 +362,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .required(true)
                         .validator(is_valid_token)
                         .default_value("USDC")
-                        .help("Token to deposit"),
+                        .help("Token"),
+                )
+                .arg(
+                    Arg::with_name("diff")
+                        .long("diff")
+                        .takes_value(false)
+                        .help("Display the APY difference between the highest and lowest pool"),
                 )
                 .arg(
                     Arg::with_name("raw")
@@ -435,6 +441,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     match app_matches.subcommand() {
         ("supply-apy", Some(matches)) => {
             let token = value_t_or_exit!(matches, "token", Token);
+            let diff = matches.is_present("diff");
             let raw = matches.is_present("raw");
             let bps = matches.is_present("bps");
             let pools = values_t!(matches, "pool", String)
@@ -442,29 +449,59 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .unwrap_or_else(|| supported_pools_for_token(token));
 
             is_token_supported(&token, &pools)?;
+
+            let mut pool_apy = BTreeMap::new();
             for pool in pools {
                 let apy = apr_to_apy(pool_supply_apr(&rpc_client, &pool, token)?) * 100.;
                 let apy_as_bps = (apy * 100.) as u64;
+                pool_apy.insert(pool, apy_as_bps);
+            }
+
+            if diff {
+                let min_pool = pool_apy.iter().min().unwrap();
+                let max_pool = pool_apy.iter().max().unwrap();
+                let apy_as_bps_diff = max_pool.1 - min_pool.1;
 
                 let value = if bps {
-                    format!("{}", apy_as_bps)
+                    format!("{}", apy_as_bps_diff)
                 } else {
-                    format!("{:.2}", apy)
+                    format!("{:.2}", apy_as_bps_diff as f64 / 100.)
                 };
 
                 let msg = if raw {
                     value.to_string()
                 } else {
                     format!(
-                        "{pool:>15}: {token} {value:>5}{}",
-                        if bps { "bps" } else { "%" }
+                        "{token} APY is {value}{} more on {} than {}",
+                        if bps { "bps" } else { "%" },
+                        max_pool.0,
+                        min_pool.0,
                     )
                 };
-                if !raw {
-                    notifier.send(&msg).await;
-                }
-                metrics::push(dp::supply_apy(&pool, token, apy_as_bps)).await;
+
                 println!("{msg}");
+            } else {
+                for (pool, apy_as_bps) in pool_apy {
+                    let value = if bps {
+                        format!("{}", apy_as_bps)
+                    } else {
+                        format!("{:.2}", apy_as_bps as f64 / 100.)
+                    };
+
+                    let msg = if raw {
+                        value.to_string()
+                    } else {
+                        format!(
+                            "{pool:>15}: {token} {value:>5}{}",
+                            if bps { "bps" } else { "%" }
+                        )
+                    };
+                    if !raw {
+                        notifier.send(&msg).await;
+                    }
+                    metrics::push(dp::supply_apy(&pool, token, apy_as_bps)).await;
+                    println!("{msg}");
+                }
             }
         }
         ("supply-balance", Some(matches)) => {
