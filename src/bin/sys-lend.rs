@@ -306,11 +306,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .arg(
                     Arg::with_name("minimum_apy_improvement")
                         .long("minimum-apy-improvement")
-                        .value_name("0..100")
+                        .value_name("BPS")
                         .takes_value(true)
-                        .validator(is_valid_percentage)
-                        .default_value("2")
-                        .help("Skip rebalance if the APY improvement would be less than this percentage")
+                        .validator(is_parsable::<u16>)
+                        .default_value("250")
+                        .help("Skip rebalance if the APY improvement would be less than this amount of BPS")
                 )
         )
         .subcommand(
@@ -556,8 +556,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let pools = values_t!(matches, "pool", String)
                 .ok()
                 .unwrap_or_else(|| supported_pools_for_token(token));
-            let minimum_apy_improvement =
-                value_t!(matches, "minimum_apy_improvement", f64).unwrap_or(100.);
+            let minimum_apy_improvement_bps =
+                value_t!(matches, "minimum_apy_improvement", u16).unwrap_or(10000);
 
             let token_balance = token.balance(&rpc_client, &address)?;
             let amount = match matches.value_of("amount").unwrap() {
@@ -635,9 +635,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 })
                 .unwrap_or(deposit_pool);
 
-            let apy_improvement = apr_to_apy(
+            let apy_improvement_bps = (apr_to_apy(
                 supply_apr.get(deposit_pool).unwrap() - supply_apr.get(withdraw_pool).unwrap(),
-            ) * 100.;
+            ) * 10000.) as u16;
 
             let ops = match cmd {
                 Command::Deposit => vec![(Operation::Deposit, deposit_pool)],
@@ -648,11 +648,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         return Ok(());
                     }
 
-                    if apy_improvement < minimum_apy_improvement {
+                    if apy_improvement_bps < minimum_apy_improvement_bps {
                         println!(
-                            "Rebalance from {} to {} will only improve APY by {:.2}% \
-                                 (minimum required improvement: {:.2}%)",
-                            withdraw_pool, deposit_pool, apy_improvement, minimum_apy_improvement
+                            "Rebalance from {} to {} will only improve APY by {}bps \
+                                 (minimum required improvement: {}bps)",
+                            withdraw_pool,
+                            deposit_pool,
+                            apy_improvement_bps,
+                            minimum_apy_improvement_bps
                         );
                         return Ok(());
                     }
@@ -765,12 +768,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     signature
                 ),
                 Command::Rebalance => format!(
-                    "Rebalancing {} from {} to {} via {} for an additional {:.2}%",
+                    "Rebalancing {} from {} to {} via {} for an additional {}bps",
                     token.format_amount(amount),
                     withdraw_pool,
                     deposit_pool,
                     signature,
-                    apy_improvement,
+                    apy_improvement_bps,
                 ),
             };
             notifier.send(&msg).await;
