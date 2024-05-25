@@ -16,6 +16,7 @@ Aggregator for when you're not quite ready to part with your SOL yet.
 ## Quick Start
 1. Install Rust from https://rustup.rs/
 2. `cargo run`
+3. `cargo run --bin sys-lend`
 
 You can also run `./fetch-release.sh` to download the latest Linux and macOS binary produced by Github Actions.
 
