@@ -2142,6 +2142,7 @@ async fn process_account_list(
         let mut total_unrealized_short_term_gain = 0.;
         let mut total_unrealized_long_term_gain = 0.;
         let mut total_current_basis = 0.;
+        let mut total_current_fiat_value = 0.;
         let mut total_current_value = 0.;
 
         let open_orders = db.open_orders(None, None);
@@ -2332,7 +2333,7 @@ async fn process_account_list(
                         "".into()
                     } else {
                         format!(
-                            " [{}%] ({}{})",
+                            " ({}%), {}{}",
                             ((account_current_value - account_basis) / account_basis * 100.)
                                 .separated_string_with_fixed_place(2),
                             if account_income > 0. {
@@ -2363,8 +2364,12 @@ async fn process_account_list(
                 total_unrealized_short_term_gain += account_unrealized_short_term_gain;
                 total_unrealized_long_term_gain += account_unrealized_long_term_gain;
                 total_income += account_income;
-                total_current_basis += account_basis;
                 total_current_value += account_current_value;
+                if account.token.fiat_fungible() {
+                    total_current_fiat_value += account_current_value;
+                } else {
+                    total_current_basis += account_basis;
+                }
 
                 held_token.2.short_term_cap_gain += account_unrealized_short_term_gain;
                 held_token.2.long_term_cap_gain += account_unrealized_long_term_gain;
@@ -2594,16 +2599,23 @@ async fn process_account_list(
                 .unwrap_or_default();
 
             println!(
-                "  {:<7}       {:<20} ({}; ${:>4} per {:>4}{})",
+                "  {:<7}       {:<20} [{}; ${:>4} per {:>4}{}]",
                 held_token.to_string(),
                 held_token.format_amount(total_held_amount),
                 total_value
                     .map(|tv| {
                         format!(
-                            "${:14} [{:>8}%]",
+                            "${:14} {}",
                             tv.separated_string_with_fixed_place(2),
-                            ((tv - unrealized_gain.basis) / unrealized_gain.basis * 100.)
-                                .separated_string_with_fixed_place(2)
+                            if held_token.fiat_fungible() {
+                                "            ".into()
+                            } else {
+                                format!(
+                                    "({:>8}%)",
+                                    ((tv - unrealized_gain.basis) / unrealized_gain.basis * 100.)
+                                        .separated_string_with_fixed_place(2)
+                                )
+                            }
                         )
                     })
                     .unwrap_or_else(|| "?".into()),
@@ -2620,10 +2632,16 @@ async fn process_account_list(
 
         println!("Summary");
         println!(
-            "  Current Value:       ${} [{}%]",
+            "  Current Value:       ${} ({}%)",
             total_current_value.separated_string_with_fixed_place(2),
-            ((total_current_value - total_current_basis) / total_current_basis * 100.)
+            (((total_current_value - total_current_fiat_value) - total_current_basis)
+                / total_current_basis
+                * 100.)
                 .separated_string_with_fixed_place(2),
+        );
+        println!(
+            "  Current Fiat Value:  ${}",
+            total_current_fiat_value.separated_string_with_fixed_place(2)
         );
         if total_income > 0. {
             println!(
