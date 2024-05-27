@@ -2006,6 +2006,7 @@ struct RealizedGain {
     income: f64,
     short_term_cap_gain: f64,
     long_term_cap_gain: f64,
+    basis: f64,
 }
 
 #[derive(Default)]
@@ -2140,6 +2141,7 @@ async fn process_account_list(
         let mut total_income = 0.;
         let mut total_unrealized_short_term_gain = 0.;
         let mut total_unrealized_long_term_gain = 0.;
+        let mut total_current_basis = 0.;
         let mut total_current_value = 0.;
 
         let open_orders = db.open_orders(None, None);
@@ -2318,6 +2320,11 @@ async fn process_account_list(
                     }
                 }
 
+                let account_basis = account_current_value
+                    - account_income
+                    - account_unrealized_short_term_gain
+                    - account_unrealized_long_term_gain;
+
                 println!(
                     "    Value: ${}{}",
                     account_current_value.separated_string_with_fixed_place(2),
@@ -2325,7 +2332,9 @@ async fn process_account_list(
                         "".into()
                     } else {
                         format!(
-                            ", {}{}",
+                            " [{}%] ({}{})",
+                            ((account_current_value - account_basis) / account_basis * 100.)
+                                .separated_string_with_fixed_place(2),
                             if account_income > 0. {
                                 format!(
                                     "income: ${}, ",
@@ -2354,10 +2363,12 @@ async fn process_account_list(
                 total_unrealized_short_term_gain += account_unrealized_short_term_gain;
                 total_unrealized_long_term_gain += account_unrealized_long_term_gain;
                 total_income += account_income;
+                total_current_basis += account_basis;
                 total_current_value += account_current_value;
 
                 held_token.2.short_term_cap_gain += account_unrealized_short_term_gain;
                 held_token.2.long_term_cap_gain += account_unrealized_long_term_gain;
+                held_token.2.basis += account_basis;
             } else {
                 println!("  No lots");
             }
@@ -2583,11 +2594,18 @@ async fn process_account_list(
                 .unwrap_or_default();
 
             println!(
-                "  {:<7}       {:<20} (${:14} ; ${} per {}{})",
+                "  {:<7}       {:<20} ({}; ${:>4} per {:>4}{})",
                 held_token.to_string(),
                 held_token.format_amount(total_held_amount),
                 total_value
-                    .map(|tv| tv.separated_string_with_fixed_place(2))
+                    .map(|tv| {
+                        format!(
+                            "${:14} [{:>8}%]",
+                            tv.separated_string_with_fixed_place(2),
+                            ((tv - unrealized_gain.basis) / unrealized_gain.basis * 100.)
+                                .separated_string_with_fixed_place(2)
+                        )
+                    })
                     .unwrap_or_else(|| "?".into()),
                 current_token_price
                     .map(|current_token_price| f64::try_from(current_token_price)
@@ -2602,8 +2620,10 @@ async fn process_account_list(
 
         println!("Summary");
         println!(
-            "  Current Value:       ${}",
-            total_current_value.separated_string_with_fixed_place(2)
+            "  Current Value:       ${} [{}%]",
+            total_current_value.separated_string_with_fixed_place(2),
+            ((total_current_value - total_current_basis) / total_current_basis * 100.)
+                .separated_string_with_fixed_place(2),
         );
         if total_income > 0. {
             println!(
