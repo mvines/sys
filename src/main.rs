@@ -2325,8 +2325,15 @@ async fn process_account_list(
                         "".into()
                     } else {
                         format!(
-                            ", income: ${}, {}",
-                            account_income.separated_string_with_fixed_place(2),
+                            ", {}{}",
+                            if account_income > 0. {
+                                format!(
+                                    "income: ${}, ",
+                                    account_income.separated_string_with_fixed_place(2)
+                                )
+                            } else {
+                                "".into()
+                            },
                             if unified_tax_rate {
                                 format!(
                                     "unrealized cap gain: ${}",
@@ -2421,9 +2428,16 @@ async fn process_account_list(
                 }
             }
             println!(
-                "    Disposed value: ${} (income: ${}, {})",
+                "    Disposed value: ${} ({}{})",
                 disposed_value.separated_string_with_fixed_place(2),
-                disposed_income.separated_string_with_fixed_place(2),
+                if disposed_income > 0. {
+                    format!(
+                        "income: ${}, ",
+                        disposed_income.separated_string_with_fixed_place(2)
+                    )
+                } else {
+                    "".into()
+                },
                 if unified_tax_rate {
                     format!(
                         "cap gain: ${}",
@@ -2591,10 +2605,12 @@ async fn process_account_list(
             "  Current Value:       ${}",
             total_current_value.separated_string_with_fixed_place(2)
         );
-        println!(
-            "  Income:              ${} (realized)",
-            total_income.separated_string_with_fixed_place(2)
-        );
+        if total_income > 0. {
+            println!(
+                "  Income:              ${} (realized)",
+                total_income.separated_string_with_fixed_place(2)
+            );
+        }
         if unified_tax_rate {
             println!(
                 "  Cap gain:            ${} (unrealized)",
