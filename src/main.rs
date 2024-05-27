@@ -2598,35 +2598,36 @@ async fn process_account_list(
                 })
                 .unwrap_or_default();
 
-            println!(
-                "  {:<7}       {:<20} [{}; ${:>4} per {:>4}{}]",
-                held_token.to_string(),
-                held_token.format_amount(total_held_amount),
-                total_value
-                    .map(|tv| {
-                        format!(
-                            "${:14} {}",
-                            tv.separated_string_with_fixed_place(2),
-                            if held_token.fiat_fungible() {
-                                "            ".into()
-                            } else {
-                                format!(
-                                    "({:>8}%)",
-                                    ((tv - unrealized_gain.basis) / unrealized_gain.basis * 100.)
-                                        .separated_string_with_fixed_place(2)
-                                )
-                            }
-                        )
-                    })
-                    .unwrap_or_else(|| "?".into()),
-                current_token_price
-                    .map(|current_token_price| f64::try_from(current_token_price)
-                        .unwrap()
-                        .separated_string_with_fixed_place(3))
-                    .unwrap_or_else(|| "?".into()),
-                held_token,
-                estimated_tax,
-            );
+            if held_token.fiat_fungible() {
+                println!(
+                    "  {:<7}       {:<20}",
+                    held_token.to_string(),
+                    held_token.format_amount(total_held_amount)
+                );
+            } else {
+                println!(
+                    "  {:<7}       {:<20} [{}; ${:>4} per {:>4}{}]",
+                    held_token.to_string(),
+                    held_token.format_amount(total_held_amount),
+                    total_value
+                        .map(|tv| {
+                            format!(
+                                "${:14} ({:>8}%)",
+                                tv.separated_string_with_fixed_place(2),
+                                ((tv - unrealized_gain.basis) / unrealized_gain.basis * 100.)
+                                    .separated_string_with_fixed_place(2)
+                            )
+                        })
+                        .unwrap_or_else(|| "?".into()),
+                    current_token_price
+                        .map(|current_token_price| f64::try_from(current_token_price)
+                            .unwrap()
+                            .separated_string_with_fixed_place(3))
+                        .unwrap_or_else(|| "?".into()),
+                    held_token,
+                    estimated_tax,
+                );
+            }
         }
         println!();
 
@@ -2638,10 +2639,6 @@ async fn process_account_list(
                 / total_current_basis
                 * 100.)
                 .separated_string_with_fixed_place(2),
-        );
-        println!(
-            "  Current Fiat Value:  ${}",
-            total_current_fiat_value.separated_string_with_fixed_place(2)
         );
         if total_income > 0. {
             println!(
