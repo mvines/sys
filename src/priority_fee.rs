@@ -138,8 +138,8 @@ pub fn apply_priority_fee(
 
         if compute_budget.priority_fee_lamports() > priority_fee.max_lamports() {
             println!(
-                "Note: Computed priority fee of {} is greater than max fee",
-                Sol(priority_fee.max_lamports())
+                "Note: Computed priority fee of {} exceeds the maximum priority fee",
+                Sol(compute_budget.priority_fee_lamports())
             );
             ComputeBudget::new(compute_unit_limit, priority_fee.max_lamports())
         } else {
