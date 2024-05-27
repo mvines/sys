@@ -512,9 +512,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .unwrap_or_else(|| supported_pools_for_token(token));
 
             is_token_supported(&token, &pools)?;
-            for pool in pools {
-                let amount = pool_supply_balance(&rpc_client, &pool, token, address)?;
-                let apr = pool_supply_apr(&rpc_client, &pool, token)?;
+
+            let mut total_amount = 0;
+            let mut non_empty_pools_count = 0;
+            for pool in &pools {
+                let amount = pool_supply_balance(&rpc_client, pool, token, address)?;
+                let apr = pool_supply_apr(&rpc_client, pool, token)?;
 
                 let msg = format!(
                     "{:>15}: {} supplied at {:.2}%",
@@ -522,15 +525,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     token.format_amount(amount),
                     apr_to_apy(apr) * 100.
                 );
+                if amount > 0 {
+                    non_empty_pools_count += 1;
+                    total_amount += amount;
+                }
                 notifier.send(&msg).await;
                 metrics::push(dp::supply_balance(
-                    &pool,
+                    pool,
                     &address,
                     token,
                     token.ui_amount(amount),
                 ))
                 .await;
                 println!("{msg}");
+            }
+
+            if non_empty_pools_count > 1 {
+                println!("\nTotal supply:    {}", token.format_amount(total_amount));
             }
         }
         ("deposit" | "withdraw" | "rebalance", Some(matches)) => {
@@ -780,7 +791,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("{msg}");
 
             if !send_transaction_until_expired(&rpc_client, &transaction, last_valid_block_height) {
-                let msg = format!("Deposit failed: {signature}");
+                let msg = format!("Transaction failed: {signature}");
                 notifier.send(&msg).await;
                 return Err(msg.into());
             }
