@@ -4,7 +4,10 @@ use {
     solana_clap_utils::{self, input_parsers::*, input_validators::*},
     solana_client::{
         rpc_client::RpcClient,
-        rpc_config::{RpcAccountInfoConfig, RpcProgramAccountsConfig},
+        rpc_config::{
+            RpcAccountInfoConfig, RpcProgramAccountsConfig, RpcSimulateTransactionAccountsConfig,
+            RpcSimulateTransactionConfig,
+        },
         rpc_filter::{self, RpcFilterType},
     },
     solana_sdk::{
@@ -809,6 +812,46 @@ fn apr_to_apy(apr: f64) -> f64 {
     (1. + apr / compounding_periods).powf(compounding_periods) - 1.
 }
 
+fn simulate_instructions(
+    rpc_client: &RpcClient,
+    instructions: &[Instruction],
+    return_address: Pubkey,
+) -> Result<solana_sdk::account::Account, Box<dyn std::error::Error>> {
+    let transaction = Transaction::new_unsigned(Message::new(
+        instructions,
+        Some(
+            &pubkey!["mvinesvseigL3uSWwSQr5tp8KX67kX2Ys6zydT9Wnbo"], /* TODO: Any fee payer will do. For now hard code one  */
+        ),
+    ));
+
+    let value = rpc_client
+        .simulate_transaction_with_config(
+            &transaction,
+            RpcSimulateTransactionConfig {
+                sig_verify: false,
+                replace_recent_blockhash: true,
+                accounts: Some(RpcSimulateTransactionAccountsConfig {
+                    encoding: Some(UiAccountEncoding::Base64Zstd),
+                    addresses: vec![return_address.to_string()],
+                }),
+                ..RpcSimulateTransactionConfig::default()
+            },
+        )?
+        .value;
+
+    if let Some(err) = value.err {
+        return Err(format!(
+            "Failed to simulate insructions: {err} [logs: {:?}]",
+            value.logs
+        )
+        .into());
+    }
+    let accounts = value.accounts.expect("accounts");
+    let ui_account = accounts[0].as_ref().unwrap();
+
+    Ok(ui_account.decode().unwrap())
+}
+
 //////////////////////////////////////////////////////////////////////////////
 ///[ MarginFi Stuff ] ////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////////
@@ -1117,16 +1160,66 @@ struct DepositOrWithdrawResult {
 const KAMINO_LEND_PROGRAM: Pubkey = pubkey!["KLend2g3cP87fffoy8q1mQqGKjrxjC8boSyAYavgmjD"];
 const FARMS_PROGRAM: Pubkey = pubkey!["FarmsPZpWu9i7Kky8tPN37rs2TpmMrAZrC7S7vJa91Hr"];
 
-fn kamino_unsafe_load_reserve(
-    rpc_client: &RpcClient,
-    address: Pubkey,
+fn pubkey_or_klend_program(pubkey: Pubkey) -> Pubkey {
+    if pubkey == Pubkey::default() {
+        KAMINO_LEND_PROGRAM
+    } else {
+        pubkey
+    }
+}
+
+fn kamino_unsafe_load_reserve_account_data(
+    account_data: &[u8],
 ) -> Result<kamino::Reserve, Box<dyn std::error::Error>> {
     const LEN: usize = std::mem::size_of::<kamino::Reserve>();
-    let account_data: [u8; LEN] = rpc_client.get_account_data(&address)?[8..LEN + 8]
-        .try_into()
-        .unwrap();
+    let account_data: [u8; LEN] = account_data[8..LEN + 8].try_into().unwrap();
     let reserve = unsafe { std::mem::transmute(account_data) };
     Ok(reserve)
+}
+
+fn kamino_load_reserve(
+    rpc_client: &RpcClient,
+    reserve_address: Pubkey,
+) -> Result<kamino::Reserve, Box<dyn std::error::Error>> {
+    let rpc_reserve = kamino_unsafe_load_reserve_account_data(
+        rpc_client.get_account_data(&reserve_address)?.as_ref(),
+    )?;
+
+    //
+    // The reserve account for some pools can be stale. Simulate a Refresh Reserve instruction and
+    // read back the new reserve account data to ensure it's up to date
+    //
+
+    // Instruction: Kamino: Refresh Reserve
+    let instructions = vec![Instruction::new_with_bytes(
+        KAMINO_LEND_PROGRAM,
+        &[0x02, 0xda, 0x8a, 0xeb, 0x4f, 0xc9, 0x19, 0x66],
+        vec![
+            // Reserve
+            AccountMeta::new(reserve_address, false),
+            // Lending Market
+            AccountMeta::new_readonly(rpc_reserve.lending_market, false),
+            // Pyth Oracle
+            AccountMeta::new_readonly(
+                pubkey_or_klend_program(rpc_reserve.config.token_info.pyth_configuration.price),
+                false,
+            ),
+            AccountMeta::new_readonly(KAMINO_LEND_PROGRAM, false),
+            // Switchboard Twap Oracle
+            AccountMeta::new_readonly(KAMINO_LEND_PROGRAM, false),
+            // Scope Prices
+            AccountMeta::new_readonly(
+                pubkey_or_klend_program(
+                    rpc_reserve.config.token_info.scope_configuration.price_feed,
+                ),
+                false,
+            ),
+        ],
+    )];
+
+    let reserve_account = simulate_instructions(rpc_client, &instructions, reserve_address)?;
+
+    kamino_unsafe_load_reserve_account_data(&reserve_account.data)
 }
 
 fn kamino_load_pool_reserve(
@@ -1195,7 +1288,7 @@ fn kamino_load_pool_reserve(
         .get(&token)
         .ok_or_else(|| format!("{pool}: {token} is not supported"))?;
 
-    let reserve = kamino_unsafe_load_reserve(rpc_client, market_reserve_address)?;
+    let reserve = kamino_load_reserve(rpc_client, market_reserve_address)?;
 
     Ok((market_reserve_address, reserve))
 }
@@ -1243,8 +1336,7 @@ fn kamino_deposited_amount(
     token: Token,
 ) -> Result<u64, Box<dyn std::error::Error>> {
     let (market_reserve_address, reserve) = kamino_load_pool_reserve(rpc_client, pool, token)?;
-    let lending_market = reserve.lending_market;
-    let market_obligation = kamino_find_obligation_address(wallet_address, lending_market);
+    let market_obligation = kamino_find_obligation_address(wallet_address, reserve.lending_market);
     if matches!(rpc_client.get_balance(&market_obligation), Ok(0)) {
         return Ok(0);
     }
@@ -1271,17 +1363,18 @@ fn kamino_deposit_or_withdraw(
 ) -> Result<DepositOrWithdrawResult, Box<dyn std::error::Error>> {
     let (market_reserve_address, reserve) = kamino_load_pool_reserve(rpc_client, pool, token)?;
 
-    let lending_market = reserve.lending_market;
-
-    let lending_market_authority =
-        Pubkey::find_program_address(&[b"lma", &lending_market.to_bytes()], &KAMINO_LEND_PROGRAM).0;
+    let lending_market_authority = Pubkey::find_program_address(
+        &[b"lma", &reserve.lending_market.to_bytes()],
+        &KAMINO_LEND_PROGRAM,
+    )
+    .0;
 
     let reserve_farm_state = reserve.farm_collateral;
     let reserve_liquidity_supply = reserve.liquidity.supply_vault;
     let reserve_collateral_mint = reserve.collateral.mint_pubkey;
     let reserve_destination_deposit_collateral = reserve.collateral.supply_vault;
 
-    let market_obligation = kamino_find_obligation_address(wallet_address, lending_market);
+    let market_obligation = kamino_find_obligation_address(wallet_address, reserve.lending_market);
     let obligation = kamino_unsafe_load_obligation(rpc_client, market_obligation)?;
 
     let obligation_farm_user_state = Pubkey::find_program_address(
@@ -1311,12 +1404,10 @@ fn kamino_deposit_or_withdraw(
             if *reserve_address != market_reserve_address {
                 Some((
                     *reserve_address,
-                    kamino_unsafe_load_reserve(rpc_client, *reserve_address).unwrap_or_else(
-                        |err| {
-                            // TODO: propagate failure up instead of panic..
-                            panic!("unable to load reserve {reserve_address}: {err}")
-                        },
-                    ),
+                    kamino_load_reserve(rpc_client, *reserve_address).unwrap_or_else(|err| {
+                        // TODO: propagate failure up instead of panic..
+                        panic!("unable to load reserve {reserve_address}: {err}")
+                    }),
                 ))
             } else {
                 None
@@ -1326,19 +1417,6 @@ fn kamino_deposit_or_withdraw(
     refresh_reserves.push((market_reserve_address, reserve));
 
     for (reserve_address, reserve) in refresh_reserves {
-        let pyth_oracle = if reserve.config.token_info.pyth_configuration.price == Pubkey::default()
-        {
-            KAMINO_LEND_PROGRAM
-        } else {
-            reserve.config.token_info.pyth_configuration.price
-        };
-        let scope_prices =
-            if reserve.config.token_info.scope_configuration.price_feed == Pubkey::default() {
-                KAMINO_LEND_PROGRAM
-            } else {
-                reserve.config.token_info.scope_configuration.price_feed
-            };
-
         instructions.push(Instruction::new_with_bytes(
             KAMINO_LEND_PROGRAM,
             &[0x02, 0xda, 0x8a, 0xeb, 0x4f, 0xc9, 0x19, 0x66],
@@ -1346,14 +1424,22 @@ fn kamino_deposit_or_withdraw(
                 // Reserve
                 AccountMeta::new(reserve_address, false),
                 // Lending Market
-                AccountMeta::new_readonly(lending_market, false),
+                AccountMeta::new_readonly(reserve.lending_market, false),
                 // Pyth Oracle
-                AccountMeta::new_readonly(pyth_oracle, false),
+                AccountMeta::new_readonly(
+                    pubkey_or_klend_program(reserve.config.token_info.pyth_configuration.price),
+                    false,
+                ),
                 AccountMeta::new_readonly(KAMINO_LEND_PROGRAM, false),
                 // Switchboard Twap Oracle
                 AccountMeta::new_readonly(KAMINO_LEND_PROGRAM, false),
                 // Scope Prices
-                AccountMeta::new_readonly(scope_prices, false),
+                AccountMeta::new_readonly(
+                    pubkey_or_klend_program(
+                        reserve.config.token_info.scope_configuration.price_feed,
+                    ),
+                    false,
+                ),
             ],
         ));
     }
@@ -1361,7 +1447,7 @@ fn kamino_deposit_or_withdraw(
     // Instruction: Kamino: Refresh Obligation
     let mut refresh_obligation_account_metas = vec![
         // Lending Market
-        AccountMeta::new_readonly(lending_market, false),
+        AccountMeta::new_readonly(reserve.lending_market, false),
         // Obligation
         AccountMeta::new(market_obligation, false),
     ];
@@ -1397,7 +1483,7 @@ fn kamino_deposit_or_withdraw(
             // Obligation Farm User State
             AccountMeta::new(obligation_farm_user_state, false),
             // Lending Market
-            AccountMeta::new_readonly(lending_market, false),
+            AccountMeta::new_readonly(reserve.lending_market, false),
             // Farms Program
             AccountMeta::new_readonly(FARMS_PROGRAM, false),
             // Rent
@@ -1456,7 +1542,7 @@ fn kamino_deposit_or_withdraw(
                     // Obligation
                     AccountMeta::new(market_obligation, false),
                     // Lending Market
-                    AccountMeta::new_readonly(lending_market, false),
+                    AccountMeta::new_readonly(reserve.lending_market, false),
                     // Lending Market Authority
                     AccountMeta::new(lending_market_authority, false),
                     // Reserve
@@ -1503,7 +1589,7 @@ fn kamino_deposit_or_withdraw(
                     // Obligation
                     AccountMeta::new(market_obligation, false),
                     // Lending Market
-                    AccountMeta::new_readonly(lending_market, false),
+                    AccountMeta::new_readonly(reserve.lending_market, false),
                     // Lending Market Authority
                     AccountMeta::new(lending_market_authority, false),
                     // Reserve
@@ -1561,8 +1647,30 @@ fn solend_load_reserve(
     rpc_client: &RpcClient,
     reserve_address: Pubkey,
 ) -> Result<solend::state::Reserve, Box<dyn std::error::Error>> {
-    let account_data = rpc_client.get_account_data(&reserve_address)?;
-    Ok(solend::state::Reserve::unpack(&account_data)?)
+    let rpc_reserve =
+        solend::state::Reserve::unpack(rpc_client.get_account_data(&reserve_address)?.as_ref())?;
+
+    //
+    // The reserve account for some pools can be stale. Simulate a Refresh Reserve instruction and
+    // read back the new reserve account data to ensure it's up to date
+    //
+
+    // Instruction: Solend: Refresh Reserve
+    let instructions = vec![Instruction::new_with_bytes(
+        solend::solend_mainnet::ID,
+        &[3],
+        vec![
+            // Reserve
+            AccountMeta::new(reserve_address, false),
+            // Pyth Oracle
+            AccountMeta::new_readonly(rpc_reserve.liquidity.pyth_oracle_pubkey, false),
+            // Switchboard Oracle
+            AccountMeta::new_readonly(rpc_reserve.liquidity.switchboard_oracle_pubkey, false),
+        ],
+    )];
+
+    let reserve_account = simulate_instructions(rpc_client, &instructions, reserve_address)?;
+    Ok(solend::state::Reserve::unpack(&reserve_account.data)?)
 }
 
 fn solend_load_reserve_for_pool(
