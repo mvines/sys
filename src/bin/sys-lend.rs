@@ -343,6 +343,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .subcommand(
             SubCommand::with_name("supply-balance")
                 .about("Display the current supplied balance for one or more lending pools")
+                .alias("balance")
                 .arg(
                     Arg::with_name("pool")
                         .value_name("POOL")
@@ -373,6 +374,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .subcommand(
             SubCommand::with_name("supply-apy")
                 .about("Display the current supply APY for one or more lending pools")
+                .alias("apy")
                 .arg(
                     Arg::with_name("pool")
                         .value_name("POOL")
