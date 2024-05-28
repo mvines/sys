@@ -12,6 +12,7 @@ use {
     },
     solana_sdk::{
         address_lookup_table::{state::AddressLookupTable, AddressLookupTableAccount},
+        clock::Slot,
         commitment_config::CommitmentConfig,
         instruction::{AccountMeta, Instruction},
         message::{self, Message, VersionedMessage},
@@ -429,13 +430,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         pool: &str,
         token: Token,
         address: Pubkey,
-    ) -> Result<u64, Box<dyn std::error::Error>> {
+    ) -> Result<(u64, u64), Box<dyn std::error::Error>> {
         Ok(if pool.starts_with("kamino-") {
             kamino_deposited_amount(rpc_client, pool, address, token)?
         } else if pool.starts_with("solend-") {
             solend_deposited_amount(rpc_client, pool, address, token)?
         } else if pool == "mfi" {
-            mfi_balance(rpc_client, address, token)?.0
+            mfi_balance(rpc_client, address, token)?
         } else {
             unreachable!()
         })
@@ -519,14 +520,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut total_amount = 0;
             let mut non_empty_pools_count = 0;
             for pool in &pools {
-                let amount = pool_supply_balance(&rpc_client, pool, token, address)?;
+                let (amount, remaining_outflow) =
+                    pool_supply_balance(&rpc_client, pool, token, address)?;
                 let apr = pool_supply_apr(&rpc_client, pool, token)?;
 
                 let msg = format!(
-                    "{:>15}: {} supplied at {:.2}%",
+                    "{:>15}: {} supplied at {:.2}%{}",
                     pool,
                     token.format_amount(amount),
-                    apr_to_apy(apr) * 100.
+                    apr_to_apy(apr) * 100.,
+                    if remaining_outflow < amount {
+                        format!(
+                            ", with {} available to withdraw",
+                            token.format_amount(remaining_outflow)
+                        )
+                    } else {
+                        "".into()
+                    }
                 );
                 if amount > 0 {
                     non_empty_pools_count += 1;
@@ -605,10 +615,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let supply_balance = pools
                 .iter()
                 .map(|pool| {
-                    let supply_balance = pool_supply_balance(&rpc_client, pool, token, address)
-                        .unwrap_or_else(|err| panic!("Unable to read balance for {pool}: {err}"));
+                    let (supply_balance, remaining_outflow) =
+                        pool_supply_balance(&rpc_client, pool, token, address).unwrap_or_else(
+                            |err| panic!("Unable to read balance for {pool}: {err}"),
+                        );
 
-                    (pool.clone(), supply_balance)
+                    (
+                        pool.clone(),
+                        if remaining_outflow < supply_balance {
+                            // Some Solend reserves have an outflow limit. Try to keep withdrawals within that limit
+                            remaining_outflow
+                        } else {
+                            supply_balance
+                        },
+                    )
                 })
                 .collect::<HashMap<_, _>>();
 
@@ -816,7 +836,7 @@ fn simulate_instructions(
     rpc_client: &RpcClient,
     instructions: &[Instruction],
     return_address: Pubkey,
-) -> Result<solana_sdk::account::Account, Box<dyn std::error::Error>> {
+) -> Result<(solana_sdk::account::Account, Slot), Box<dyn std::error::Error>> {
     let transaction = Transaction::new_unsigned(Message::new(
         instructions,
         Some(
@@ -824,32 +844,30 @@ fn simulate_instructions(
         ),
     ));
 
-    let value = rpc_client
-        .simulate_transaction_with_config(
-            &transaction,
-            RpcSimulateTransactionConfig {
-                sig_verify: false,
-                replace_recent_blockhash: true,
-                accounts: Some(RpcSimulateTransactionAccountsConfig {
-                    encoding: Some(UiAccountEncoding::Base64Zstd),
-                    addresses: vec![return_address.to_string()],
-                }),
-                ..RpcSimulateTransactionConfig::default()
-            },
-        )?
-        .value;
+    let result = rpc_client.simulate_transaction_with_config(
+        &transaction,
+        RpcSimulateTransactionConfig {
+            sig_verify: false,
+            replace_recent_blockhash: true,
+            accounts: Some(RpcSimulateTransactionAccountsConfig {
+                encoding: Some(UiAccountEncoding::Base64Zstd),
+                addresses: vec![return_address.to_string()],
+            }),
+            ..RpcSimulateTransactionConfig::default()
+        },
+    )?;
 
-    if let Some(err) = value.err {
+    if let Some(err) = result.value.err {
         return Err(format!(
             "Failed to simulate insructions: {err} [logs: {:?}]",
-            value.logs
+            result.value.logs
         )
         .into());
     }
-    let accounts = value.accounts.expect("accounts");
+    let accounts = result.value.accounts.expect("accounts");
     let ui_account = accounts[0].as_ref().unwrap();
 
-    Ok(ui_account.decode().unwrap())
+    Ok((ui_account.decode().unwrap(), result.context.slot))
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -973,22 +991,19 @@ fn mfi_balance(
     wallet_address: Pubkey,
     token: Token,
 ) -> Result<(u64, u64), Box<dyn std::error::Error>> {
+    let remaining_outflow = u64::MAX;
     let bank_address = mfi_lookup_bank_address(token)?;
     let bank = mfi_load_bank(rpc_client, bank_address)?;
     let user_account = match mfi_load_user_account(wallet_address)? {
-        None => return Ok((0, 0)),
+        None => return Ok((0, remaining_outflow)),
         Some((_user_account_address, user_account)) => user_account,
     };
 
     match user_account.lending_account.get_balance(&bank_address) {
-        None => Ok((0, 0)),
+        None => Ok((0, remaining_outflow)),
         Some(balance) => {
             let deposit = bank.get_asset_amount(balance.asset_shares.into());
-            let liablilty = bank.get_liability_amount(balance.liability_shares.into());
-            Ok((
-                deposit.floor().to_num::<u64>(),
-                liablilty.floor().to_num::<u64>(),
-            ))
+            Ok((deposit.floor().to_num::<u64>(), remaining_outflow))
         }
     }
 }
@@ -1217,7 +1232,8 @@ fn kamino_load_reserve(
         ],
     )];
 
-    let reserve_account = simulate_instructions(rpc_client, &instructions, reserve_address)?;
+    let (reserve_account, _slot) =
+        simulate_instructions(rpc_client, &instructions, reserve_address)?;
 
     kamino_unsafe_load_reserve_account_data(&reserve_account.data)
 }
@@ -1334,11 +1350,13 @@ fn kamino_deposited_amount(
     pool: &str,
     wallet_address: Pubkey,
     token: Token,
-) -> Result<u64, Box<dyn std::error::Error>> {
+) -> Result<(u64, u64), Box<dyn std::error::Error>> {
     let (market_reserve_address, reserve) = kamino_load_pool_reserve(rpc_client, pool, token)?;
+    let remaining_outflow = u64::MAX;
+
     let market_obligation = kamino_find_obligation_address(wallet_address, reserve.lending_market);
     if matches!(rpc_client.get_balance(&market_obligation), Ok(0)) {
-        return Ok(0);
+        return Ok((0, remaining_outflow));
     }
     let obligation = kamino_unsafe_load_obligation(rpc_client, market_obligation)?;
 
@@ -1350,7 +1368,10 @@ fn kamino_deposited_amount(
         .unwrap_or_default();
 
     let collateral_exchange_rate = reserve.collateral_exchange_rate();
-    Ok(collateral_exchange_rate.collateral_to_liquidity(collateral_deposited_amount))
+    Ok((
+        collateral_exchange_rate.collateral_to_liquidity(collateral_deposited_amount),
+        remaining_outflow,
+    ))
 }
 
 fn kamino_deposit_or_withdraw(
@@ -1646,7 +1667,7 @@ fn kamino_deposit_or_withdraw(
 fn solend_load_reserve(
     rpc_client: &RpcClient,
     reserve_address: Pubkey,
-) -> Result<solend::state::Reserve, Box<dyn std::error::Error>> {
+) -> Result<(solend::state::Reserve, Slot), Box<dyn std::error::Error>> {
     let rpc_reserve =
         solend::state::Reserve::unpack(rpc_client.get_account_data(&reserve_address)?.as_ref())?;
 
@@ -1669,15 +1690,16 @@ fn solend_load_reserve(
         ],
     )];
 
-    let reserve_account = simulate_instructions(rpc_client, &instructions, reserve_address)?;
-    Ok(solend::state::Reserve::unpack(&reserve_account.data)?)
+    let (reserve_account, slot) =
+        simulate_instructions(rpc_client, &instructions, reserve_address)?;
+    Ok((solend::state::Reserve::unpack(&reserve_account.data)?, slot))
 }
 
 fn solend_load_reserve_for_pool(
     rpc_client: &RpcClient,
     pool: &str,
     token: Token,
-) -> Result<(Pubkey, solend::state::Reserve), Box<dyn std::error::Error>> {
+) -> Result<(Pubkey, solend::state::Reserve, Slot), Box<dyn std::error::Error>> {
     let market_reserve_map = match pool {
         "solend-main" => HashMap::from([
             (
@@ -1703,9 +1725,22 @@ fn solend_load_reserve_for_pool(
         .get(&token)
         .ok_or_else(|| format!("{pool}: {token} is not supported"))?;
 
-    let reserve = solend_load_reserve(rpc_client, market_reserve_address)?;
+    let (reserve, slot) = solend_load_reserve(rpc_client, market_reserve_address)?;
 
-    Ok((market_reserve_address, reserve))
+    Ok((market_reserve_address, reserve, slot))
+}
+
+fn solend_remaining_outflow_for_reserve(
+    mut reserve: solend::state::Reserve,
+    context_slot: Slot,
+) -> Result<u64, Box<dyn std::error::Error>> {
+    if reserve.rate_limiter.config.window_duration == 0 {
+        Ok(u64::MAX)
+    } else {
+        let remaining_outflow = reserve.rate_limiter.remaining_outflow(context_slot)?;
+        let collateral_exchange_rate = reserve.collateral_exchange_rate()?;
+        Ok(collateral_exchange_rate.collateral_to_liquidity(remaining_outflow.try_round_u64()?)?)
+    }
 }
 
 fn solend_apr(
@@ -1713,7 +1748,8 @@ fn solend_apr(
     pool: &str,
     token: Token,
 ) -> Result<f64, Box<dyn std::error::Error>> {
-    let (_market_reserve_address, reserve) = solend_load_reserve_for_pool(rpc_client, pool, token)?;
+    let (_market_reserve_address, reserve, _context_slot) =
+        solend_load_reserve_for_pool(rpc_client, pool, token)?;
 
     let utilization_rate = reserve.liquidity.utilization_rate()?;
     let current_borrow_rate = reserve.current_borrow_rate().unwrap();
@@ -1758,13 +1794,14 @@ fn solend_deposited_amount(
     pool: &str,
     wallet_address: Pubkey,
     token: Token,
-) -> Result<u64, Box<dyn std::error::Error>> {
-    let (market_reserve_address, reserve) = solend_load_reserve_for_pool(rpc_client, pool, token)?;
+) -> Result<(u64, u64), Box<dyn std::error::Error>> {
+    let (market_reserve_address, reserve, context_slot) =
+        solend_load_reserve_for_pool(rpc_client, pool, token)?;
+    let remaining_outflow = solend_remaining_outflow_for_reserve(reserve.clone(), context_slot)?;
 
-    let lending_market = reserve.lending_market;
-    let market_obligation = solend_find_obligation_address(wallet_address, lending_market);
+    let market_obligation = solend_find_obligation_address(wallet_address, reserve.lending_market);
     if matches!(rpc_client.get_balance(&market_obligation), Ok(0)) {
-        return Ok(0);
+        return Ok((0, remaining_outflow));
     }
 
     let obligation = solend_load_obligation(rpc_client, market_obligation)?;
@@ -1777,7 +1814,10 @@ fn solend_deposited_amount(
         .unwrap_or_default();
 
     let collateral_exchange_rate = reserve.collateral_exchange_rate()?;
-    Ok(collateral_exchange_rate.collateral_to_liquidity(collateral_deposited_amount)?)
+    Ok((
+        collateral_exchange_rate.collateral_to_liquidity(collateral_deposited_amount)?,
+        remaining_outflow,
+    ))
 }
 
 fn solend_deposit_or_withdraw(
@@ -1788,7 +1828,8 @@ fn solend_deposit_or_withdraw(
     token: Token,
     amount: u64,
 ) -> Result<DepositOrWithdrawResult, Box<dyn std::error::Error>> {
-    let (market_reserve_address, reserve) = solend_load_reserve_for_pool(rpc_client, pool, token)?;
+    let (market_reserve_address, reserve, _context_slot) =
+        solend_load_reserve_for_pool(rpc_client, pool, token)?;
 
     let market_obligation = solend_find_obligation_address(wallet_address, reserve.lending_market);
     let obligation = solend_load_obligation(rpc_client, market_obligation)?;
@@ -1891,12 +1932,12 @@ fn solend_deposit_or_withdraw(
                     if *reserve_address != market_reserve_address {
                         Some((
                             *reserve_address,
-                            solend_load_reserve(rpc_client, *reserve_address).unwrap_or_else(
-                                |err| {
+                            solend_load_reserve(rpc_client, *reserve_address)
+                                .unwrap_or_else(|err| {
                                     // TODO: propagate failure up instead of panic..
                                     panic!("unable to load reserve {reserve_address}: {err}")
-                                },
-                            ),
+                                })
+                                .0,
                         ))
                     } else {
                         None
