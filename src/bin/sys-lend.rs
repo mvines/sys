@@ -144,11 +144,11 @@ fn supported_pools_for_token(token: Token) -> Vec<String> {
 }
 
 #[derive(Default)]
-struct ReserveAccountDataCache {
+struct AccountDataCache {
     cache: HashMap<Pubkey, (Vec<u8>, Slot)>,
 }
 
-impl ReserveAccountDataCache {
+impl AccountDataCache {
     fn exists(&mut self, reserve_address: &Pubkey) -> bool {
         self.cache.contains_key(reserve_address)
     }
@@ -171,7 +171,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let default_json_rpc_url = "https://api.mainnet-beta.solana.com";
 
     let pools = SUPPORTED_TOKENS.keys().copied().collect::<Vec<_>>();
-    let mut reserve_account_cache = ReserveAccountDataCache::default();
+    let mut account_data_cache = AccountDataCache::default();
 
     let app_version = &*app_version();
     let app = App::new("sys-lend")
@@ -438,12 +438,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         rpc_client: &RpcClient,
         pool: &str,
         token: Token,
-        reserve_account_cache: &mut ReserveAccountDataCache,
+        account_data_cache: &mut AccountDataCache,
     ) -> Result<f64, Box<dyn std::error::Error>> {
         Ok(if pool.starts_with("kamino-") {
-            kamino_apr(rpc_client, pool, token, reserve_account_cache)?
+            kamino_apr(rpc_client, pool, token, account_data_cache)?
         } else if pool.starts_with("solend-") {
-            solend_apr(rpc_client, pool, token, reserve_account_cache)?
+            solend_apr(rpc_client, pool, token, account_data_cache)?
         } else if pool == "mfi" {
             mfi_apr(rpc_client, token)?
         } else {
@@ -456,12 +456,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         pool: &str,
         token: Token,
         address: Pubkey,
-        reserve_account_cache: &mut ReserveAccountDataCache,
+        account_data_cache: &mut AccountDataCache,
     ) -> Result<(u64, u64), Box<dyn std::error::Error>> {
         Ok(if pool.starts_with("kamino-") {
-            kamino_deposited_amount(rpc_client, pool, address, token, reserve_account_cache)?
+            kamino_deposited_amount(rpc_client, pool, address, token, account_data_cache)?
         } else if pool.starts_with("solend-") {
-            solend_deposited_amount(rpc_client, pool, address, token, reserve_account_cache)?
+            solend_deposited_amount(rpc_client, pool, address, token, account_data_cache)?
         } else if pool == "mfi" {
             mfi_balance(rpc_client, address, token)?
         } else {
@@ -487,7 +487,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     &rpc_client,
                     &pool,
                     token,
-                    &mut reserve_account_cache,
+                    &mut account_data_cache,
                 )?) * 100.;
                 let apy_as_bps = (apy * 100.) as u64;
                 pool_apy.insert(pool, apy_as_bps);
@@ -557,9 +557,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     pool,
                     token,
                     address,
-                    &mut reserve_account_cache,
+                    &mut account_data_cache,
                 )?;
-                let apr = pool_supply_apr(&rpc_client, pool, token, &mut reserve_account_cache)?;
+                let apr = pool_supply_apr(&rpc_client, pool, token, &mut account_data_cache)?;
 
                 let msg = format!(
                     "{:>15}: {} supplied at {:.2}%{}",
@@ -657,7 +657,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         pool,
                         token,
                         address,
-                        &mut reserve_account_cache,
+                        &mut account_data_cache,
                     )
                     .unwrap_or_else(|err| panic!("Unable to read balance for {pool}: {err}"));
 
@@ -677,7 +677,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .iter()
                 .map(|pool| {
                     let supply_apr =
-                        pool_supply_apr(&rpc_client, pool, token, &mut reserve_account_cache)
+                        pool_supply_apr(&rpc_client, pool, token, &mut account_data_cache)
                             .unwrap_or_else(|err| panic!("Unable to read apr for {pool}: {err}"));
                     (pool.clone(), supply_apr)
                 })
@@ -756,7 +756,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         address,
                         token,
                         amount,
-                        &mut reserve_account_cache,
+                        &mut account_data_cache,
                     )?
                 } else if pool.starts_with("solend-") {
                     solend_deposit_or_withdraw(
@@ -766,7 +766,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         address,
                         token,
                         amount,
-                        &mut reserve_account_cache,
+                        &mut account_data_cache,
                     )?
                 } else if pool == "mfi" {
                     mfi_deposit_or_withdraw(op, &rpc_client, address, token, amount, false)?
@@ -1254,9 +1254,9 @@ fn kamino_unsafe_load_reserve_account_data(
 fn kamino_load_reserve(
     rpc_client: &RpcClient,
     reserve_address: Pubkey,
-    reserve_account_cache: &mut ReserveAccountDataCache,
+    account_data_cache: &mut AccountDataCache,
 ) -> Result<kamino::Reserve, Box<dyn std::error::Error>> {
-    if !reserve_account_cache.exists(&reserve_address) {
+    if !account_data_cache.exists(&reserve_address) {
         let rpc_reserve = kamino_unsafe_load_reserve_account_data(
             rpc_client.get_account_data(&reserve_address)?.as_ref(),
         )?;
@@ -1295,10 +1295,10 @@ fn kamino_load_reserve(
 
         let (reserve_account, context_slot) =
             simulate_instructions(rpc_client, &instructions, reserve_address)?;
-        reserve_account_cache.add(reserve_address, reserve_account.data.clone(), context_slot);
+        account_data_cache.add(reserve_address, reserve_account.data.clone(), context_slot);
     }
 
-    let (account_data, _context_slot) = reserve_account_cache.get(&reserve_address).unwrap();
+    let (account_data, _context_slot) = account_data_cache.get(&reserve_address).unwrap();
     kamino_unsafe_load_reserve_account_data(account_data)
 }
 
@@ -1306,7 +1306,7 @@ fn kamino_load_pool_reserve(
     rpc_client: &RpcClient,
     pool: &str,
     token: Token,
-    reserve_account_cache: &mut ReserveAccountDataCache,
+    account_data_cache: &mut AccountDataCache,
 ) -> Result<(Pubkey, kamino::Reserve), Box<dyn std::error::Error>> {
     let market_reserve_map = match pool {
         "kamino-main" => HashMap::from([
@@ -1369,7 +1369,7 @@ fn kamino_load_pool_reserve(
         .get(&token)
         .ok_or_else(|| format!("{pool}: {token} is not supported"))?;
 
-    let reserve = kamino_load_reserve(rpc_client, market_reserve_address, reserve_account_cache)?;
+    let reserve = kamino_load_reserve(rpc_client, market_reserve_address, account_data_cache)?;
 
     Ok((market_reserve_address, reserve))
 }
@@ -1378,10 +1378,10 @@ fn kamino_apr(
     rpc_client: &RpcClient,
     pool: &str,
     token: Token,
-    reserve_account_cache: &mut ReserveAccountDataCache,
+    account_data_cache: &mut AccountDataCache,
 ) -> Result<f64, Box<dyn std::error::Error>> {
     let (_market_reserve_address, reserve) =
-        kamino_load_pool_reserve(rpc_client, pool, token, reserve_account_cache)?;
+        kamino_load_pool_reserve(rpc_client, pool, token, account_data_cache)?;
     Ok(reserve.current_supply_apr())
 }
 
@@ -1417,10 +1417,10 @@ fn kamino_deposited_amount(
     pool: &str,
     wallet_address: Pubkey,
     token: Token,
-    reserve_account_cache: &mut ReserveAccountDataCache,
+    account_data_cache: &mut AccountDataCache,
 ) -> Result<(u64, u64), Box<dyn std::error::Error>> {
     let (market_reserve_address, reserve) =
-        kamino_load_pool_reserve(rpc_client, pool, token, reserve_account_cache)?;
+        kamino_load_pool_reserve(rpc_client, pool, token, account_data_cache)?;
     let remaining_outflow = u64::MAX;
 
     let market_obligation = kamino_find_obligation_address(wallet_address, reserve.lending_market);
@@ -1450,10 +1450,10 @@ fn kamino_deposit_or_withdraw(
     wallet_address: Pubkey,
     token: Token,
     amount: u64,
-    reserve_account_cache: &mut ReserveAccountDataCache,
+    account_data_cache: &mut AccountDataCache,
 ) -> Result<DepositOrWithdrawResult, Box<dyn std::error::Error>> {
     let (market_reserve_address, reserve) =
-        kamino_load_pool_reserve(rpc_client, pool, token, reserve_account_cache)?;
+        kamino_load_pool_reserve(rpc_client, pool, token, account_data_cache)?;
 
     let lending_market_authority = Pubkey::find_program_address(
         &[b"lma", &reserve.lending_market.to_bytes()],
@@ -1499,7 +1499,7 @@ fn kamino_deposit_or_withdraw(
             if *reserve_address != market_reserve_address {
                 Some((
                     *reserve_address,
-                    kamino_load_reserve(rpc_client, *reserve_address, reserve_account_cache)
+                    kamino_load_reserve(rpc_client, *reserve_address, account_data_cache)
                         .unwrap_or_else(|err| {
                             // TODO: propagate failure up instead of panic..
                             panic!("unable to load reserve {reserve_address}: {err}")
@@ -1742,9 +1742,9 @@ fn kamino_deposit_or_withdraw(
 fn solend_load_reserve(
     rpc_client: &RpcClient,
     reserve_address: Pubkey,
-    reserve_account_cache: &mut ReserveAccountDataCache,
+    account_data_cache: &mut AccountDataCache,
 ) -> Result<(solend::state::Reserve, Slot), Box<dyn std::error::Error>> {
-    if !reserve_account_cache.exists(&reserve_address) {
+    if !account_data_cache.exists(&reserve_address) {
         let rpc_reserve = solend::state::Reserve::unpack(
             rpc_client.get_account_data(&reserve_address)?.as_ref(),
         )?;
@@ -1770,10 +1770,10 @@ fn solend_load_reserve(
 
         let (reserve_account, context_slot) =
             simulate_instructions(rpc_client, &instructions, reserve_address)?;
-        reserve_account_cache.add(reserve_address, reserve_account.data.clone(), context_slot);
+        account_data_cache.add(reserve_address, reserve_account.data.clone(), context_slot);
     }
 
-    let (account_data, context_slot) = reserve_account_cache.get(&reserve_address).unwrap();
+    let (account_data, context_slot) = account_data_cache.get(&reserve_address).unwrap();
 
     Ok((solend::state::Reserve::unpack(account_data)?, context_slot))
 }
@@ -1782,7 +1782,7 @@ fn solend_load_reserve_for_pool(
     rpc_client: &RpcClient,
     pool: &str,
     token: Token,
-    reserve_account_cache: &mut ReserveAccountDataCache,
+    account_data_cache: &mut AccountDataCache,
 ) -> Result<(Pubkey, solend::state::Reserve, Slot), Box<dyn std::error::Error>> {
     let market_reserve_map = match pool {
         "solend-main" => HashMap::from([
@@ -1810,7 +1810,7 @@ fn solend_load_reserve_for_pool(
         .ok_or_else(|| format!("{pool}: {token} is not supported"))?;
 
     let (reserve, slot) =
-        solend_load_reserve(rpc_client, market_reserve_address, reserve_account_cache)?;
+        solend_load_reserve(rpc_client, market_reserve_address, account_data_cache)?;
 
     Ok((market_reserve_address, reserve, slot))
 }
@@ -1832,10 +1832,10 @@ fn solend_apr(
     rpc_client: &RpcClient,
     pool: &str,
     token: Token,
-    reserve_account_cache: &mut ReserveAccountDataCache,
+    account_data_cache: &mut AccountDataCache,
 ) -> Result<f64, Box<dyn std::error::Error>> {
     let (_market_reserve_address, reserve, _context_slot) =
-        solend_load_reserve_for_pool(rpc_client, pool, token, reserve_account_cache)?;
+        solend_load_reserve_for_pool(rpc_client, pool, token, account_data_cache)?;
 
     let utilization_rate = reserve.liquidity.utilization_rate()?;
     let current_borrow_rate = reserve.current_borrow_rate().unwrap();
@@ -1880,10 +1880,10 @@ fn solend_deposited_amount(
     pool: &str,
     wallet_address: Pubkey,
     token: Token,
-    reserve_account_cache: &mut ReserveAccountDataCache,
+    account_data_cache: &mut AccountDataCache,
 ) -> Result<(u64, u64), Box<dyn std::error::Error>> {
     let (market_reserve_address, reserve, context_slot) =
-        solend_load_reserve_for_pool(rpc_client, pool, token, reserve_account_cache)?;
+        solend_load_reserve_for_pool(rpc_client, pool, token, account_data_cache)?;
     let remaining_outflow = solend_remaining_outflow_for_reserve(reserve.clone(), context_slot)?;
 
     let market_obligation = solend_find_obligation_address(wallet_address, reserve.lending_market);
@@ -1914,10 +1914,10 @@ fn solend_deposit_or_withdraw(
     wallet_address: Pubkey,
     token: Token,
     amount: u64,
-    reserve_account_cache: &mut ReserveAccountDataCache,
+    account_data_cache: &mut AccountDataCache,
 ) -> Result<DepositOrWithdrawResult, Box<dyn std::error::Error>> {
     let (market_reserve_address, reserve, _context_slot) =
-        solend_load_reserve_for_pool(rpc_client, pool, token, reserve_account_cache)?;
+        solend_load_reserve_for_pool(rpc_client, pool, token, account_data_cache)?;
 
     let market_obligation = solend_find_obligation_address(wallet_address, reserve.lending_market);
     if matches!(rpc_client.get_balance(&market_obligation), Ok(0)) {
@@ -2026,7 +2026,7 @@ fn solend_deposit_or_withdraw(
                             solend_load_reserve(
                                 rpc_client,
                                 *reserve_address,
-                                reserve_account_cache,
+                                account_data_cache,
                             )
                             .unwrap_or_else(|err| {
                                 // TODO: propagate failure up instead of panic..
