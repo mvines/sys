@@ -445,7 +445,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         } else if pool.starts_with("solend-") {
             solend_apr(rpc_client, pool, token, account_data_cache)?
         } else if pool == "mfi" {
-            mfi_apr(rpc_client, token)?
+            mfi_apr(rpc_client, token, account_data_cache)?
         } else {
             unreachable!()
         })
@@ -463,7 +463,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         } else if pool.starts_with("solend-") {
             solend_deposited_amount(rpc_client, pool, address, token, account_data_cache)?
         } else if pool == "mfi" {
-            mfi_balance(rpc_client, address, token)?
+            mfi_balance(rpc_client, address, token, account_data_cache)?
         } else {
             unreachable!()
         })
@@ -769,7 +769,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         &mut account_data_cache,
                     )?
                 } else if pool == "mfi" {
-                    mfi_deposit_or_withdraw(op, &rpc_client, address, token, amount, false)?
+                    mfi_deposit_or_withdraw(
+                        op,
+                        &rpc_client,
+                        address,
+                        token,
+                        amount,
+                        false,
+                        &mut account_data_cache,
+                    )?
                 } else {
                     unreachable!();
                 };
@@ -949,20 +957,22 @@ fn mfi_lookup_bank_address(token: Token) -> Result<Pubkey, Box<dyn std::error::E
 fn mfi_load_bank(
     rpc_client: &RpcClient,
     bank_address: Pubkey,
+    account_data_cache: &mut AccountDataCache,
 ) -> Result<marginfi_v2::Bank, Box<dyn std::error::Error>> {
-    fn unsafe_load_bank(
-        rpc_client: &RpcClient,
-        address: Pubkey,
-    ) -> Result<marginfi_v2::Bank, Box<dyn std::error::Error>> {
-        const LEN: usize = std::mem::size_of::<marginfi_v2::Bank>();
-        let account_data: [u8; LEN] = rpc_client.get_account_data(&address)?[8..LEN + 8]
-            .try_into()
-            .unwrap();
-        let reserve = unsafe { std::mem::transmute(account_data) };
-        Ok(reserve)
+    const LEN: usize = std::mem::size_of::<marginfi_v2::Bank>();
+
+    if !account_data_cache.exists(&bank_address) {
+        account_data_cache.add(
+            bank_address,
+            rpc_client.get_account_data(&bank_address)?[8..LEN + 8].into(),
+            0,
+        );
     }
 
-    unsafe_load_bank(rpc_client, bank_address)
+    let (account_data, _context_slot) = account_data_cache.get(&bank_address).unwrap();
+    let account_data: [u8; LEN] = account_data.try_into().unwrap();
+    let reserve = unsafe { std::mem::transmute(account_data) };
+    Ok(reserve)
 }
 
 fn mfi_calc_bank_apr(bank: &marginfi_v2::Bank) -> f64 {
@@ -988,14 +998,19 @@ fn mfi_calc_bank_apr(bank: &marginfi_v2::Bank) -> f64 {
         .to_num::<f64>()
 }
 
-fn mfi_apr(rpc_client: &RpcClient, token: Token) -> Result<f64, Box<dyn std::error::Error>> {
+fn mfi_apr(
+    rpc_client: &RpcClient,
+    token: Token,
+    account_data_cache: &mut AccountDataCache,
+) -> Result<f64, Box<dyn std::error::Error>> {
     let bank_address = mfi_lookup_bank_address(token)?;
-    let bank = mfi_load_bank(rpc_client, bank_address)?;
+    let bank = mfi_load_bank(rpc_client, bank_address, account_data_cache)?;
     Ok(mfi_calc_bank_apr(&bank))
 }
 
 fn mfi_load_user_account(
     wallet_address: Pubkey,
+    _account_data_cache: &mut AccountDataCache,
 ) -> Result<Option<(Pubkey, marginfi_v2::MarginfiAccount)>, Box<dyn std::error::Error>> {
     // Big mistake to require using `getProgramAccounts` to locate a MarginFi account for a wallet
     // address. Most public RPC endpoints have disabled this method. Leach off MarginFi's RPC
@@ -1049,11 +1064,12 @@ fn mfi_balance(
     rpc_client: &RpcClient,
     wallet_address: Pubkey,
     token: Token,
+    account_data_cache: &mut AccountDataCache,
 ) -> Result<(u64, u64), Box<dyn std::error::Error>> {
     let remaining_outflow = u64::MAX;
     let bank_address = mfi_lookup_bank_address(token)?;
-    let bank = mfi_load_bank(rpc_client, bank_address)?;
-    let user_account = match mfi_load_user_account(wallet_address)? {
+    let bank = mfi_load_bank(rpc_client, bank_address, account_data_cache)?;
+    let user_account = match mfi_load_user_account(wallet_address, account_data_cache)? {
         None => return Ok((0, remaining_outflow)),
         Some((_user_account_address, user_account)) => user_account,
     };
@@ -1074,9 +1090,10 @@ fn mfi_deposit_or_withdraw(
     token: Token,
     amount: u64,
     verbose: bool,
+    account_data_cache: &mut AccountDataCache,
 ) -> Result<DepositOrWithdrawResult, Box<dyn std::error::Error>> {
     let bank_address = mfi_lookup_bank_address(token)?;
-    let bank = mfi_load_bank(rpc_client, bank_address)?;
+    let bank = mfi_load_bank(rpc_client, bank_address, account_data_cache)?;
     if verbose {
         println!(
             "Deposit Limit: {}",
@@ -1084,7 +1101,7 @@ fn mfi_deposit_or_withdraw(
         );
     }
 
-    let (user_account_address, user_account) = mfi_load_user_account(wallet_address)?
+    let (user_account_address, user_account) = mfi_load_user_account(wallet_address, account_data_cache)?
         .ok_or_else(|| format!("No MarginFi account found for {wallet_address}. Manually deposit once into the pool and retry"))?;
 
     let (instructions, required_compute_units, amount) = match op {
@@ -1185,7 +1202,8 @@ fn mfi_deposit_or_withdraw(
                 if balance.active && !(amount == u64::MAX && balance.bank_pk == bank_address) {
                     account_meta.push(AccountMeta::new_readonly(balance.bank_pk, false));
 
-                    let balance_bank = mfi_load_bank(rpc_client, balance.bank_pk)?;
+                    let balance_bank =
+                        mfi_load_bank(rpc_client, balance.bank_pk, account_data_cache)?;
                     account_meta.push(AccountMeta::new_readonly(
                         balance_bank.config.oracle_keys[0],
                         false,
@@ -1403,11 +1421,20 @@ fn kamino_find_obligation_address(wallet_address: Pubkey, lending_market: Pubkey
 fn kamino_unsafe_load_obligation(
     rpc_client: &RpcClient,
     obligation_address: Pubkey,
+    account_data_cache: &mut AccountDataCache,
 ) -> Result<kamino::Obligation, Box<dyn std::error::Error>> {
     const LEN: usize = std::mem::size_of::<kamino::Obligation>();
-    let account_data: [u8; LEN] = rpc_client.get_account_data(&obligation_address)?[8..LEN + 8]
-        .try_into()
-        .unwrap();
+
+    if !account_data_cache.exists(&obligation_address) {
+        account_data_cache.add(
+            obligation_address,
+            rpc_client.get_account_data(&obligation_address)?[8..LEN + 8].into(),
+            0,
+        );
+    }
+
+    let (account_data, _context_slot) = account_data_cache.get(&obligation_address).unwrap();
+    let account_data: [u8; LEN] = account_data.try_into().unwrap();
     let obligation = unsafe { std::mem::transmute(account_data) };
     Ok(obligation)
 }
@@ -1427,7 +1454,8 @@ fn kamino_deposited_amount(
     if matches!(rpc_client.get_balance(&market_obligation), Ok(0)) {
         return Ok((0, remaining_outflow));
     }
-    let obligation = kamino_unsafe_load_obligation(rpc_client, market_obligation)?;
+    let obligation =
+        kamino_unsafe_load_obligation(rpc_client, market_obligation, account_data_cache)?;
 
     let collateral_deposited_amount = obligation
         .deposits
@@ -1470,7 +1498,8 @@ fn kamino_deposit_or_withdraw(
     if matches!(rpc_client.get_balance(&market_obligation), Ok(0)) {
         return Err(format!("{pool} obligation account not found for {wallet_address}. Manually deposit once into the pool and retry").into());
     }
-    let obligation = kamino_unsafe_load_obligation(rpc_client, market_obligation)?;
+    let obligation =
+        kamino_unsafe_load_obligation(rpc_client, market_obligation, account_data_cache)?;
 
     let obligation_farm_user_state = Pubkey::find_program_address(
         &[
@@ -1774,7 +1803,6 @@ fn solend_load_reserve(
     }
 
     let (account_data, context_slot) = account_data_cache.get(&reserve_address).unwrap();
-
     Ok((solend::state::Reserve::unpack(account_data)?, context_slot))
 }
 
@@ -1862,9 +1890,18 @@ fn solend_find_obligation_address(wallet_address: Pubkey, lending_market: Pubkey
 fn solend_load_obligation(
     rpc_client: &RpcClient,
     obligation_address: Pubkey,
+    account_data_cache: &mut AccountDataCache,
 ) -> Result<solend::state::Obligation, Box<dyn std::error::Error>> {
-    let account_data = rpc_client.get_account_data(&obligation_address)?;
-    Ok(solend::state::Obligation::unpack(&account_data)?)
+    if !account_data_cache.exists(&obligation_address) {
+        account_data_cache.add(
+            obligation_address,
+            rpc_client.get_account_data(&obligation_address)?,
+            0,
+        );
+    }
+
+    let (account_data, _context_slot) = account_data_cache.get(&obligation_address).unwrap();
+    Ok(solend::state::Obligation::unpack(account_data)?)
 }
 
 fn solend_load_lending_market(
@@ -1891,7 +1928,7 @@ fn solend_deposited_amount(
         return Ok((0, remaining_outflow));
     }
 
-    let obligation = solend_load_obligation(rpc_client, market_obligation)?;
+    let obligation = solend_load_obligation(rpc_client, market_obligation, account_data_cache)?;
 
     let collateral_deposited_amount = obligation
         .deposits
@@ -1923,7 +1960,7 @@ fn solend_deposit_or_withdraw(
     if matches!(rpc_client.get_balance(&market_obligation), Ok(0)) {
         return Err(format!("{pool} obligation account not found for {wallet_address}. Manually deposit once into the pool and retry").into());
     }
-    let obligation = solend_load_obligation(rpc_client, market_obligation)?;
+    let obligation = solend_load_obligation(rpc_client, market_obligation, account_data_cache)?;
 
     let lending_market = solend_load_lending_market(rpc_client, reserve.lending_market)?;
 
@@ -2023,16 +2060,12 @@ fn solend_deposit_or_withdraw(
                     if *reserve_address != market_reserve_address {
                         Some((
                             *reserve_address,
-                            solend_load_reserve(
-                                rpc_client,
-                                *reserve_address,
-                                account_data_cache,
-                            )
-                            .unwrap_or_else(|err| {
-                                // TODO: propagate failure up instead of panic..
-                                panic!("unable to load reserve {reserve_address}: {err}")
-                            })
-                            .0,
+                            solend_load_reserve(rpc_client, *reserve_address, account_data_cache)
+                                .unwrap_or_else(|err| {
+                                    // TODO: propagate failure up instead of panic..
+                                    panic!("unable to load reserve {reserve_address}: {err}")
+                                })
+                                .0,
                         ))
                     } else {
                         None
