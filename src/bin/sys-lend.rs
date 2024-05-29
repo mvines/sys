@@ -907,6 +907,7 @@ fn simulate_instructions(
         RpcSimulateTransactionConfig {
             sig_verify: false,
             replace_recent_blockhash: true,
+            commitment: Some(CommitmentConfig::processed()),
             accounts: Some(RpcSimulateTransactionAccountsConfig {
                 encoding: Some(UiAccountEncoding::Base64Zstd),
                 addresses: vec![return_address.to_string()],
