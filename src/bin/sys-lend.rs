@@ -1085,7 +1085,7 @@ fn mfi_deposit_or_withdraw(
     }
 
     let (user_account_address, user_account) = mfi_load_user_account(wallet_address)?
-        .ok_or_else(|| format!("No MarginFi account found for {}", wallet_address))?;
+        .ok_or_else(|| format!("No MarginFi account found for {wallet_address}. Manually deposit once into the pool and retry"))?;
 
     let (instructions, required_compute_units, amount) = match op {
         Operation::Deposit => {
@@ -1467,6 +1467,9 @@ fn kamino_deposit_or_withdraw(
     let reserve_destination_deposit_collateral = reserve.collateral.supply_vault;
 
     let market_obligation = kamino_find_obligation_address(wallet_address, reserve.lending_market);
+    if matches!(rpc_client.get_balance(&market_obligation), Ok(0)) {
+        return Err(format!("{pool} obligation account not found for {wallet_address}. Manually deposit once into the pool and retry").into());
+    }
     let obligation = kamino_unsafe_load_obligation(rpc_client, market_obligation)?;
 
     let obligation_farm_user_state = Pubkey::find_program_address(
@@ -1917,6 +1920,9 @@ fn solend_deposit_or_withdraw(
         solend_load_reserve_for_pool(rpc_client, pool, token, reserve_account_cache)?;
 
     let market_obligation = solend_find_obligation_address(wallet_address, reserve.lending_market);
+    if matches!(rpc_client.get_balance(&market_obligation), Ok(0)) {
+        return Err(format!("{pool} obligation account not found for {wallet_address}. Manually deposit once into the pool and retry").into());
+    }
     let obligation = solend_load_obligation(rpc_client, market_obligation)?;
 
     let lending_market = solend_load_lending_market(rpc_client, reserve.lending_market)?;
