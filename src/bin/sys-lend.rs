@@ -2122,6 +2122,8 @@ fn solend_deposit_or_withdraw(
                     AccountMeta::new(wallet_address, true),
                     // Token Program
                     AccountMeta::new_readonly(spl_token::id(), false),
+                    // Lending Market
+                    AccountMeta::new(market_reserve_address, false),
                 ],
             ));
 
