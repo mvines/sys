@@ -941,6 +941,7 @@ async fn process_exchange_sell(
             None,
             &mut 0.,
             &mut 0.,
+            &mut 0.,
             &mut false,
             &mut 0.,
             None,
@@ -1685,6 +1686,7 @@ async fn maybe_println_lot(
     lot: &Lot,
     current_price: Option<Decimal>,
     liquidity_token_info: Option<&LiquidityTokenInfo>,
+    total_basis: &mut f64,
     total_income: &mut f64,
     total_cap_gain: &mut f64,
     long_term_cap_gain: &mut bool,
@@ -1697,6 +1699,7 @@ async fn maybe_println_lot(
         f64::try_from(Decimal::from_f64(token.ui_amount(lot.amount)).unwrap() * current_price)
             .unwrap()
     });
+    let basis = lot.basis(token);
     let income = lot.income(token);
     let cap_gain = lot.cap_gain(token, current_price.unwrap_or_default());
 
@@ -1714,6 +1717,7 @@ async fn maybe_println_lot(
         }
     }
 
+    *total_basis += basis;
     *total_income += income;
     *total_cap_gain += cap_gain;
     *total_current_value += current_value.unwrap_or_default();
@@ -1930,6 +1934,7 @@ async fn process_account_add(
             &lot,
             Some(current_price),
             None,
+            &mut 0.,
             &mut 0.,
             &mut 0.,
             &mut false,
@@ -2223,6 +2228,7 @@ async fn process_account_list(
                 let mut lots = account.lots.iter().collect::<Vec<_>>();
                 lots.sort_by_key(|lot| lot.acquisition.when);
 
+                let mut account_basis = 0.;
                 let mut account_income = 0.;
                 let mut account_current_value = 0.;
                 let mut account_unrealized_short_term_gain = 0.;
@@ -2241,6 +2247,7 @@ async fn process_account_list(
                         lot,
                         current_token_price,
                         liquidity_token_info.as_ref(),
+                        &mut account_basis,
                         &mut account_income,
                         &mut account_unrealized_gain,
                         &mut long_term_cap_gain,
@@ -2295,6 +2302,7 @@ async fn process_account_list(
                             lot,
                             current_token_price,
                             liquidity_token_info.as_ref(),
+                            &mut account_basis,
                             &mut account_income,
                             &mut account_unrealized_gain,
                             &mut long_term_cap_gain,
@@ -2320,11 +2328,6 @@ async fn process_account_list(
                         }
                     }
                 }
-
-                let account_basis = account_current_value
-                    - account_income
-                    - account_unrealized_short_term_gain
-                    - account_unrealized_long_term_gain;
 
                 println!(
                     "    Value: ${}{}",
@@ -3767,6 +3770,7 @@ async fn process_account_sync(
                     None,
                     &mut 0.,
                     &mut 0.,
+                    &mut 0.,
                     &mut false,
                     &mut 0.,
                     Some(notifier),
@@ -3823,6 +3827,7 @@ async fn process_account_sync(
                 &lot,
                 Some(current_token_price),
                 None,
+                &mut 0.,
                 &mut 0.,
                 &mut 0.,
                 &mut false,

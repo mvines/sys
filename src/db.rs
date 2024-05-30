@@ -302,17 +302,20 @@ pub struct Lot {
 }
 
 impl Lot {
+    pub fn basis(&self, token: MaybeToken) -> f64 {
+        (self.acquisition.price() * Decimal::from_f64(token.ui_amount(self.amount)).unwrap())
+            .try_into()
+            .unwrap()
+    }
+
     // Figure the amount of income that the Lot incurred
     pub fn income(&self, token: MaybeToken) -> f64 {
         match self.acquisition.kind {
             // These lots were acquired pre-tax
             LotAcquistionKind::EpochReward { .. } | LotAcquistionKind::NotAvailable => {
-                (self.acquisition.price()
-                    * Decimal::from_f64(token.ui_amount(self.amount)).unwrap())
-                .try_into()
-                .unwrap()
+                self.basis(token)
             }
-            // Assume these kinds of lots are acquired with post-tax funds
+            // Assume these kinds of lots are acquired post-tax
             LotAcquistionKind::Exchange { .. }
             | LotAcquistionKind::Fiat
             | LotAcquistionKind::Swap { .. }
