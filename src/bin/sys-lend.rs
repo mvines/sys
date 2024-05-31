@@ -711,9 +711,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 })
                 .unwrap_or(deposit_pool);
 
-            let apy_improvement_bps = (apr_to_apy(
-                supply_apr.get(deposit_pool).unwrap() - supply_apr.get(withdraw_pool).unwrap(),
-            ) * 10000.) as u16;
+            let deposit_pool_apy = apr_to_apy(*supply_apr.get(deposit_pool).unwrap()) * 100.;
+            let withdraw_pool_apy = apr_to_apy(*supply_apr.get(withdraw_pool).unwrap()) * 100.;
+
+            let apy_improvement_bps = ((deposit_pool_apy - withdraw_pool_apy) * 100.) as isize;
 
             let ops = match cmd {
                 Command::Deposit => vec![(Operation::Deposit, deposit_pool)],
@@ -724,14 +725,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         return Ok(());
                     }
 
-                    if apy_improvement_bps < minimum_apy_improvement_bps {
+                    if apy_improvement_bps < minimum_apy_improvement_bps as isize {
                         println!(
-                            "Rebalance from {} to {} will only improve APY by {}bps \
-                                 (minimum required improvement: {}bps)",
-                            withdraw_pool,
-                            deposit_pool,
-                            apy_improvement_bps,
-                            minimum_apy_improvement_bps
+                            "Rebalance from {withdraw_pool} ({withdraw_pool_apy:.2}%) \
+                               to {deposit_pool} ({deposit_pool_apy:.2}%) will only improve APY \
+                               by {apy_improvement_bps}bps \
+                                 (minimum required improvement: {minimum_apy_improvement_bps}bps)"
                         );
                         return Ok(());
                     }
@@ -868,12 +867,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     signature
                 ),
                 Command::Rebalance => format!(
-                    "Rebalancing {} from {} to {} via {} for an additional {}bps",
+                    "Rebalancing {} from {withdraw_pool} ({withdraw_pool_apy:.2}%) \
+                      to {deposit_pool} ({deposit_pool_apy:.2}%) via {signature} \
+                        for an additional {apy_improvement_bps}bps",
                     token.format_amount(amount),
-                    withdraw_pool,
-                    deposit_pool,
-                    signature,
-                    apy_improvement_bps,
                 ),
             };
             notifier.send(&msg).await;
