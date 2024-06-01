@@ -3946,25 +3946,13 @@ async fn process_account_wrap<T: Signers>(
         rpc_client.get_latest_blockhash_with_commitment(rpc_client.commitment())?;
 
     let mut instructions = vec![];
-
-    // TODO: replace the following block with
-    // `spl_associated_token_account::instruction::create_associated_token_account_idempotent()`
-    // when it ships to mainnet
-    if rpc_client
-        .get_account_with_commitment(&wsol_address, rpc_client.commitment())?
-        .value
-        .is_none()
-    {
-        instructions.push(
-            spl_associated_token_account::instruction::create_associated_token_account_idempotent(
-                &authority_address,
-                &address,
-                &wsol.mint(),
-                &spl_token::id(),
-            ),
-        );
-    }
     instructions.extend([
+        spl_associated_token_account::instruction::create_associated_token_account_idempotent(
+            &authority_address,
+            &address,
+            &wsol.mint(),
+            &spl_token::id(),
+        ),
         system_instruction::transfer(&address, &wsol_address, amount),
         spl_token::instruction::sync_native(&spl_token::id(), &wsol_address).unwrap(),
     ]);

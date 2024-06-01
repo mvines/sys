@@ -20,7 +20,8 @@ use {
         program_pack::Pack,
         pubkey,
         pubkey::Pubkey,
-        system_program, sysvar,
+        signature::{Keypair, Signer},
+        system_instruction, system_program, sysvar,
         transaction::{Transaction, VersionedTransaction},
     },
     std::collections::{BTreeMap, HashMap, HashSet},
@@ -249,7 +250,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .value_name("TOKEN")
                         .takes_value(true)
                         .required(true)
-                        .validator(is_valid_token)
+                        .validator(is_valid_token_or_sol)
                         .default_value("USDC")
                         .help("Token to deposit"),
                 ),
@@ -289,7 +290,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .value_name("TOKEN")
                         .takes_value(true)
                         .required(true)
-                        .validator(is_valid_token)
+                        .validator(is_valid_token_or_sol)
                         .default_value("USDC")
                         .help("Token to withdraw"),
                 ),
@@ -330,7 +331,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .value_name("TOKEN")
                         .takes_value(true)
                         .required(true)
-                        .validator(is_valid_token)
+                        .validator(is_valid_token_or_sol)
                         .default_value("USDC")
                         .help("Token to rebalance"),
                 )
@@ -370,7 +371,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .value_name("TOKEN")
                         .takes_value(true)
                         .required(true)
-                        .validator(is_valid_token)
+                        .validator(is_valid_token_or_sol)
                         .default_value("USDC")
                         .help("Token to deposit"),
                 ),
@@ -393,7 +394,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .value_name("TOKEN")
                         .takes_value(true)
                         .required(true)
-                        .validator(is_valid_token)
+                        .validator(is_valid_token_or_sol)
                         .default_value("USDC")
                         .help("Token"),
                 )
@@ -475,7 +476,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     match app_matches.subcommand() {
         ("supply-apy", Some(matches)) => {
-            let token = value_t_or_exit!(matches, "token", Token);
+            let maybe_token = MaybeToken::from(value_t!(matches, "token", Token).ok());
+            let token = maybe_token.token().unwrap_or(Token::wSOL);
             let diff = matches.is_present("diff");
             let raw = matches.is_present("raw");
             let bps = matches.is_present("bps");
@@ -512,7 +514,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     value.to_string()
                 } else {
                     format!(
-                        "{token} APY is {value}{} more on {} than {}",
+                        "{maybe_token} APY is {value}{} more on {} than {}",
                         if bps { "bps" } else { "%" },
                         max_pool.0,
                         min_pool.0,
@@ -532,7 +534,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         value.to_string()
                     } else {
                         format!(
-                            "{pool:>15}: {token} {value:>5}{}",
+                            "{pool:>15}: {maybe_token} {value:>5}{}",
                             if bps { "bps" } else { "%" }
                         )
                     };
@@ -546,7 +548,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         ("supply-balance", Some(matches)) => {
             let address = pubkey_of(matches, "address").unwrap();
-            let token = value_t_or_exit!(matches, "token", Token);
+            let maybe_token = MaybeToken::from(value_t!(matches, "token", Token).ok());
+            let token = maybe_token.token().unwrap_or(Token::wSOL);
             let pools = values_t!(matches, "pool", String)
                 .ok()
                 .unwrap_or_else(|| supported_pools_for_token(token));
@@ -568,12 +571,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let msg = format!(
                     "{:>15}: {} supplied at {:.2}%{}",
                     pool,
-                    token.format_amount(amount),
+                    maybe_token.format_amount(amount),
                     apr_to_apy(apr) * 100.,
                     if remaining_outflow < amount {
                         format!(
                             ", with {} available to withdraw",
-                            token.format_amount(remaining_outflow)
+                            maybe_token.format_amount(remaining_outflow)
                         )
                     } else {
                         "".into()
@@ -617,18 +620,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let address = address.expect("address");
             let signer = signer.expect("signer");
 
-            let token = value_t_or_exit!(matches, "token", Token);
+            let maybe_token = MaybeToken::from(value_t!(matches, "token", Token).ok());
+            let token = maybe_token.token().unwrap_or(Token::wSOL);
+
             let pools = values_t!(matches, "pool", String)
                 .ok()
                 .unwrap_or_else(|| supported_pools_for_token(token));
             let minimum_apy_improvement_bps =
                 value_t!(matches, "minimum_apy_improvement", u16).unwrap_or(10000);
 
-            let token_balance = token.balance(&rpc_client, &address)?;
+            let token_balance = maybe_token.balance(&rpc_client, &address)?;
             let amount = match matches.value_of("amount").unwrap() {
                 "ALL" => {
                     if cmd == Command::Deposit {
-                        token_balance
+                        token_balance.saturating_sub(if maybe_token.is_sol() {
+                            sol_to_lamports(0.1)
+                        } else {
+                            0
+                        })
                     } else {
                         u64::MAX
                     }
@@ -640,8 +649,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if amount > token_balance {
                     return Err(format!(
                         "Deposit amount of {} is greater than current balance of {}",
-                        token.format_amount(amount),
-                        token.format_amount(token_balance),
+                        maybe_token.format_amount(amount),
+                        maybe_token.format_amount(token_balance),
                     )
                     .into());
                 }
@@ -708,7 +717,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let balance = *supply_balance.get(*pool).unwrap();
 
                     if amount == u64::MAX {
-                        balance > 0
+                        balance > 1 // Solend/Kamino leave 1 in sometimes :-/
                     } else {
                         balance >= amount
                     }
@@ -785,6 +794,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     unreachable!();
                 };
 
+                if maybe_token.is_sol() && op == Operation::Deposit {
+                    // Wrap SOL into wSOL
+                    instructions.extend(vec![
+                        spl_associated_token_account::instruction::create_associated_token_account_idempotent(
+                            &address,
+                            &address,
+                            &token.mint(),
+                            &spl_token::id(),
+                        ),
+                        system_instruction::transfer(&address, &token.ata(&address), amount),
+                        spl_token::instruction::sync_native(&spl_token::id(), &token.ata(&address)).unwrap(),
+                    ]);
+                    required_compute_units += 20_000;
+                }
+
                 instructions.extend(result.instructions);
                 if let Some(address_lookup_table) = result.address_lookup_table {
                     address_lookup_tables.push(address_lookup_table);
@@ -792,14 +816,73 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 required_compute_units += result.required_compute_units;
                 amount = result.amount;
 
+                if maybe_token.is_sol() && op == Operation::Withdraw {
+                    // Unwrap wSOL into SOL
+
+                    let seed = &Keypair::new().pubkey().to_string()[..31];
+                    let ephemeral_token_account =
+                        Pubkey::create_with_seed(&address, seed, &spl_token::id()).unwrap();
+
+                    let space = spl_token::state::Account::LEN;
+                    let lamports = rpc_client.get_minimum_balance_for_rent_exemption(space)?;
+
+                    instructions.extend(vec![
+                        system_instruction::create_account_with_seed(
+                            &address,
+                            &ephemeral_token_account,
+                            &address,
+                            seed,
+                            lamports,
+                            space as u64,
+                            &spl_token::id(),
+                        ),
+                        spl_token::instruction::initialize_account(
+                            &spl_token::id(),
+                            &ephemeral_token_account,
+                            &token.mint(),
+                            &address,
+                        )
+                        .unwrap(),
+                        spl_token::instruction::transfer_checked(
+                            &spl_token::id(),
+                            &token.ata(&address),
+                            &token.mint(),
+                            &ephemeral_token_account,
+                            &address,
+                            &[],
+                            amount,
+                            token.decimals(),
+                        )
+                        .unwrap(),
+                        spl_token::instruction::close_account(
+                            &spl_token::id(),
+                            &ephemeral_token_account,
+                            &address,
+                            &address,
+                            &[],
+                        )
+                        .unwrap(),
+                    ]);
+
+                    required_compute_units += 30_000;
+                }
+
                 let principal_balance_change_ui_amount = match op {
                     Operation::Deposit => {
-                        println!("Depositing {} into {}", token.format_amount(amount), pool);
-                        token.ui_amount(amount)
+                        println!(
+                            "Depositing {} into {}",
+                            maybe_token.format_amount(amount),
+                            pool
+                        );
+                        maybe_token.ui_amount(amount)
                     }
                     Operation::Withdraw => {
-                        println!("Withdrawing {} from {}", token.format_amount(amount), pool);
-                        -token.ui_amount(amount)
+                        println!(
+                            "Withdrawing {} from {}",
+                            maybe_token.format_amount(amount),
+                            pool
+                        );
+                        -maybe_token.ui_amount(amount)
                     }
                 };
                 metrics::push(dp::principal_balance_change(
@@ -858,14 +941,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let msg = match cmd {
                 Command::Deposit => format!(
                     "Depositing {} from {} into {} via {}",
-                    token.format_amount(amount),
+                    maybe_token.format_amount(amount),
                     address,
                     deposit_pool,
                     signature
                 ),
                 Command::Withdraw => format!(
                     "Withdrew {} from {} into {} via {}",
-                    token.format_amount(amount),
+                    maybe_token.format_amount(amount),
                     withdraw_pool,
                     address,
                     signature
@@ -874,7 +957,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "Rebalancing {} from {withdraw_pool} ({withdraw_pool_apy:.2}%) \
                       to {deposit_pool} ({deposit_pool_apy:.2}%) via {signature} \
                         for an additional {apy_improvement_bps}bps",
-                    token.format_amount(amount),
+                    maybe_token.format_amount(amount),
                 ),
             };
             notifier.send(&msg).await;

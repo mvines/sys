@@ -420,7 +420,7 @@ impl MaybeToken {
         format!(
             "{}{}",
             self.symbol(),
-            ui_amount.separated_string_with_fixed_place(2)
+            ui_amount.separated_string_with_fixed_place(6)
         )
     }
 }
