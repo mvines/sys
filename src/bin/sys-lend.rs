@@ -42,9 +42,11 @@ lazy_static::lazy_static! {
         ("solend-main", HashSet::from([
             Token::USDC,
             Token::USDT,
+            Token::wSOL,
         ])) ,
         ("solend-turbosol", HashSet::from([
             Token::USDC,
+            Token::wSOL,
         ])) ,
         ("solend-jlp", HashSet::from([
             Token::USDC,
@@ -52,16 +54,18 @@ lazy_static::lazy_static! {
         ("mfi", HashSet::from([
             Token::USDC,
             Token::USDT,
-            Token::UXD
+            Token::UXD,
+            Token::wSOL,
         ])) ,
         ("kamino-main", HashSet::from([
             Token::USDC,
             Token::USDT,
-            Token::JitoSOL
+            Token::JitoSOL,
+            Token::wSOL,
         ])) ,
         ("kamino-jlp", HashSet::from([
             Token::USDC,
-            Token::JLP
+            Token::JLP,
         ])) ,
         ("kamino-altcoins", HashSet::from([
             Token::USDC,
@@ -946,6 +950,7 @@ fn mfi_lookup_bank_address(token: Token) -> Result<Pubkey, Box<dyn std::error::E
         Token::USDC => Some(pubkey!["2s37akK2eyBbp8DZgCm7RtsaEz8eJP3Nxd4urLHQv7yB"]),
         Token::USDT => Some(pubkey!["HmpMfL8942u22htC4EMiWgLX931g3sacXFR6KjuLgKLV"]),
         Token::UXD => Some(pubkey!["BeNBJrAh1tZg5sqgt8D6AWKJLD5KkBrfZvtcgd7EuiAR"]),
+        Token::wSOL => Some(pubkey!["CCKtUs6Cgwo4aaQUmBPmyoApH2gUDErxNZCAntD6LYGh"]),
         _ => None,
     }
     .ok_or_else(|| format!("mfi_load_bank: {token} is not supported").into())
@@ -1336,6 +1341,10 @@ fn kamino_load_pool_reserve(
             (
                 Token::JitoSOL,
                 pubkey!["EVbyPKrHG6WBfm4dLxLMJpUDY43cCAcHSpV3KYjKsktW"],
+            ),
+            (
+                Token::wSOL,
+                pubkey!["d4A2prbA2whesmvHaL88BH6Ewn5N4bTSU2Ze8P6Bc4Q"],
             ),
         ]),
         "kamino-altcoins" => HashMap::from([
@@ -1819,11 +1828,21 @@ fn solend_load_reserve_for_pool(
                 Token::USDT,
                 pubkey!["8K9WC8xoh2rtQNY7iEGXtPvfbDCi563SdWhCAhuMP2xE"],
             ),
+            (
+                Token::wSOL,
+                pubkey!["8PbodeaosQP19SjYFx855UMqWxH2HynZLdBXmsrbac36"],
+            ),
         ]),
-        "solend-turbosol" => HashMap::from([(
-            Token::USDC,
-            pubkey!["EjUgEaPpKMg2nqex9obb46gZQ6Ar9mWSdVKbw9A6PyXA"],
-        )]),
+        "solend-turbosol" => HashMap::from([
+            (
+                Token::USDC,
+                pubkey!["EjUgEaPpKMg2nqex9obb46gZQ6Ar9mWSdVKbw9A6PyXA"],
+            ),
+            (
+                Token::wSOL,
+                pubkey!["8kd8cDJEioKFXckK8tP2FHNSQLDGguCFj5Vy1vK5eDGV"],
+            ),
+        ]),
         "solend-jlp" => HashMap::from([(
             Token::USDC,
             pubkey!["GShhnkfbaYy41Fd8vSEk9zoiwZSKqbH1j16jZ2afV2GG"],
