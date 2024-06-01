@@ -15,7 +15,7 @@ use {
     },
     console::{style, Style},
     db::*,
-    itertools::Itertools,
+    itertools::{izip, Itertools},
     rpc_client_utils::get_signature_date,
     rust_decimal::prelude::*,
     separator::FixedPlaceSeparatable,
@@ -977,7 +977,7 @@ async fn process_exchange_sell(
     Ok(())
 }
 
-fn println_jup_quote(from_token: Token, to_token: Token, quote: &jup_ag::Quote) {
+fn println_jup_quote(from_token: MaybeToken, to_token: MaybeToken, quote: &jup_ag::Quote) {
     let route = quote
         .route_plan
         .iter()
@@ -996,8 +996,8 @@ fn println_jup_quote(from_token: Token, to_token: Token, quote: &jup_ag::Quote) 
 }
 
 async fn process_jup_quote(
-    from_token: Token,
-    to_token: Token,
+    from_token: MaybeToken,
+    to_token: MaybeToken,
     ui_amount: f64,
     slippage_bps: u64,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -1021,8 +1021,8 @@ async fn process_jup_swap<T: Signers>(
     db: &mut Db,
     rpc_client: &RpcClient,
     address: Pubkey,
-    from_token: Token,
-    to_token: Token,
+    from_token: MaybeToken,
+    to_token: MaybeToken,
     ui_amount: Option<f64>,
     slippage_bps: u64,
     lot_selection_method: LotSelectionMethod,
@@ -1035,7 +1035,7 @@ async fn process_jup_swap<T: Signers>(
     notifier: &Notifier,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let from_account = db
-        .get_account(address, from_token.into())
+        .get_account(address, from_token)
         .ok_or_else(|| format!("{from_token} account does not exist for {address}"))?;
 
     let from_token_price = from_token.get_current_price(rpc_client).await?;
@@ -1046,9 +1046,9 @@ async fn process_jup_swap<T: Signers>(
             existing_signature,
             0, /*last_valid_block_height*/
             address,
-            from_token.into(),
+            from_token,
             from_token_price,
-            to_token.into(),
+            to_token,
             to_token_price,
             lot_selection_method,
         )?;
@@ -1141,12 +1141,11 @@ async fn process_jup_swap<T: Signers>(
 
         println!("Generating {swap_prefix} Transaction...");
         let mut swap_request = jup_ag::SwapRequest::new(address, quote.clone());
-        swap_request.wrap_and_unwrap_sol = Some(false);
+        swap_request.wrap_and_unwrap_sol = Some(from_token.is_sol() || to_token.is_sol());
 
         if let Some(lamports) = priority_fee.exact_lamports() {
-            //swap_request.prioritization_fee_lamports = dbg!(format!("{}", exact_lamports));
             swap_request.prioritization_fee_lamports =
-                dbg!(jup_ag::PrioritizationFeeLamports::Exact { lamports });
+                jup_ag::PrioritizationFeeLamports::Exact { lamports };
         }
 
         let mut transaction = jup_ag::swap(swap_request).await?.swap_transaction;
@@ -1208,11 +1207,11 @@ async fn process_jup_swap<T: Signers>(
         let signature = signatures[0];
         transaction.signatures[0] = signature;
 
-        if db.get_account(address, to_token.into()).is_none() {
+        if db.get_account(address, to_token).is_none() {
             let epoch = rpc_client.get_epoch_info()?.epoch;
             db.add_account(TrackedAccount {
                 address,
-                token: to_token.into(),
+                token: to_token,
                 description: from_account.description,
                 last_update_epoch: epoch,
                 last_update_balance: 0,
@@ -1224,9 +1223,9 @@ async fn process_jup_swap<T: Signers>(
             signature,
             last_valid_block_height,
             address,
-            from_token.into(),
+            from_token,
             from_token_price,
-            to_token.into(),
+            to_token,
             to_token_price,
             lot_selection_method,
         )?;
@@ -1512,6 +1511,32 @@ async fn process_sync_swaps(
                         NaiveDate::from_ymd_opt(when.year(), when.month(), when.day()).unwrap();
 
                     let transaction_status_meta = result.transaction.meta.unwrap();
+                    let fee = transaction_status_meta.fee;
+
+                    let mut account_balance_diff = (|| {
+                        if let solana_transaction_status::EncodedTransaction::Json(ui_transaction) =
+                            result.transaction.transaction
+                        {
+                            if let solana_transaction_status::UiMessage::Raw(ui_message) =
+                                ui_transaction.message
+                            {
+                                return izip!(
+                                    &ui_message.account_keys,
+                                    &transaction_status_meta.pre_balances,
+                                    &transaction_status_meta.post_balances
+                                )
+                                .map(|(address, pre_balance, post_balance)| {
+                                    let diff = *post_balance as i64 - *pre_balance as i64;
+                                    (address.parse::<Pubkey>().unwrap(), diff)
+                                })
+                                .collect::<Vec<(Pubkey, i64)>>();
+                            }
+                        }
+                        vec![]
+                    })();
+                    account_balance_diff[0].1 += fee as i64;
+                    let account_balance_diff: BTreeMap<_, _> =
+                        account_balance_diff.into_iter().collect();
 
                     let pre_token_balances =
                         Option::<Vec<_>>::from(transaction_status_meta.pre_token_balances)
@@ -1587,8 +1612,26 @@ async fn process_sync_swaps(
                         (post as i64 - pre as i64).unsigned_abs()
                     };
 
-                    let from_amount = token_amount_diff(address, from_token.mint());
-                    let to_amount = token_amount_diff(address, to_token.mint());
+                    let from_amount = if from_token.is_sol() {
+                        account_balance_diff
+                            .get(&address)
+                            .unwrap_or_else(|| {
+                                panic!("account_balance_diff not found for owner {address}")
+                            })
+                            .unsigned_abs()
+                    } else {
+                        token_amount_diff(address, from_token.mint())
+                    };
+                    let to_amount = if to_token.is_sol() {
+                        account_balance_diff
+                            .get(&address)
+                            .unwrap_or_else(|| {
+                                panic!("account_balance_diff not found for owner {address}")
+                            })
+                            .unsigned_abs()
+                    } else {
+                        token_amount_diff(address, to_token.mint())
+                    };
                     let msg = format!(
                         "Swapped {}{} into {}{} at {}{} per {}1",
                         from_token.symbol(),
@@ -4022,7 +4065,7 @@ async fn process_account_unwrap<T: Signers>(
         )
         .unwrap(),
     ];
-    apply_priority_fee(rpc_client, &mut instructions, 5_000, priority_fee)?;
+    apply_priority_fee(rpc_client, &mut instructions, 30_000, priority_fee)?;
 
     let message = Message::new(&instructions, Some(&authority_address));
 
@@ -5123,8 +5166,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .value_name("SOURCE TOKEN")
                                 .takes_value(true)
                                 .required(true)
-                                .validator(is_valid_token)
-                                .default_value("wSOL")
+                                .validator(is_valid_token_or_sol)
+                                .default_value("SOL")
                                 .help("Source token"),
                         )
                         .arg(
@@ -5132,7 +5175,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .value_name("DESTINATION TOKEN")
                                 .takes_value(true)
                                 .required(true)
-                                .validator(is_valid_token)
+                                .validator(is_valid_token_or_sol)
                                 .default_value("USDC")
                                 .help("Destination token"),
                         )
@@ -5179,7 +5222,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .value_name("SOURCE TOKEN")
                                 .takes_value(true)
                                 .required(true)
-                                .validator(is_valid_token)
+                                .validator(is_valid_token_or_sol)
                                 .help("Source token"),
                         )
                         .arg(
@@ -5187,7 +5230,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .value_name("DESTINATION TOKEN")
                                 .takes_value(true)
                                 .required(true)
-                                .validator(is_valid_token)
+                                .validator(is_valid_token_or_sol)
                                 .help("Destination token"),
                         )
                         .arg(
@@ -6503,8 +6546,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
         ("jup", Some(jup_matches)) => match jup_matches.subcommand() {
             ("quote", Some(arg_matches)) => {
-                let from_token = value_t_or_exit!(arg_matches, "from_token", Token);
-                let to_token = value_t_or_exit!(arg_matches, "to_token", Token);
+                let from_token = MaybeToken::from(value_t!(arg_matches, "from_token", Token).ok());
+                let to_token = MaybeToken::from(value_t!(arg_matches, "to_token", Token).ok());
                 let ui_amount = value_t_or_exit!(arg_matches, "amount", f64);
                 let slippage_bps = value_t_or_exit!(arg_matches, "slippage_bps", u64);
 
@@ -6512,8 +6555,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             ("swap", Some(arg_matches)) => {
                 let (signer, address) = signer_of(arg_matches, "address", &mut wallet_manager)?;
-                let from_token = value_t_or_exit!(arg_matches, "from_token", Token);
-                let to_token = value_t_or_exit!(arg_matches, "to_token", Token);
+                let from_token = MaybeToken::from(value_t!(arg_matches, "from_token", Token).ok());
+                let to_token = MaybeToken::from(value_t!(arg_matches, "to_token", Token).ok());
                 let ui_amount = match arg_matches.value_of("amount").unwrap() {
                     "ALL" => None,
                     ui_amount => Some(ui_amount.parse::<f64>().unwrap()),
