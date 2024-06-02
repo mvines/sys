@@ -1008,14 +1008,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     maybe_token.format_amount(amount),
                 ),
             };
-            notifier.send(&msg).await;
-            println!("{msg}");
 
             if !send_transaction_until_expired(&rpc_client, &transaction, last_valid_block_height) {
                 let msg = format!("Transaction failed: {signature}");
                 notifier.send(&msg).await;
                 return Err(msg.into());
             }
+
+            notifier.send(&msg).await;
+            println!("{msg}");
         }
         _ => unreachable!(),
     }
