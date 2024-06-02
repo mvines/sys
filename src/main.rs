@@ -3957,7 +3957,7 @@ async fn process_account_wrap<T: Signers>(
         spl_token::instruction::sync_native(&spl_token::id(), &wsol_address).unwrap(),
     ]);
 
-    apply_priority_fee(rpc_client, &mut instructions, 5_000, priority_fee)?;
+    apply_priority_fee(rpc_client, &mut instructions, 30_000, priority_fee)?;
     let message = Message::new(&instructions, Some(&authority_address));
 
     let mut transaction = Transaction::new_unsigned(message);
