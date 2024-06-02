@@ -253,7 +253,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .validator(is_valid_token_or_sol)
                         .default_value("USDC")
                         .help("Token to deposit"),
-                ),
+                )
         )
         .subcommand(
             SubCommand::with_name("withdraw")
@@ -293,7 +293,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .validator(is_valid_token_or_sol)
                         .default_value("USDC")
                         .help("Token to withdraw"),
-                ),
+                )
         )
         .subcommand(
             SubCommand::with_name("rebalance")
@@ -374,7 +374,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .validator(is_valid_token_or_sol)
                         .default_value("USDC")
                         .help("Token to deposit"),
-                ),
+                )
+                .arg(
+                    Arg::with_name("raw")
+                        .long("raw")
+                        .takes_value(false)
+                        .help("Only output raw numerical value"),
+                )
+                .arg(
+                    Arg::with_name("total_only")
+                        .long("total-only")
+                        .takes_value(false)
+                        .help("Only display the sum the balances in the pools"),
+                )
         )
         .subcommand(
             SubCommand::with_name("supply-apy")
@@ -550,6 +562,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let address = pubkey_of(matches, "address").unwrap();
             let maybe_token = MaybeToken::from(value_t!(matches, "token", Token).ok());
             let token = maybe_token.token().unwrap_or(Token::wSOL);
+            let raw = matches.is_present("raw");
+            let total_only = matches.is_present("total_only");
+
             let pools = values_t!(matches, "pool", String)
                 .ok()
                 .unwrap_or_else(|| supported_pools_for_token(token));
@@ -594,10 +609,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     token.ui_amount(amount),
                 ))
                 .await;
-                println!("{msg}");
+                if !total_only {
+                    if raw {
+                        println!("{}", token.ui_amount(amount))
+                    } else {
+                        println!("{msg}")
+                    }
+                }
             }
 
-            if non_empty_pools_count > 1 {
+            if raw && total_only {
+                println!("{}", token.ui_amount(total_amount));
+            }
+            if !raw && non_empty_pools_count > 1 {
                 println!("\nTotal supply:    {}", token.format_amount(total_amount));
             }
         }
