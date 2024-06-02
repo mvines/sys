@@ -818,19 +818,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     unreachable!();
                 };
 
-                if maybe_token.is_sol() && op == Operation::Deposit {
-                    // Wrap SOL into wSOL
-                    instructions.extend(vec![
-                        spl_associated_token_account::instruction::create_associated_token_account_idempotent(
-                            &address,
-                            &address,
-                            &token.mint(),
-                            &spl_token::id(),
-                        ),
-                        system_instruction::transfer(&address, &token.ata(&address), amount),
-                        spl_token::instruction::sync_native(&spl_token::id(), &token.ata(&address)).unwrap(),
-                    ]);
-                    required_compute_units += 20_000;
+                match op {
+                    Operation::Deposit => {
+                        if maybe_token.is_sol() {
+                            // Wrap SOL into wSOL
+                            instructions.extend(vec![
+                                spl_associated_token_account::instruction::create_associated_token_account_idempotent(
+                                    &address,
+                                    &address,
+                                    &token.mint(),
+                                    &spl_token::id(),
+                                ),
+                                system_instruction::transfer(&address, &token.ata(&address), amount),
+                                spl_token::instruction::sync_native(&spl_token::id(), &token.ata(&address)).unwrap(),
+                            ]);
+                            required_compute_units += 20_000;
+                        }
+                    }
+                    Operation::Withdraw => {
+                        // Ensure the destination token account exists
+                        instructions.push(
+                                spl_associated_token_account::instruction::create_associated_token_account_idempotent(
+                                    &address,
+                                    &address,
+                                    &token.mint(),
+                                    &spl_token::id(),
+                                ),
+                            );
+                        required_compute_units += 25_000;
+                    }
                 }
 
                 instructions.extend(result.instructions);
@@ -959,6 +975,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             if simulation_result.err.is_some() {
                 return Err(format!("Simulation failure: {simulation_result:?}").into());
             }
+
+            /*
+            println!(
+                "Transaction paid for {} extra additional compute units",
+                required_compute_units as u64
+                    - simulation_result.units_consumed.unwrap_or_default()
+            );
+            */
 
             let signature = transaction.signatures[0];
 
