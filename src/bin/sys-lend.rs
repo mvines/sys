@@ -47,10 +47,10 @@ lazy_static::lazy_static! {
         ])) ,
         ("solend-turbosol", HashSet::from([
             Token::USDC,
-            Token::wSOL,
         ])) ,
         ("solend-jlp", HashSet::from([
             Token::USDC,
+            Token::wSOL,
         ])) ,
         ("mfi", HashSet::from([
             Token::USDC,
@@ -1982,20 +1982,20 @@ fn solend_load_reserve_for_pool(
                 pubkey!["8PbodeaosQP19SjYFx855UMqWxH2HynZLdBXmsrbac36"],
             ),
         ]),
-        "solend-turbosol" => HashMap::from([
+        "solend-turbosol" => HashMap::from([(
+            Token::USDC,
+            pubkey!["EjUgEaPpKMg2nqex9obb46gZQ6Ar9mWSdVKbw9A6PyXA"],
+        )]),
+        "solend-jlp" => HashMap::from([
             (
                 Token::USDC,
-                pubkey!["EjUgEaPpKMg2nqex9obb46gZQ6Ar9mWSdVKbw9A6PyXA"],
+                pubkey!["GShhnkfbaYy41Fd8vSEk9zoiwZSKqbH1j16jZ2afV2GG"],
             ),
             (
                 Token::wSOL,
                 pubkey!["8kd8cDJEioKFXckK8tP2FHNSQLDGguCFj5Vy1vK5eDGV"],
             ),
         ]),
-        "solend-jlp" => HashMap::from([(
-            Token::USDC,
-            pubkey!["GShhnkfbaYy41Fd8vSEk9zoiwZSKqbH1j16jZ2afV2GG"],
-        )]),
         _ => unreachable!(),
     };
     let market_reserve_address = *market_reserve_map
