@@ -254,6 +254,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .default_value("USDC")
                         .help("Token to deposit"),
                 )
+                .arg(
+                    Arg::with_name("minimum_apy")
+                        .long("minimum-apy")
+                        .value_name("BPS")
+                        .takes_value(true)
+                        .validator(is_parsable::<u16>)
+                        .help("Do not deposit if the current pool APY is less than this amount of BPS")
+                )
         )
         .subcommand(
             SubCommand::with_name("withdraw")
@@ -336,7 +344,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .help("Token to rebalance"),
                 )
                 .arg(
-                    Arg::with_name("minimum_apy_improvement")
+                    Arg::with_name("minimum_apy")
                         .long("minimum-apy-improvement")
                         .value_name("BPS")
                         .takes_value(true)
@@ -650,8 +658,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let pools = values_t!(matches, "pool", String)
                 .ok()
                 .unwrap_or_else(|| supported_pools_for_token(token));
-            let minimum_apy_improvement_bps =
-                value_t!(matches, "minimum_apy_improvement", u16).unwrap_or(10000);
+            let minimum_apy_bps = value_t!(matches, "minimum_apy", u16).unwrap_or(0);
 
             let token_balance = maybe_token.balance(&rpc_client, &address)?;
             let amount = match matches.value_of("amount").unwrap() {
@@ -754,7 +761,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let apy_improvement_bps = ((deposit_pool_apy - withdraw_pool_apy) * 100.) as isize;
 
             let ops = match cmd {
-                Command::Deposit => vec![(Operation::Deposit, deposit_pool)],
+                Command::Deposit => {
+                    let minimum_apy = minimum_apy_bps as f64 / 100.;
+                    if deposit_pool_apy < minimum_apy {
+                        println!(
+                            "Skipping deposit because {deposit_pool} APY of {deposit_pool_apy:.2}% is less than the minimum APY of {minimum_apy:.2}%"
+                        );
+                        return Ok(());
+                    }
+
+                    vec![(Operation::Deposit, deposit_pool)]
+                }
                 Command::Withdraw => vec![(Operation::Withdraw, withdraw_pool)],
                 Command::Rebalance => {
                     if withdraw_pool == deposit_pool {
@@ -762,12 +779,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         return Ok(());
                     }
 
-                    if apy_improvement_bps < minimum_apy_improvement_bps as isize {
+                    if apy_improvement_bps < minimum_apy_bps as isize {
                         println!(
                             "Rebalance from {withdraw_pool} ({withdraw_pool_apy:.2}%) \
                                to {deposit_pool} ({deposit_pool_apy:.2}%) will only improve APY \
                                by {apy_improvement_bps}bps \
-                                 (minimum required improvement: {minimum_apy_improvement_bps}bps)"
+                                 (minimum required improvement: {minimum_apy_bps}bps)"
                         );
                         return Ok(());
                     }
