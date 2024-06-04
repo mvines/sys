@@ -5926,9 +5926,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             lamports: sol_to_lamports(ui_priority_fee),
         }
     } else if let Ok(ui_priority_fee) = value_t!(app_matches, "priority_fee_auto", f64) {
-        PriorityFee::Auto {
-            max_lamports: sol_to_lamports(ui_priority_fee),
-        }
+        PriorityFee::default_auto_percentile(sol_to_lamports(ui_priority_fee))
     } else {
         PriorityFee::default_auto()
     };

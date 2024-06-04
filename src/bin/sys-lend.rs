@@ -196,6 +196,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .help("JSON RPC URL for the cluster"),
         )
         .arg(
+            Arg::with_name("send_json_rpc_url")
+                .long("send-url")
+                .value_name("URL")
+                .takes_value(true)
+                .validator(is_url_or_moniker)
+                .help("Optional addition JSON RPC URL for the cluster to be used only \
+                       for submitting transactions [default: same as --url]"),
+        )
+        .arg(
             Arg::with_name("priority_fee_exact")
                 .long("priority-fee-exact")
                 .value_name("SOL")
@@ -439,19 +448,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
 
     let app_matches = app.get_matches();
-    let rpc_client = RpcClient::new_with_commitment(
-        normalize_to_url_if_moniker(value_t_or_exit!(app_matches, "json_rpc_url", String)),
-        CommitmentConfig::confirmed(),
-    );
+
+    let json_rpc_url =
+        normalize_to_url_if_moniker(value_t_or_exit!(app_matches, "json_rpc_url", String));
+    let rpc_client = RpcClient::new_with_commitment(&json_rpc_url, CommitmentConfig::confirmed());
+    let send_json_rpc_url = match value_t!(app_matches, "send_json_rpc_url", String).ok() {
+        Some(send_json_rpc_url) => normalize_to_url_if_moniker(send_json_rpc_url),
+        None => json_rpc_url,
+    };
+    let send_rpc_client =
+        RpcClient::new_with_commitment(send_json_rpc_url, CommitmentConfig::confirmed());
+
     let priority_fee = if let Ok(ui_priority_fee) = value_t!(app_matches, "priority_fee_exact", f64)
     {
         PriorityFee::Exact {
             lamports: sol_to_lamports(ui_priority_fee),
         }
     } else if let Ok(ui_priority_fee) = value_t!(app_matches, "priority_fee_auto", f64) {
-        PriorityFee::Auto {
-            max_lamports: sol_to_lamports(ui_priority_fee),
-        }
+        PriorityFee::default_auto_percentile(sol_to_lamports(ui_priority_fee))
     } else {
         PriorityFee::default_auto()
     };
@@ -988,7 +1002,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     &vec![signer],
                 )?
             };
-            let simulation_result = rpc_client.simulate_transaction(&transaction)?.value;
+            let simulation_result = send_rpc_client.simulate_transaction(&transaction)?.value;
             if simulation_result.err.is_some() {
                 return Err(format!("Simulation failure: {simulation_result:?}").into());
             }
@@ -1026,7 +1040,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ),
             };
 
-            if !send_transaction_until_expired(&rpc_client, &transaction, last_valid_block_height) {
+            if !send_transaction_until_expired(
+                &send_rpc_client,
+                &transaction,
+                last_valid_block_height,
+            ) {
                 let msg = format!("Transaction failed: {signature}");
                 notifier.send(&msg).await;
                 return Err(msg.into());

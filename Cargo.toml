@@ -70,4 +70,5 @@ thiserror = "1.0"
 tokio = { version = "1", features = ["macros", "time"] }
 #tulipv2-sdk-common = "0.9.5"
 uint = "0.9.5"
+criterion-stats = "0.3.0"
 

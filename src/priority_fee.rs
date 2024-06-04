@@ -11,14 +11,23 @@ use {
 
 #[derive(Debug, Clone, Copy)]
 pub enum PriorityFee {
-    Auto { max_lamports: u64 },
-    Exact { lamports: u64 },
+    Auto {
+        max_lamports: u64,
+        fee_percentile: u8,
+    },
+    Exact {
+        lamports: u64,
+    },
 }
 
 impl PriorityFee {
     pub fn default_auto() -> Self {
+        Self::default_auto_percentile(sol_to_lamports(0.005)) // Same max as the Jupiter V6 Swap API
+    }
+    pub fn default_auto_percentile(max_lamports: u64) -> Self {
         Self::Auto {
-            max_lamports: sol_to_lamports(0.005), // Same max as the Jupiter V6 Swap API
+            max_lamports,
+            fee_percentile: 90, // Pay at this percentile of recent fees
         }
     }
 }
@@ -26,7 +35,7 @@ impl PriorityFee {
 impl PriorityFee {
     pub fn max_lamports(&self) -> u64 {
         match self {
-            Self::Auto { max_lamports } => *max_lamports,
+            Self::Auto { max_lamports, .. } => *max_lamports,
             Self::Exact { lamports } => *lamports,
         }
     }
@@ -98,52 +107,60 @@ pub fn apply_priority_fee(
     compute_unit_limit: u32,
     priority_fee: PriorityFee,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let compute_budget = if let Some(exact_lamports) = priority_fee.exact_lamports() {
-        ComputeBudget::new(compute_unit_limit, exact_lamports)
-    } else {
-        let recent_compute_unit_prices =
-            get_recent_priority_fees_for_instructions(rpc_client, instructions)?;
+    let compute_budget = match priority_fee {
+        PriorityFee::Exact { lamports } => ComputeBudget::new(compute_unit_limit, lamports),
+        PriorityFee::Auto {
+            max_lamports,
+            fee_percentile,
+        } => {
+            let recent_compute_unit_prices =
+                get_recent_priority_fees_for_instructions(rpc_client, instructions)?
+                    .into_iter()
+                    //  .skip_while(|fee| *fee == 0) // Skip 0 fee payers
+                    .map(|f| f as f64)
+                    .collect::<Vec<_>>();
 
-        let mean_compute_unit_price_micro_lamports =
-            recent_compute_unit_prices.iter().copied().sum::<u64>()
-                / recent_compute_unit_prices.len() as u64;
+            let dist =
+                criterion_stats::Distribution::from(recent_compute_unit_prices.into_boxed_slice());
+            print!("Recent CU prices: mean={:.0}", dist.mean());
+            let percentiles = dist.percentiles();
+            for i in [50., 75., 85., 90., 95., 100.] {
+                print!(", {i}th={:.0}", percentiles.at(i));
+            }
 
-        /*
-        let max_compute_unit_price_micro_lamports = recent_compute_unit_prices
-            .iter()
-            .max()
-            .copied()
-            .unwrap_or_default();
-
-        println!("{recent_compute_unit_prices:?}: mean {mean_compute_unit_price_micro_lamports}, max {max_compute_unit_price_micro_lamports}");
-        */
-
-        let compute_unit_price_micro_lamports = mean_compute_unit_price_micro_lamports;
-
-        if let Ok(priority_fee_estimate) = helius_rpc::get_priority_fee_estimate_for_instructions(
-            rpc_client,
-            helius_rpc::HeliusPriorityLevel::High,
-            instructions,
-        ) {
+            let compute_unit_price_micro_lamports = percentiles.at(fee_percentile as f64) as u64;
             println!(
-                "Note: helius compute unit price (high) estimate is {priority_fee_estimate}. \
-                      `sys` computed {compute_unit_price_micro_lamports}"
+                "\nUsing the {fee_percentile}th percentile recent CU price of {:.0}",
+                compute_unit_price_micro_lamports
             );
-        }
 
-        let compute_budget = ComputeBudget {
-            compute_unit_price_micro_lamports,
-            compute_unit_limit,
-        };
+            if let Ok(priority_fee_estimate) =
+                helius_rpc::get_priority_fee_estimate_for_instructions(
+                    rpc_client,
+                    helius_rpc::HeliusPriorityLevel::High,
+                    instructions,
+                )
+            {
+                println!(
+                    "Note: helius compute unit price (high) estimate is {priority_fee_estimate}. \
+                          `sys` computed {compute_unit_price_micro_lamports}"
+                );
+            }
 
-        if compute_budget.priority_fee_lamports() > priority_fee.max_lamports() {
-            println!(
-                "Note: Computed priority fee of {} exceeds the maximum priority fee",
-                Sol(compute_budget.priority_fee_lamports())
-            );
-            ComputeBudget::new(compute_unit_limit, priority_fee.max_lamports())
-        } else {
-            compute_budget
+            let compute_budget = ComputeBudget {
+                compute_unit_price_micro_lamports,
+                compute_unit_limit,
+            };
+
+            if compute_budget.priority_fee_lamports() > max_lamports {
+                println!(
+                    "Note: Computed priority fee of {} exceeds the maximum priority fee",
+                    Sol(compute_budget.priority_fee_lamports())
+                );
+                ComputeBudget::new(compute_unit_limit, max_lamports)
+            } else {
+                compute_budget
+            }
         }
     };
 
