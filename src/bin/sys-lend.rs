@@ -1002,10 +1002,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     &vec![signer],
                 )?
             };
-            let simulation_result = send_rpc_client.simulate_transaction(&transaction)?.value;
-            if simulation_result.err.is_some() {
-                return Err(format!("Simulation failure: {simulation_result:?}").into());
-            }
 
             /*
             println!(
@@ -1016,7 +1012,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             */
 
             let signature = transaction.signatures[0];
-
             let msg = match cmd {
                 Command::Deposit => format!(
                     "Depositing {} from {} into {} via {}",
@@ -1039,6 +1034,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     maybe_token.format_amount(amount),
                 ),
             };
+
+            let simulation_result = send_rpc_client.simulate_transaction(&transaction)?.value;
+            if simulation_result.err.is_some() {
+                return Err(format!("Simulation failure: {simulation_result:?}").into());
+            }
 
             if !send_transaction_until_expired(
                 &send_rpc_client,

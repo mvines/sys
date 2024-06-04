@@ -23,17 +23,26 @@ pub fn app_version() -> String {
     })
 }
 
+// Assumes `transaction` has already been signed and simulated...
 pub fn send_transaction_until_expired(
     rpc_client: &RpcClient,
     transaction: &impl SerializableTransaction,
     last_valid_block_height: u64,
 ) -> bool {
-    use std::{
-        thread::sleep,
-        time::{Duration, Instant},
+    use {
+        solana_client::rpc_config::RpcSendTransactionConfig,
+        std::{
+            thread::sleep,
+            time::{Duration, Instant},
+        },
     };
 
     let mut last_send_attempt = None;
+
+    let config = RpcSendTransactionConfig {
+        skip_preflight: true,
+        ..RpcSendTransactionConfig::default()
+    };
 
     loop {
         if last_send_attempt.is_none()
@@ -61,7 +70,7 @@ pub fn send_transaction_until_expired(
                 "Sending transaction {} [{valid_msg}]",
                 transaction.get_signature()
             );
-            if let Err(err) = rpc_client.send_transaction(transaction) {
+            if let Err(err) = rpc_client.send_transaction_with_config(transaction, config) {
                 println!("Transaction failed to send: {err:?}");
             }
             last_send_attempt = Some(Instant::now());
