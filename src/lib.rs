@@ -28,35 +28,52 @@ pub fn send_transaction_until_expired(
     transaction: &impl SerializableTransaction,
     last_valid_block_height: u64,
 ) -> bool {
+    use std::{
+        thread::sleep,
+        time::{Duration, Instant},
+    };
+
+    let mut last_send_attempt = None;
+
     loop {
-        // `send_and_confirm_transaction_with_spinner()` fails with
-        // "Transaction simulation failed: This transaction has already been processed" (AlreadyProcessed)
-        // if the transaction was already processed by an earlier iteration of this loop
-        match rpc_client.confirm_transaction(transaction.get_signature()) {
-            Ok(true) => return true,
-            Ok(false) => match rpc_client.get_epoch_info() {
+        if last_send_attempt.is_none()
+            || Instant::now()
+                .duration_since(*last_send_attempt.as_ref().unwrap())
+                .as_secs()
+                > 2
+        {
+            let valid_msg = match rpc_client.get_epoch_info() {
                 Ok(epoch_info) => {
                     if epoch_info.block_height > last_valid_block_height {
                         return false;
                     }
-                    println!(
-                        "Transaction pending for at most {} blocks",
+                    format!(
+                        "{} blocks to expiry",
                         last_valid_block_height.saturating_sub(epoch_info.block_height),
-                    );
+                    )
                 }
                 Err(err) => {
-                    println!("Failed to get epoch info: {err:?}");
+                    format!("Failed to get epoch info: {err:?}")
                 }
-            },
-            Err(err) => {
-                println!("Unable to determine if transaction was confirmed: {err:?}");
+            };
+
+            println!(
+                "Sending transaction {} [{valid_msg}]",
+                transaction.get_signature()
+            );
+            if let Err(err) = rpc_client.send_transaction(transaction) {
+                println!("Transaction failed to send: {err:?}");
             }
+            last_send_attempt = Some(Instant::now());
         }
 
-        match rpc_client.send_and_confirm_transaction_with_spinner(transaction) {
-            Ok(_signature) => return true,
+        sleep(Duration::from_millis(500));
+
+        match rpc_client.confirm_transaction(transaction.get_signature()) {
+            Ok(true) => return true,
+            Ok(false) => {}
             Err(err) => {
-                println!("Transaction failed to send: {err:?}");
+                println!("Unable to determine if transaction was confirmed: {err:?}");
             }
         }
     }
