@@ -21,7 +21,7 @@ use {
     },
     solana_transaction_status::Reward,
     std::collections::{BTreeMap, HashMap, HashSet},
-    sys::{notifier::*, send_transaction_until_expired, token::*},
+    sys::{notifier::*, send_transaction_until_expired, token::*, RpcClients},
 };
 
 const MAX_RPC_VOTE_ACCOUNT_INFO_EPOCH_CREDITS_HISTORY: usize = 5; // Remove once Solana 1.15 ships. Ref: https://github.com/solana-labs/solana/pull/28096
@@ -148,7 +148,7 @@ fn get_validator_credit_scores(
 #[allow(clippy::too_many_arguments)]
 pub async fn run<T: Signers>(
     db: &mut Db,
-    rpc_client: &RpcClient,
+    rpc_clients: &RpcClients,
     epoch_completed_percentage: u8,
     epoch_history: u64,
     num_validators: usize,
@@ -158,6 +158,7 @@ pub async fn run<T: Signers>(
     signers: T,
     notifier: &Notifier,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let rpc_client = &rpc_clients.default;
     let epoch_info = rpc_client.get_epoch_info()?;
     let current_epoch = epoch_info.epoch;
 
@@ -394,7 +395,7 @@ pub async fn run<T: Signers>(
                 None,
             )?;
 
-            if !send_transaction_until_expired(rpc_client, &transaction, last_valid_block_height) {
+            if !send_transaction_until_expired(rpc_clients, &transaction, last_valid_block_height) {
                 db.cancel_transfer(signature)?;
                 eprintln!("Merge failed");
             } else {
@@ -594,7 +595,7 @@ pub async fn run<T: Signers>(
                 println!("Transaction signature: {signature}");
 
                 if !send_transaction_until_expired(
-                    rpc_client,
+                    rpc_clients,
                     &transaction,
                     last_valid_block_height,
                 ) {
@@ -604,7 +605,7 @@ pub async fn run<T: Signers>(
             } else {
                 crate::process_account_redelegate(
                     db,
-                    rpc_client,
+                    rpc_clients,
                     stake_account_address,
                     *vote_account_address,
                     LotSelectionMethod::default(),

@@ -53,6 +53,7 @@ use {
         send_transaction_until_expired,
         token::*,
         //tulip,
+        RpcClients,
     },
 };
 
@@ -427,7 +428,7 @@ async fn process_sync_exchange(
 #[allow(clippy::too_many_arguments)]
 async fn process_exchange_deposit<T: Signers>(
     db: &mut Db,
-    rpc_client: &RpcClient,
+    rpc_clients: &RpcClients,
     exchange: Exchange,
     exchange_client: &dyn ExchangeClient,
     token: MaybeToken,
@@ -442,6 +443,8 @@ async fn process_exchange_deposit<T: Signers>(
     lot_numbers: Option<HashSet<usize>>,
     priority_fee: PriorityFee,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let rpc_client = &rpc_clients.default;
+
     if let Some(if_exchange_balance_less_than) = if_exchange_balance_less_than {
         let exchange_balance = exchange_client
             .balances()
@@ -656,7 +659,7 @@ async fn process_exchange_deposit<T: Signers>(
         lot_selection_method,
         lot_numbers,
     )?;
-    if !send_transaction_until_expired(rpc_client, &transaction, last_valid_block_height) {
+    if !send_transaction_until_expired(rpc_clients, &transaction, last_valid_block_height) {
         return Err("Deposit failed".into());
     }
     Ok(())
@@ -1019,7 +1022,7 @@ async fn process_jup_quote(
 #[allow(clippy::too_many_arguments)]
 async fn process_jup_swap<T: Signers>(
     db: &mut Db,
-    rpc_client: &RpcClient,
+    rpc_clients: &RpcClients,
     address: Pubkey,
     from_token: MaybeToken,
     to_token: MaybeToken,
@@ -1034,6 +1037,8 @@ async fn process_jup_swap<T: Signers>(
     priority_fee: PriorityFee,
     notifier: &Notifier,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let rpc_client = &rpc_clients.default;
+
     let from_account = db
         .get_account(address, from_token)
         .ok_or_else(|| format!("{from_token} account does not exist for {address}"))?;
@@ -1230,7 +1235,7 @@ async fn process_jup_swap<T: Signers>(
             lot_selection_method,
         )?;
 
-        if !send_transaction_until_expired(rpc_client, &transaction, last_valid_block_height) {
+        if !send_transaction_until_expired(rpc_clients, &transaction, last_valid_block_height) {
             db.cancel_swap(signature)?;
             return Err("Swap failed".into());
         }
@@ -2947,7 +2952,7 @@ async fn process_account_xls(
 #[allow(clippy::too_many_arguments)]
 async fn process_account_merge<T: Signers>(
     db: &mut Db,
-    rpc_client: &RpcClient,
+    rpc_clients: &RpcClients,
     from_address: Pubkey,
     into_address: Pubkey,
     authority_address: Pubkey,
@@ -2955,6 +2960,7 @@ async fn process_account_merge<T: Signers>(
     priority_fee: PriorityFee,
     existing_signature: Option<Signature>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let rpc_client = &rpc_clients.default;
     let token = MaybeToken::SOL(); // TODO: Support merging tokens one day
 
     if let Some(existing_signature) = existing_signature {
@@ -3054,7 +3060,7 @@ async fn process_account_merge<T: Signers>(
             None,
         )?;
 
-        if !send_transaction_until_expired(rpc_client, &transaction, last_valid_block_height) {
+        if !send_transaction_until_expired(rpc_clients, &transaction, last_valid_block_height) {
             db.cancel_transfer(signature)?;
             return Err("Merge failed".into());
         }
@@ -3068,7 +3074,7 @@ async fn process_account_merge<T: Signers>(
 #[allow(clippy::too_many_arguments)]
 async fn process_account_sweep<T: Signers>(
     db: &mut Db,
-    rpc_client: &RpcClient,
+    rpc_clients: &RpcClients,
     from_address: Pubkey,
     token: MaybeToken,
     retain_amount: u64,
@@ -3081,6 +3087,8 @@ async fn process_account_sweep<T: Signers>(
     priority_fee: PriorityFee,
     existing_signature: Option<Signature>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let rpc_client = &rpc_clients.default;
+
     let (recent_blockhash, last_valid_block_height) =
         rpc_client.get_latest_blockhash_with_commitment(rpc_client.commitment())?;
     let fee_calculator = get_deprecated_fee_calculator(rpc_client)?;
@@ -3398,7 +3406,7 @@ async fn process_account_sweep<T: Signers>(
     )?;
 
     if let Some(transaction) = maybe_transaction {
-        if !send_transaction_until_expired(rpc_client, &transaction, last_valid_block_height) {
+        if !send_transaction_until_expired(rpc_clients, &transaction, last_valid_block_height) {
             db.cancel_transfer(signature)?;
             if let Some((transitory_stake_account, ..)) = via_transitory_stake.as_ref() {
                 db.remove_transitory_sweep_stake_address(transitory_stake_account.pubkey())?;
@@ -3418,7 +3426,7 @@ async fn process_account_sweep<T: Signers>(
 #[allow(clippy::too_many_arguments)]
 async fn process_account_split<T: Signers>(
     db: &mut Db,
-    rpc_client: &RpcClient,
+    rpc_clients: &RpcClients,
     from_address: Pubkey,
     amount: Option<u64>,
     description: Option<String>,
@@ -3430,6 +3438,8 @@ async fn process_account_split<T: Signers>(
     if_balance_exceeds: Option<f64>,
     priority_fee: PriorityFee,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let rpc_client = &rpc_clients.default;
+
     // TODO: Support splitting two system accounts? Tokens? Otherwise at least error cleanly when it's attempted
     let token = MaybeToken::SOL(); // TODO: Support splitting tokens one day
 
@@ -3536,7 +3546,7 @@ async fn process_account_split<T: Signers>(
         lot_numbers,
     )?;
 
-    if !send_transaction_until_expired(rpc_client, &transaction, last_valid_block_height) {
+    if !send_transaction_until_expired(rpc_clients, &transaction, last_valid_block_height) {
         db.cancel_transfer(signature)?;
         db.remove_account(into_keypair.pubkey(), MaybeToken::SOL())?;
         return Err("Split failed".into());
@@ -3557,7 +3567,7 @@ async fn process_account_split<T: Signers>(
 #[allow(clippy::too_many_arguments)]
 async fn process_account_redelegate<T: Signers>(
     db: &mut Db,
-    rpc_client: &RpcClient,
+    rpc_clients: &RpcClients,
     from_address: Pubkey,
     vote_account_address: Pubkey,
     lot_selection_method: LotSelectionMethod,
@@ -3565,6 +3575,7 @@ async fn process_account_redelegate<T: Signers>(
     signers: &T,
     into_keypair: Option<Keypair>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let rpc_client = &rpc_clients.default;
     let (recent_blockhash, last_valid_block_height) =
         rpc_client.get_latest_blockhash_with_commitment(rpc_client.commitment())?;
 
@@ -3649,7 +3660,7 @@ async fn process_account_redelegate<T: Signers>(
         None,
     )?;
 
-    if !send_transaction_until_expired(rpc_client, &transaction, last_valid_block_height) {
+    if !send_transaction_until_expired(rpc_clients, &transaction, last_valid_block_height) {
         db.cancel_transfer(signature)?;
         db.remove_account(into_keypair.pubkey(), MaybeToken::SOL())?;
         return Err("Redelegate failed".into());
@@ -3663,15 +3674,16 @@ async fn process_account_redelegate<T: Signers>(
 
 async fn process_account_sync(
     db: &mut Db,
-    rpc_client: &RpcClient,
+    rpc_clients: &RpcClients,
     address: Option<Pubkey>,
     max_epochs_to_process: Option<u64>,
     reconcile_no_sync_account_balances: bool,
     force_rescan_balances: bool,
     notifier: &Notifier,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let rpc_client = &rpc_clients.default;
     process_account_sync_pending_transfers(db, rpc_client).await?;
-    process_account_sync_sweep(db, rpc_client, notifier).await?;
+    process_account_sync_sweep(db, rpc_clients, notifier).await?;
 
     let (mut accounts, mut no_sync_accounts): (_, Vec<_>) = match address {
         Some(address) => {
@@ -3893,7 +3905,7 @@ async fn process_account_sync(
 #[allow(clippy::too_many_arguments)]
 async fn process_account_wrap<T: Signers>(
     db: &mut Db,
-    rpc_client: &RpcClient,
+    rpc_clients: &RpcClients,
     address: Pubkey,
     amount: Amount,
     if_source_balance_exceeds: Option<u64>,
@@ -3903,6 +3915,7 @@ async fn process_account_wrap<T: Signers>(
     signers: T,
     priority_fee: PriorityFee,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let rpc_client = &rpc_clients.default;
     let sol = MaybeToken::SOL();
     let wsol = Token::wSOL;
     let wsol_address = wsol.ata(&address);
@@ -3986,7 +3999,7 @@ async fn process_account_wrap<T: Signers>(
         lot_numbers,
     )?;
 
-    if !send_transaction_until_expired(rpc_client, &transaction, last_valid_block_height) {
+    if !send_transaction_until_expired(rpc_clients, &transaction, last_valid_block_height) {
         db.cancel_transfer(signature)?;
         return Err("Wrap failed".into());
     }
@@ -4000,7 +4013,7 @@ async fn process_account_wrap<T: Signers>(
 #[allow(clippy::too_many_arguments)]
 async fn process_account_unwrap<T: Signers>(
     db: &mut Db,
-    rpc_client: &RpcClient,
+    rpc_clients: &RpcClients,
     address: Pubkey,
     amount: Option<u64>,
     lot_selection_method: LotSelectionMethod,
@@ -4009,6 +4022,7 @@ async fn process_account_unwrap<T: Signers>(
     signers: T,
     priority_fee: PriorityFee,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let rpc_client = &rpc_clients.default;
     let sol = MaybeToken::SOL();
     let wsol = Token::wSOL;
 
@@ -4084,7 +4098,7 @@ async fn process_account_unwrap<T: Signers>(
         lot_numbers,
     )?;
 
-    if !send_transaction_until_expired(rpc_client, &transaction, last_valid_block_height) {
+    if !send_transaction_until_expired(rpc_clients, &transaction, last_valid_block_height) {
         db.cancel_transfer(signature)?;
         return Err("Wrap failed".into());
     }
@@ -4141,9 +4155,10 @@ async fn process_account_sync_pending_transfers(
 
 async fn process_account_sync_sweep(
     db: &mut Db,
-    rpc_client: &RpcClient,
+    rpc_clients: &RpcClients,
     _notifier: &Notifier,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let rpc_client = &rpc_clients.default;
     let token = MaybeToken::SOL();
 
     let transitory_sweep_stake_addresses = db.get_transitory_sweep_stake_addresses();
@@ -4282,7 +4297,7 @@ async fn process_account_sync_sweep(
             None,
         )?;
 
-        if !send_transaction_until_expired(rpc_client, &transaction, last_valid_block_height) {
+        if !send_transaction_until_expired(rpc_clients, &transaction, last_valid_block_height) {
             db.cancel_transfer(signature)?;
             return Err("Merge failed".into());
         }
@@ -4367,6 +4382,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .validator(is_url_or_moniker)
                 .default_value(default_json_rpc_url)
                 .help("JSON RPC URL for the cluster"),
+        )
+        .arg(
+            Arg::with_name("send_json_rpc_url")
+                .long("send-url")
+                .value_name("URL")
+                .takes_value(true)
+                .validator(is_url_or_moniker)
+                .help("Optional addition JSON RPC URL for the cluster to be used only \
+                       for submitting transactions [default: same as --url]"),
         )
         .arg(
             Arg::with_name("verbose")
@@ -5931,11 +5955,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         PriorityFee::default_auto()
     };
 
-    let rpc_client = RpcClient::new_with_timeout_and_commitment(
-        normalize_to_url_if_moniker(value_t_or_exit!(app_matches, "json_rpc_url", String)),
-        std::time::Duration::from_secs(120),
-        CommitmentConfig::confirmed(),
-    );
+    let rpc_clients = RpcClients {
+        default: RpcClient::new_with_commitment(
+            normalize_to_url_if_moniker(value_t_or_exit!(app_matches, "json_rpc_url", String)),
+            CommitmentConfig::confirmed(),
+        ),
+        send: value_t!(app_matches, "send_json_rpc_url", String)
+            .ok()
+            .map(|send_json_rpc_url| {
+                RpcClient::new_with_commitment(
+                    normalize_to_url_if_moniker(send_json_rpc_url),
+                    CommitmentConfig::confirmed(),
+                )
+            }),
+    };
+    let rpc_client = &rpc_clients.default;
+
     let mut wallet_manager = None;
     let notifier = Notifier::default();
 
@@ -5972,12 +6007,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let (price, verbose_msg) = if let Some(when) = when {
                 (
-                    token.get_historical_price(&rpc_client, when).await?,
+                    token.get_historical_price(rpc_client, when).await?,
                     format!("Historical {token} price on {when}"),
                 )
             } else {
                 (
-                    token.get_current_price(&rpc_client).await?,
+                    token.get_current_price(rpc_client).await?,
                     format!("Current {token} price"),
                 )
             };
@@ -5986,7 +6021,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("{verbose_msg}: ${price:.6}");
 
                 if let Some(liquidity_token) = token.liquidity_token() {
-                    let rate = token.get_current_liquidity_token_rate(&rpc_client).await?;
+                    let rate = token.get_current_liquidity_token_rate(rpc_client).await?;
                     println!(
                         "Liquidity token: {} (rate: {}, inv: {})",
                         liquidity_token,
@@ -6000,7 +6035,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         ("sync", Some(arg_matches)) => {
             let max_epochs_to_process = value_t!(arg_matches, "max_epochs_to_process", u64).ok();
-            process_sync_swaps(&mut db, &rpc_client, &notifier).await?;
+            process_sync_swaps(&mut db, rpc_client, &notifier).await?;
             for (exchange, exchange_credentials, exchange_account) in
                 db.get_default_accounts_from_configured_exchanges()
             {
@@ -6010,14 +6045,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     &mut db,
                     exchange,
                     exchange_client.as_ref(),
-                    &rpc_client,
+                    rpc_client,
                     &notifier,
                 )
                 .await?
             }
             process_account_sync(
                 &mut db,
-                &rpc_client,
+                &rpc_clients,
                 None,
                 max_epochs_to_process,
                 false,
@@ -6132,7 +6167,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 process_account_add(
                     &mut db,
-                    &rpc_client,
+                    rpc_client,
                     address,
                     token.into(),
                     description,
@@ -6147,7 +6182,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .await?;
                 process_account_sync(
                     &mut db,
-                    &rpc_client,
+                    &rpc_clients,
                     Some(address),
                     None,
                     false,
@@ -6173,7 +6208,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 process_account_dispose(
                     &mut db,
-                    &rpc_client,
+                    rpc_client,
                     address,
                     token.into(),
                     amount,
@@ -6191,7 +6226,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let account_filter = pubkey_of(arg_matches, "account");
                 process_account_list(
                     &db,
-                    &rpc_client,
+                    rpc_client,
                     account_filter,
                     all,
                     summary,
@@ -6253,7 +6288,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         format!("Failed to read {}: {}", stake_authority.display(), err)
                     })?;
                 let (sweep_stake_authorized, _vote_account_address) =
-                    rpc_client_utils::get_stake_authorized(&rpc_client, address)?;
+                    rpc_client_utils::get_stake_authorized(rpc_client, address)?;
 
                 if sweep_stake_authorized.staker != sweep_stake_authority_keypair.pubkey() {
                     return Err("Stake authority mismatch".into());
@@ -6324,7 +6359,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 process_account_merge(
                     &mut db,
-                    &rpc_client,
+                    &rpc_clients,
                     from_address,
                     into_address,
                     authority_address,
@@ -6349,7 +6384,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 process_account_sweep(
                     &mut db,
-                    &rpc_client,
+                    &rpc_clients,
                     from_address,
                     token,
                     token.amount(retain_ui_amount),
@@ -6390,7 +6425,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 process_account_split(
                     &mut db,
-                    &rpc_client,
+                    &rpc_clients,
                     from_address,
                     amount,
                     description,
@@ -6424,7 +6459,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 process_account_redelegate(
                     &mut db,
-                    &rpc_client,
+                    &rpc_clients,
                     from_address,
                     vote_account_address,
                     lot_selection_method,
@@ -6443,7 +6478,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     value_t!(arg_matches, "max_epochs_to_process", u64).ok();
                 process_account_sync(
                     &mut db,
-                    &rpc_client,
+                    &rpc_clients,
                     address,
                     max_epochs_to_process,
                     reconcile_no_sync_account_balances,
@@ -6482,7 +6517,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 process_account_wrap(
                     &mut db,
-                    &rpc_client,
+                    &rpc_clients,
                     address,
                     amount,
                     if_source_balance_exceeds,
@@ -6517,7 +6552,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 process_account_unwrap(
                     &mut db,
-                    &rpc_client,
+                    &rpc_clients,
                     address,
                     amount,
                     lot_selection_method,
@@ -6562,7 +6597,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 process_jup_swap(
                     &mut db,
-                    &rpc_client,
+                    &rpc_clients,
                     address,
                     from_token,
                     to_token,
@@ -6578,7 +6613,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     &notifier,
                 )
                 .await?;
-                process_sync_swaps(&mut db, &rpc_client, &notifier).await?;
+                process_sync_swaps(&mut db, rpc_client, &notifier).await?;
             }
             _ => unreachable!(),
         },
@@ -6612,7 +6647,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             stake_spreader::run(
                 &mut db,
-                &rpc_client,
+                &rpc_clients,
                 epoch_completed_percentage,
                 epoch_history,
                 num_validators,
@@ -6893,11 +6928,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         &exchange_account,
                         token,
                         deposit_address,
-                        &rpc_client,
+                        rpc_client,
                     )?;
                     process_exchange_deposit(
                         &mut db,
-                        &rpc_client,
+                        &rpc_clients,
                         exchange,
                         exchange_client.as_ref(),
                         token,
@@ -6917,7 +6952,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         &mut db,
                         exchange,
                         exchange_client.as_ref(),
-                        &rpc_client,
+                        rpc_client,
                         &notifier,
                     )
                     .await?;
@@ -6945,7 +6980,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         &exchange_account,
                         token,
                         deposit_address,
-                        &rpc_client,
+                        rpc_client,
                     )?;
 
                     process_exchange_withdraw(
@@ -6966,7 +7001,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         &mut db,
                         exchange,
                         exchange_client.as_ref(),
-                        &rpc_client,
+                        rpc_client,
                         &notifier,
                     )
                     .await?;
@@ -7004,7 +7039,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         &mut db,
                         exchange,
                         exchange_client.as_ref(),
-                        &rpc_client,
+                        rpc_client,
                         &notifier,
                     )
                     .await?;
@@ -7045,7 +7080,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         &mut db,
                         exchange,
                         exchange_client.as_ref(),
-                        &rpc_client,
+                        rpc_client,
                         &notifier,
                     )
                     .await?;
@@ -7094,7 +7129,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         &mut db,
                         exchange,
                         exchange_client.as_ref(),
-                        &rpc_client,
+                        rpc_client,
                         &notifier,
                     )
                     .await?;
@@ -7197,7 +7232,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         &mut db,
                         exchange,
                         exchange_client.as_ref(),
-                        &rpc_client,
+                        rpc_client,
                         &notifier,
                     )
                     .await?;

@@ -35,6 +35,7 @@ use {
             kamino, marginfi_v2,
             solend::{self, math::TryMul},
         },
+        RpcClients,
     },
 };
 
@@ -449,15 +450,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let app_matches = app.get_matches();
 
-    let json_rpc_url =
-        normalize_to_url_if_moniker(value_t_or_exit!(app_matches, "json_rpc_url", String));
-    let rpc_client = RpcClient::new_with_commitment(&json_rpc_url, CommitmentConfig::confirmed());
-    let send_json_rpc_url = match value_t!(app_matches, "send_json_rpc_url", String).ok() {
-        Some(send_json_rpc_url) => normalize_to_url_if_moniker(send_json_rpc_url),
-        None => json_rpc_url,
+    let rpc_clients = RpcClients {
+        default: RpcClient::new_with_commitment(
+            normalize_to_url_if_moniker(value_t_or_exit!(app_matches, "json_rpc_url", String)),
+            CommitmentConfig::confirmed(),
+        ),
+        send: value_t!(app_matches, "send_json_rpc_url", String)
+            .ok()
+            .map(|send_json_rpc_url| {
+                RpcClient::new_with_commitment(
+                    normalize_to_url_if_moniker(send_json_rpc_url),
+                    CommitmentConfig::confirmed(),
+                )
+            }),
     };
-    let send_rpc_client =
-        RpcClient::new_with_commitment(send_json_rpc_url, CommitmentConfig::confirmed());
+    let rpc_client = &rpc_clients.default;
 
     let priority_fee = if let Ok(ui_priority_fee) = value_t!(app_matches, "priority_fee_exact", f64)
     {
@@ -524,7 +531,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut pool_apy = BTreeMap::new();
             for pool in pools {
                 let apy = apr_to_apy(pool_supply_apr(
-                    &rpc_client,
+                    rpc_client,
                     &pool,
                     token,
                     &mut account_data_cache,
@@ -596,14 +603,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut total_amount = 0;
             let mut non_empty_pools_count = 0;
             for pool in &pools {
-                let (amount, remaining_outflow) = pool_supply_balance(
-                    &rpc_client,
-                    pool,
-                    token,
-                    address,
-                    &mut account_data_cache,
-                )?;
-                let apr = pool_supply_apr(&rpc_client, pool, token, &mut account_data_cache)?;
+                let (amount, remaining_outflow) =
+                    pool_supply_balance(rpc_client, pool, token, address, &mut account_data_cache)?;
+                let apr = pool_supply_apr(rpc_client, pool, token, &mut account_data_cache)?;
 
                 let msg = format!(
                     "{:>15}: {} supplied at {:.2}%{}",
@@ -674,7 +676,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .unwrap_or_else(|| supported_pools_for_token(token));
             let minimum_apy_bps = value_t!(matches, "minimum_apy", u16).unwrap_or(0);
 
-            let token_balance = maybe_token.balance(&rpc_client, &address)?;
+            let token_balance = maybe_token.balance(rpc_client, &address)?;
             let amount = match matches.value_of("amount").unwrap() {
                 "ALL" => {
                     if cmd == Command::Deposit {
@@ -711,7 +713,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .iter()
                 .map(|pool| {
                     let (supply_balance, remaining_outflow) = pool_supply_balance(
-                        &rpc_client,
+                        rpc_client,
                         pool,
                         token,
                         address,
@@ -735,7 +737,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .iter()
                 .map(|pool| {
                     let supply_apr =
-                        pool_supply_apr(&rpc_client, pool, token, &mut account_data_cache)
+                        pool_supply_apr(rpc_client, pool, token, &mut account_data_cache)
                             .unwrap_or_else(|err| panic!("Unable to read apr for {pool}: {err}"));
                     (pool.clone(), supply_apr)
                 })
@@ -818,7 +820,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let result = if pool.starts_with("kamino-") {
                     kamino_deposit_or_withdraw(
                         op,
-                        &rpc_client,
+                        rpc_client,
                         pool,
                         address,
                         token,
@@ -828,7 +830,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 } else if pool.starts_with("solend-") {
                     solend_deposit_or_withdraw(
                         op,
-                        &rpc_client,
+                        rpc_client,
                         pool,
                         address,
                         token,
@@ -838,7 +840,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 } else if pool == "mfi" {
                     mfi_deposit_or_withdraw(
                         op,
-                        &rpc_client,
+                        rpc_client,
                         address,
                         token,
                         amount,
@@ -966,7 +968,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             apply_priority_fee(
-                &rpc_client,
+                rpc_client,
                 &mut instructions,
                 required_compute_units,
                 priority_fee,
@@ -1035,16 +1037,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ),
             };
 
-            let simulation_result = send_rpc_client.simulate_transaction(&transaction)?.value;
+            let simulation_result = rpc_client.simulate_transaction(&transaction)?.value;
             if simulation_result.err.is_some() {
                 return Err(format!("Simulation failure: {simulation_result:?}").into());
             }
 
-            if !send_transaction_until_expired(
-                &send_rpc_client,
-                &transaction,
-                last_valid_block_height,
-            ) {
+            if !send_transaction_until_expired(&rpc_clients, &transaction, last_valid_block_height)
+            {
                 let msg = format!("Transaction failed: {signature}");
                 notifier.send(&msg).await;
                 return Err(msg.into());

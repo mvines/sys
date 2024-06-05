@@ -22,9 +22,14 @@ pub fn app_version() -> String {
     })
 }
 
+pub struct RpcClients {
+    pub default: RpcClient,
+    pub send: Option<RpcClient>,
+}
+
 // Assumes `transaction` has already been signed and simulated...
 pub fn send_transaction_until_expired(
-    rpc_client: &RpcClient,
+    rpc_clients: &RpcClients,
     transaction: &impl SerializableTransaction,
     last_valid_block_height: u64,
 ) -> bool {
@@ -35,6 +40,8 @@ pub fn send_transaction_until_expired(
             time::{Duration, Instant},
         },
     };
+
+    let rpc_client = rpc_clients.send.as_ref().unwrap_or(&rpc_clients.default);
 
     let mut last_send_attempt = None;
 
