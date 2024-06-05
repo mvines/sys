@@ -1,5 +1,4 @@
 use {
-    crate::helius_rpc,
     solana_client::rpc_client::RpcClient,
     solana_sdk::{
         compute_budget,
@@ -120,32 +119,24 @@ pub fn apply_priority_fee(
                     .map(|f| f as f64)
                     .collect::<Vec<_>>();
 
+            let ui_fee_for = |compute_unit_price_micro_lamports: f64| {
+                Sol(ComputeBudget {
+                    compute_unit_price_micro_lamports: compute_unit_price_micro_lamports as u64,
+                    compute_unit_limit,
+                }
+                .priority_fee_lamports())
+            };
+
             let dist =
                 criterion_stats::Distribution::from(recent_compute_unit_prices.into_boxed_slice());
-            print!("Recent CU prices: mean={:.0}", dist.mean());
+            print!("Recent priority fees: mean={}", ui_fee_for(dist.mean()));
             let percentiles = dist.percentiles();
             for i in [50., 75., 85., 90., 95., 100.] {
-                print!(", {i}th={:.0}", percentiles.at(i));
+                print!(", {i}th={}", ui_fee_for(percentiles.at(i)));
             }
 
             let compute_unit_price_micro_lamports = percentiles.at(fee_percentile as f64) as u64;
-            println!(
-                "\nUsing the {fee_percentile}th percentile recent CU price of {:.0}",
-                compute_unit_price_micro_lamports
-            );
-
-            if let Ok(priority_fee_estimate) =
-                helius_rpc::get_priority_fee_estimate_for_instructions(
-                    rpc_client,
-                    helius_rpc::HeliusPriorityLevel::High,
-                    instructions,
-                )
-            {
-                println!(
-                    "Note: helius compute unit price (high) estimate is {priority_fee_estimate}. \
-                          `sys` computed {compute_unit_price_micro_lamports}"
-                );
-            }
+            println!("\nusing {fee_percentile}th percentile fee");
 
             let compute_budget = ComputeBudget {
                 compute_unit_price_micro_lamports,
