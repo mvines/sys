@@ -2155,6 +2155,20 @@ fn solend_deposit_or_withdraw(
         &solend::solend_mainnet::ID,
     )?;
 
+    let user_liquidity_token_account =
+        spl_associated_token_account::get_associated_token_address(&wallet_address, &token.mint());
+    let user_collateral_token_account = spl_associated_token_account::get_associated_token_address(
+        &wallet_address,
+        &reserve.collateral.mint_pubkey,
+    );
+
+    if matches!(
+        rpc_client.get_balance(&user_collateral_token_account),
+        Ok(0)
+    ) {
+        return Err(format!("{pool} collaterial token account not found for {wallet_address}. Manually deposit once into the pool and retry").into());
+    }
+
     let mut instructions = vec![];
 
     let (amount, required_compute_units) = match op {
@@ -2171,21 +2185,9 @@ fn solend_deposit_or_withdraw(
                 &solend_deposit_reserve_liquidity_and_obligation_collateral_data,
                 vec![
                     // User Liquidity Token Account
-                    AccountMeta::new(
-                        spl_associated_token_account::get_associated_token_address(
-                            &wallet_address,
-                            &token.mint(),
-                        ),
-                        false,
-                    ),
+                    AccountMeta::new(user_liquidity_token_account, false),
                     // User Collateral Token Account
-                    AccountMeta::new(
-                        spl_associated_token_account::get_associated_token_address(
-                            &wallet_address,
-                            &reserve.collateral.mint_pubkey,
-                        ),
-                        false,
-                    ),
+                    AccountMeta::new(user_collateral_token_account, false),
                     // Lending Market
                     AccountMeta::new(market_reserve_address, false),
                     // Reserve Liquidity Supply
@@ -2312,13 +2314,7 @@ fn solend_deposit_or_withdraw(
                     // Reserve Collateral Supply
                     AccountMeta::new(reserve.collateral.supply_pubkey, false),
                     // User Collateral Token Account
-                    AccountMeta::new(
-                        spl_associated_token_account::get_associated_token_address(
-                            &wallet_address,
-                            &reserve.collateral.mint_pubkey,
-                        ),
-                        false,
-                    ),
+                    AccountMeta::new(user_collateral_token_account, false),
                     // Lending Market
                     AccountMeta::new(market_reserve_address, false),
                     // Obligation
@@ -2328,13 +2324,7 @@ fn solend_deposit_or_withdraw(
                     // Lending Market Authority
                     AccountMeta::new_readonly(lending_market_authority, false),
                     // User Liquidity Token Account
-                    AccountMeta::new(
-                        spl_associated_token_account::get_associated_token_address(
-                            &wallet_address,
-                            &token.mint(),
-                        ),
-                        false,
-                    ),
+                    AccountMeta::new(user_liquidity_token_account, false),
                     // Reserve Collateral Mint
                     AccountMeta::new(reserve.collateral.mint_pubkey, false),
                     // Reserve Liquidity Supply
