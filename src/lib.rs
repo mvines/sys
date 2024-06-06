@@ -24,6 +24,9 @@ pub fn app_version() -> String {
 
 pub struct RpcClients {
     pub default: RpcClient,
+
+    // Optional `RpcClient` for use only for sending transactions.
+    // If `None` then the `default` client is used for sending transactions
     pub send: Option<RpcClient>,
 }
 
@@ -41,7 +44,8 @@ pub fn send_transaction_until_expired(
         },
     };
 
-    let rpc_client = rpc_clients.send.as_ref().unwrap_or(&rpc_clients.default);
+    let send_rpc_client = rpc_clients.send.as_ref().unwrap_or(&rpc_clients.default);
+    let rpc_client = &rpc_clients.default;
 
     let mut last_send_attempt = None;
 
@@ -76,7 +80,7 @@ pub fn send_transaction_until_expired(
                 "Sending transaction {} [{valid_msg}]",
                 transaction.get_signature()
             );
-            if let Err(err) = rpc_client.send_transaction_with_config(transaction, config) {
+            if let Err(err) = send_rpc_client.send_transaction_with_config(transaction, config) {
                 println!("Transaction failed to send: {err:?}");
             }
             last_send_attempt = Some(Instant::now());
