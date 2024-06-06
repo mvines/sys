@@ -1,4 +1,7 @@
-use solana_client::rpc_client::{RpcClient, SerializableTransaction};
+use solana_client::{
+    rpc_client::{RpcClient, SerializableTransaction},
+    rpc_response,
+};
 
 pub mod binance_exchange;
 pub mod coin_gecko;
@@ -61,38 +64,51 @@ pub fn send_transaction_until_expired(
                 .as_secs()
                 > 2
         {
-            let valid_msg = match rpc_client.get_epoch_info() {
-                Ok(epoch_info) => {
-                    if epoch_info.block_height > last_valid_block_height {
-                        return false;
-                    }
-                    format!(
-                        "{} blocks to expiry",
-                        last_valid_block_height.saturating_sub(epoch_info.block_height),
-                    )
-                }
-                Err(err) => {
-                    format!("Failed to get epoch info: {err:?}")
-                }
-            };
-
-            println!(
-                "Sending transaction {} [{valid_msg}]",
-                transaction.get_signature()
-            );
+            println!("Sending transaction {}", transaction.get_signature());
             if let Err(err) = send_rpc_client.send_transaction_with_config(transaction, config) {
-                println!("Transaction failed to send: {err:?}");
+                println!("Unable to send transaction: {err:?}");
             }
             last_send_attempt = Some(Instant::now());
         }
 
         sleep(Duration::from_millis(500));
 
-        match rpc_client.confirm_transaction(transaction.get_signature()) {
-            Ok(true) => return true,
-            Ok(false) => {}
+        match rpc_client.get_signature_statuses(&[*transaction.get_signature()]) {
+            Ok(rpc_response::Response { context, value }) => {
+                let confirmation_context_slot = context.slot;
+                if let Some(ref transaction_status) = value[0] {
+                    match transaction_status.err {
+                        None => return true,
+                        Some(ref err) => {
+                            println!("Transaction failed: {err}");
+                            return false;
+                        }
+                    }
+                } else {
+                    match rpc_client.get_epoch_info() {
+                        Ok(epoch_info) => {
+                            if epoch_info.block_height > last_valid_block_height
+                                && epoch_info.absolute_slot >= confirmation_context_slot
+                            {
+                                println!(
+                                    "Transaction expired as of slot {confirmation_context_slot}"
+                                );
+                                return false;
+                            }
+                            println!(
+                                "(transaction unconfirmed as of slot {}, {} blocks until expiry)",
+                                confirmation_context_slot,
+                                last_valid_block_height.saturating_sub(epoch_info.block_height),
+                            );
+                        }
+                        Err(err) => {
+                            println!("Unable to get epoch info: {err:?}")
+                        }
+                    }
+                }
+            }
             Err(err) => {
-                println!("Unable to determine if transaction was confirmed: {err:?}");
+                println!("Unable to get transaction status: {err:?}");
             }
         }
     }
