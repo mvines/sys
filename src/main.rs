@@ -44,7 +44,6 @@ use {
         time::Duration,
     },
     sys::{
-        app_version,
         exchange::{self, *},
         metrics::{self, dp, MetricsConfig},
         notifier::*,
@@ -52,7 +51,7 @@ use {
         send_transaction_until_expired,
         token::*,
         //tulip,
-        RpcClients,
+        *,
     },
 };
 
@@ -442,7 +441,7 @@ async fn process_exchange_deposit<T: Signers>(
     lot_numbers: Option<HashSet<usize>>,
     priority_fee: PriorityFee,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let rpc_client = &rpc_clients.default;
+    let rpc_client = rpc_clients.default();
 
     if let Some(if_exchange_balance_less_than) = if_exchange_balance_less_than {
         let exchange_balance = exchange_client
@@ -1036,7 +1035,7 @@ async fn process_jup_swap<T: Signers>(
     priority_fee: PriorityFee,
     notifier: &Notifier,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let rpc_client = &rpc_clients.default;
+    let rpc_client = rpc_clients.default();
 
     let from_account = db
         .get_account(address, from_token)
@@ -2959,7 +2958,7 @@ async fn process_account_merge<T: Signers>(
     priority_fee: PriorityFee,
     existing_signature: Option<Signature>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let rpc_client = &rpc_clients.default;
+    let rpc_client = rpc_clients.default();
     let token = MaybeToken::SOL(); // TODO: Support merging tokens one day
 
     if let Some(existing_signature) = existing_signature {
@@ -3086,7 +3085,7 @@ async fn process_account_sweep<T: Signers>(
     priority_fee: PriorityFee,
     existing_signature: Option<Signature>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let rpc_client = &rpc_clients.default;
+    let rpc_client = rpc_clients.default();
 
     let (recent_blockhash, last_valid_block_height) =
         rpc_client.get_latest_blockhash_with_commitment(rpc_client.commitment())?;
@@ -3437,7 +3436,7 @@ async fn process_account_split<T: Signers>(
     if_balance_exceeds: Option<f64>,
     priority_fee: PriorityFee,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let rpc_client = &rpc_clients.default;
+    let rpc_client = rpc_clients.default();
 
     // TODO: Support splitting two system accounts? Tokens? Otherwise at least error cleanly when it's attempted
     let token = MaybeToken::SOL(); // TODO: Support splitting tokens one day
@@ -3574,7 +3573,7 @@ async fn process_account_redelegate<T: Signers>(
     signers: &T,
     into_keypair: Option<Keypair>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let rpc_client = &rpc_clients.default;
+    let rpc_client = rpc_clients.default();
     let (recent_blockhash, last_valid_block_height) =
         rpc_client.get_latest_blockhash_with_commitment(rpc_client.commitment())?;
 
@@ -3680,7 +3679,7 @@ async fn process_account_sync(
     force_rescan_balances: bool,
     notifier: &Notifier,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let rpc_client = &rpc_clients.default;
+    let rpc_client = rpc_clients.default();
     process_account_sync_pending_transfers(db, rpc_client).await?;
     process_account_sync_sweep(db, rpc_clients, notifier).await?;
 
@@ -3914,7 +3913,7 @@ async fn process_account_wrap<T: Signers>(
     signers: T,
     priority_fee: PriorityFee,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let rpc_client = &rpc_clients.default;
+    let rpc_client = rpc_clients.default();
     let sol = MaybeToken::SOL();
     let wsol = Token::wSOL;
     let wsol_address = wsol.ata(&address);
@@ -4021,7 +4020,7 @@ async fn process_account_unwrap<T: Signers>(
     signers: T,
     priority_fee: PriorityFee,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let rpc_client = &rpc_clients.default;
+    let rpc_client = rpc_clients.default();
     let sol = MaybeToken::SOL();
     let wsol = Token::wSOL;
 
@@ -4157,7 +4156,7 @@ async fn process_account_sync_sweep(
     rpc_clients: &RpcClients,
     _notifier: &Notifier,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let rpc_client = &rpc_clients.default;
+    let rpc_client = rpc_clients.default();
     let token = MaybeToken::SOL();
 
     let transitory_sweep_stake_addresses = db.get_transitory_sweep_stake_addresses();
@@ -4383,13 +4382,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .help("JSON RPC URL for the cluster"),
         )
         .arg(
-            Arg::with_name("send_json_rpc_url")
+            Arg::with_name("send_json_rpc_urls")
                 .long("send-url")
                 .value_name("URL")
                 .takes_value(true)
-                .validator(is_url_or_moniker)
-                .help("Optional addition JSON RPC URL for the cluster to be used only \
-                       for submitting transactions [default: same as --url]"),
+                .validator(is_comma_separated_url_or_moniker_list)
+                .help("Optional additional JSON RPC URLs, separated by commas, to \
+                       submit transactions with in addition to --url"),
         )
         .arg(
             Arg::with_name("verbose")
@@ -5956,10 +5955,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let rpc_clients = RpcClients::new(
         value_t_or_exit!(app_matches, "json_rpc_url", String),
-        value_t!(app_matches, "send_json_rpc_url", String).ok(),
+        value_t!(app_matches, "send_json_rpc_urls", String).ok(),
     );
 
-    let rpc_client = &rpc_clients.default;
+    let rpc_client = rpc_clients.default();
 
     let mut wallet_manager = None;
     let notifier = Notifier::default();

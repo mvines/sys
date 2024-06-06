@@ -158,7 +158,7 @@ pub async fn run<T: Signers>(
     signers: T,
     notifier: &Notifier,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let rpc_client = &rpc_clients.default;
+    let rpc_client = rpc_clients.default();
     let epoch_info = rpc_client.get_epoch_info()?;
     let current_epoch = epoch_info.epoch;
 

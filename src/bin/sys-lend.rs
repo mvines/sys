@@ -26,7 +26,7 @@ use {
     },
     std::collections::{BTreeMap, HashMap, HashSet},
     sys::{
-        app_version, metrics,
+        metrics,
         notifier::*,
         priority_fee::{apply_priority_fee, PriorityFee},
         send_transaction_until_expired,
@@ -35,7 +35,7 @@ use {
             kamino, marginfi_v2,
             solend::{self, math::TryMul},
         },
-        RpcClients,
+        *,
     },
 };
 
@@ -197,13 +197,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .help("JSON RPC URL for the cluster"),
         )
         .arg(
-            Arg::with_name("send_json_rpc_url")
+            Arg::with_name("send_json_rpc_urls")
                 .long("send-url")
                 .value_name("URL")
                 .takes_value(true)
-                .validator(is_url_or_moniker)
-                .help("Optional addition JSON RPC URL for the cluster to be used only \
-                       for submitting transactions [default: same as --url]"),
+                .validator(is_comma_separated_url_or_moniker_list)
+                .help("Optional additional JSON RPC URLs, separated by commas, to \
+                       submit transactions with in addition to --url"),
+
         )
         .arg(
             Arg::with_name("priority_fee_exact")
@@ -452,9 +453,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let rpc_clients = RpcClients::new(
         value_t_or_exit!(app_matches, "json_rpc_url", String),
-        value_t!(app_matches, "send_json_rpc_url", String).ok(),
+        value_t!(app_matches, "send_json_rpc_urls", String).ok(),
     );
-    let rpc_client = &rpc_clients.default;
+    let rpc_client = rpc_clients.default();
 
     let priority_fee = if let Ok(ui_priority_fee) = value_t!(app_matches, "priority_fee_exact", f64)
     {

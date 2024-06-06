@@ -34,28 +34,46 @@ pub fn app_version() -> String {
     })
 }
 
-pub struct RpcClients {
-    pub default: RpcClient,
+pub fn is_comma_separated_url_or_moniker_list<T>(string: T) -> Result<(), String>
+where
+    T: AsRef<str> + std::fmt::Display,
+{
+    for url_or_moniker in string.as_ref().split(',') {
+        solana_clap_utils::input_validators::is_url_or_moniker(url_or_moniker)?;
+    }
 
-    // Optional `RpcClient` for use only for sending transactions.
-    // If `None` then the `default` client is used for sending transactions
-    pub send: Option<RpcClient>,
+    Ok(())
+}
+
+pub struct RpcClients {
+    clients: Vec<(String, RpcClient)>,
 }
 
 impl RpcClients {
-    pub fn new(json_rpc_url: String, send_json_rpc_url: Option<String>) -> Self {
-        Self {
-            default: RpcClient::new_with_commitment(
-                normalize_to_url_if_moniker(json_rpc_url),
-                CommitmentConfig::confirmed(),
-            ),
-            send: send_json_rpc_url.map(|send_json_rpc_url| {
-                RpcClient::new_with_commitment(
-                    normalize_to_url_if_moniker(send_json_rpc_url),
-                    CommitmentConfig::confirmed(),
-                )
-            }),
+    pub fn new(json_rpc_url: String, send_json_rpc_urls: Option<String>) -> Self {
+        let mut json_rpc_urls = vec![json_rpc_url];
+        if let Some(send_json_rpc_urls) = send_json_rpc_urls {
+            for send_json_rpc_url in send_json_rpc_urls.split(',') {
+                json_rpc_urls.push(send_json_rpc_url.into());
+            }
         }
+
+        Self {
+            clients: json_rpc_urls
+                .into_iter()
+                .map(|json_rpc_url| {
+                    let json_rpc_url = normalize_to_url_if_moniker(json_rpc_url);
+                    (
+                        json_rpc_url.clone(),
+                        RpcClient::new_with_commitment(json_rpc_url, CommitmentConfig::confirmed()),
+                    )
+                })
+                .collect(),
+        }
+    }
+
+    pub fn default(&self) -> &RpcClient {
+        &self.clients[0].1
     }
 }
 
@@ -65,9 +83,6 @@ pub fn send_transaction_until_expired(
     transaction: &impl SerializableTransaction,
     last_valid_block_height: u64,
 ) -> bool {
-    let send_rpc_client = rpc_clients.send.as_ref().unwrap_or(&rpc_clients.default);
-    let rpc_client = &rpc_clients.default;
-
     let mut last_send_attempt = None;
 
     let config = RpcSendTransactionConfig {
@@ -82,16 +97,25 @@ pub fn send_transaction_until_expired(
                 .as_secs()
                 > 2
         {
-            println!("Sending transaction {}", transaction.get_signature());
-            if let Err(err) = send_rpc_client.send_transaction_with_config(transaction, config) {
-                println!("Unable to send transaction: {err:?}");
+            for (json_rpc_url, rpc_client) in rpc_clients.clients.iter().rev() {
+                println!(
+                    "Sending transaction {} [{json_rpc_url}]",
+                    transaction.get_signature()
+                );
+
+                if let Err(err) = rpc_client.send_transaction_with_config(transaction, config) {
+                    println!("Unable to send transaction: {err:?}");
+                }
             }
             last_send_attempt = Some(Instant::now());
         }
 
         sleep(Duration::from_millis(500));
 
-        match rpc_client.get_signature_statuses(&[*transaction.get_signature()]) {
+        match rpc_clients
+            .default()
+            .get_signature_statuses(&[*transaction.get_signature()])
+        {
             Ok(rpc_response::Response { context, value }) => {
                 let confirmation_context_slot = context.slot;
                 if let Some(ref transaction_status) = value[0] {
@@ -103,7 +127,7 @@ pub fn send_transaction_until_expired(
                         }
                     }
                 } else {
-                    match rpc_client.get_epoch_info() {
+                    match rpc_clients.default().get_epoch_info() {
                         Ok(epoch_info) => {
                             if epoch_info.block_height > last_valid_block_height
                                 && epoch_info.absolute_slot >= confirmation_context_slot
