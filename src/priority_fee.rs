@@ -135,8 +135,21 @@ pub fn apply_priority_fee(
                 print!(", {i}th={}", ui_fee_for(percentiles.at(i)));
             }
 
-            let compute_unit_price_micro_lamports = percentiles.at(fee_percentile as f64) as u64;
-            println!("\nusing {fee_percentile}th percentile fee");
+            let fee_percentile_compute_unit_price_micro_lamports =
+                percentiles.at(fee_percentile as f64) as u64;
+            let mean_compute_unit_price_micro_lamports = dist.mean() as u64;
+
+            // Use the greater of the `fee_percentile`th percentile fee or the mean fee
+            let compute_unit_price_micro_lamports =
+                if fee_percentile_compute_unit_price_micro_lamports
+                    > mean_compute_unit_price_micro_lamports
+                {
+                    println!("\nusing {fee_percentile}th percentile fee");
+                    fee_percentile_compute_unit_price_micro_lamports
+                } else {
+                    println!("\nusing mean fee");
+                    mean_compute_unit_price_micro_lamports
+                };
 
             let compute_budget = ComputeBudget {
                 compute_unit_price_micro_lamports,
