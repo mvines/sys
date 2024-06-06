@@ -1,6 +1,15 @@
-use solana_client::{
-    rpc_client::{RpcClient, SerializableTransaction},
-    rpc_response,
+use {
+    solana_clap_utils::input_validators::normalize_to_url_if_moniker,
+    solana_client::{
+        rpc_client::{RpcClient, SerializableTransaction},
+        rpc_config::RpcSendTransactionConfig,
+        rpc_response,
+    },
+    solana_sdk::commitment_config::CommitmentConfig,
+    std::{
+        thread::sleep,
+        time::{Duration, Instant},
+    },
 };
 
 pub mod binance_exchange;
@@ -33,20 +42,29 @@ pub struct RpcClients {
     pub send: Option<RpcClient>,
 }
 
+impl RpcClients {
+    pub fn new(json_rpc_url: String, send_json_rpc_url: Option<String>) -> Self {
+        Self {
+            default: RpcClient::new_with_commitment(
+                normalize_to_url_if_moniker(json_rpc_url),
+                CommitmentConfig::confirmed(),
+            ),
+            send: send_json_rpc_url.map(|send_json_rpc_url| {
+                RpcClient::new_with_commitment(
+                    normalize_to_url_if_moniker(send_json_rpc_url),
+                    CommitmentConfig::confirmed(),
+                )
+            }),
+        }
+    }
+}
+
 // Assumes `transaction` has already been signed and simulated...
 pub fn send_transaction_until_expired(
     rpc_clients: &RpcClients,
     transaction: &impl SerializableTransaction,
     last_valid_block_height: u64,
 ) -> bool {
-    use {
-        solana_client::rpc_config::RpcSendTransactionConfig,
-        std::{
-            thread::sleep,
-            time::{Duration, Instant},
-        },
-    };
-
     let send_rpc_client = rpc_clients.send.as_ref().unwrap_or(&rpc_clients.default);
     let rpc_client = &rpc_clients.default;
 

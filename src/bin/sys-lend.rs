@@ -450,20 +450,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let app_matches = app.get_matches();
 
-    let rpc_clients = RpcClients {
-        default: RpcClient::new_with_commitment(
-            normalize_to_url_if_moniker(value_t_or_exit!(app_matches, "json_rpc_url", String)),
-            CommitmentConfig::confirmed(),
-        ),
-        send: value_t!(app_matches, "send_json_rpc_url", String)
-            .ok()
-            .map(|send_json_rpc_url| {
-                RpcClient::new_with_commitment(
-                    normalize_to_url_if_moniker(send_json_rpc_url),
-                    CommitmentConfig::confirmed(),
-                )
-            }),
-    };
+    let rpc_clients = RpcClients::new(
+        value_t_or_exit!(app_matches, "json_rpc_url", String),
+        value_t!(app_matches, "send_json_rpc_url", String).ok(),
+    );
     let rpc_client = &rpc_clients.default;
 
     let priority_fee = if let Ok(ui_priority_fee) = value_t!(app_matches, "priority_fee_exact", f64)
