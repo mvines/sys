@@ -155,19 +155,101 @@ struct AccountDataCache {
 }
 
 impl AccountDataCache {
-    fn exists(&mut self, reserve_address: &Pubkey) -> bool {
-        self.cache.contains_key(reserve_address)
+    fn exists(&mut self, address: &Pubkey) -> bool {
+        self.cache.contains_key(address)
     }
 
-    fn add(&mut self, reserve_address: Pubkey, reserve_account_data: Vec<u8>, context_slot: Slot) {
-        self.cache
-            .insert(reserve_address, (reserve_account_data, context_slot));
-    }
+    fn get(
+        &mut self,
+        rpc_client: &RpcClient,
+        address: Pubkey,
+    ) -> Result<(&[u8], Slot), Box<dyn std::error::Error>> {
+        if !self.exists(&address) {
+            let result =
+                rpc_client.get_account_with_commitment(&address, rpc_client.commitment())?;
+            self.cache.insert(
+                address,
+                (result.value.unwrap_or_default().data, result.context.slot),
+            );
+        }
 
-    fn get(&self, reserve_address: &Pubkey) -> Option<(&[u8], Slot)> {
         self.cache
-            .get(reserve_address)
+            .get(&address)
             .map(|(data, context_slot)| (data.as_ref(), *context_slot))
+            .ok_or_else(|| format!("{address} not present in cache").into())
+    }
+
+    fn simulate_then_add(
+        &mut self,
+        rpc_client: &RpcClient,
+        instructions: &[Instruction],
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let transaction = Transaction::new_unsigned(Message::new(
+            instructions,
+            Some(
+                &pubkey!["mvinesvseigL3uSWwSQr5tp8KX67kX2Ys6zydT9Wnbo"], /* TODO: Any fee payer will do. For now hard code one  */
+            ),
+        ));
+
+        let mut writable_addresses: Vec<_> = instructions
+            .iter()
+            .flat_map(|instruction| {
+                instruction
+                    .accounts
+                    .iter()
+                    .filter_map(|account_meta| {
+                        account_meta.is_writable.then_some(account_meta.pubkey)
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        writable_addresses.sort();
+        writable_addresses.dedup();
+
+        let result = rpc_client.simulate_transaction_with_config(
+            &transaction,
+            RpcSimulateTransactionConfig {
+                sig_verify: false,
+                replace_recent_blockhash: true,
+                commitment: Some(CommitmentConfig::processed()),
+                accounts: Some(RpcSimulateTransactionAccountsConfig {
+                    encoding: Some(UiAccountEncoding::Base64Zstd),
+                    addresses: writable_addresses
+                        .iter()
+                        .map(|address| address.to_string())
+                        .collect(),
+                }),
+                ..RpcSimulateTransactionConfig::default()
+            },
+        )?;
+
+        if let Some(err) = result.value.err {
+            return Err(format!(
+                "Failed to simulate instructions: {err} [logs: {:?}]",
+                result.value.logs
+            )
+            .into());
+        }
+        let writable_accounts = result.value.accounts.expect("accounts");
+        if writable_accounts.len() != writable_addresses.len() {
+            return Err("Return address length mismatch".into());
+        }
+
+        for (address, account) in writable_addresses.iter().zip(&writable_accounts) {
+            self.cache.insert(
+                *address,
+                (
+                    account
+                        .as_ref()
+                        .unwrap()
+                        .decode::<solana_sdk::account::Account>()
+                        .unwrap()
+                        .data,
+                    result.context.slot,
+                ),
+            );
+        }
+        Ok(())
     }
 }
 
@@ -967,8 +1049,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let mut address_lookup_table_accounts = vec![];
             for address_lookup_table in address_lookup_tables {
-                let raw_account = rpc_client.get_account(&address_lookup_table)?;
-                let address_lookup_table_data = AddressLookupTable::deserialize(&raw_account.data)?;
+                let address_lookup_table_data = AddressLookupTable::deserialize(
+                    account_data_cache.get(rpc_client, address_lookup_table)?.0,
+                )?;
                 address_lookup_table_accounts.push(AddressLookupTableAccount {
                     key: address_lookup_table,
                     addresses: address_lookup_table_data.addresses.to_vec(),
@@ -1056,45 +1139,6 @@ fn apr_to_apy(apr: f64) -> f64 {
     (1. + apr / compounding_periods).powf(compounding_periods) - 1.
 }
 
-fn simulate_instructions(
-    rpc_client: &RpcClient,
-    instructions: &[Instruction],
-    return_address: Pubkey,
-) -> Result<(solana_sdk::account::Account, Slot), Box<dyn std::error::Error>> {
-    let transaction = Transaction::new_unsigned(Message::new(
-        instructions,
-        Some(
-            &pubkey!["mvinesvseigL3uSWwSQr5tp8KX67kX2Ys6zydT9Wnbo"], /* TODO: Any fee payer will do. For now hard code one  */
-        ),
-    ));
-
-    let result = rpc_client.simulate_transaction_with_config(
-        &transaction,
-        RpcSimulateTransactionConfig {
-            sig_verify: false,
-            replace_recent_blockhash: true,
-            commitment: Some(CommitmentConfig::processed()),
-            accounts: Some(RpcSimulateTransactionAccountsConfig {
-                encoding: Some(UiAccountEncoding::Base64Zstd),
-                addresses: vec![return_address.to_string()],
-            }),
-            ..RpcSimulateTransactionConfig::default()
-        },
-    )?;
-
-    if let Some(err) = result.value.err {
-        return Err(format!(
-            "Failed to simulate insructions: {err} [logs: {:?}]",
-            result.value.logs
-        )
-        .into());
-    }
-    let accounts = result.value.accounts.expect("accounts");
-    let ui_account = accounts[0].as_ref().unwrap();
-
-    Ok((ui_account.decode().unwrap(), result.context.slot))
-}
-
 //////////////////////////////////////////////////////////////////////////////
 ///[ MarginFi Stuff ] ////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////////
@@ -1118,18 +1162,10 @@ fn mfi_load_bank(
     bank_address: Pubkey,
     account_data_cache: &mut AccountDataCache,
 ) -> Result<marginfi_v2::Bank, Box<dyn std::error::Error>> {
+    let (account_data, _context_slot) = account_data_cache.get(rpc_client, bank_address).unwrap();
+
     const LEN: usize = std::mem::size_of::<marginfi_v2::Bank>();
-
-    if !account_data_cache.exists(&bank_address) {
-        account_data_cache.add(
-            bank_address,
-            rpc_client.get_account_data(&bank_address)?[8..LEN + 8].into(),
-            0,
-        );
-    }
-
-    let (account_data, _context_slot) = account_data_cache.get(&bank_address).unwrap();
-    let account_data: [u8; LEN] = account_data.try_into().unwrap();
+    let account_data: [u8; LEN] = account_data[8..LEN + 8].try_into().unwrap();
     let reserve = unsafe { std::mem::transmute(account_data) };
     Ok(reserve)
 }
@@ -1470,12 +1506,11 @@ fn kamino_load_reserve(
             ],
         )];
 
-        let (reserve_account, context_slot) =
-            simulate_instructions(rpc_client, &instructions, reserve_address)?;
-        account_data_cache.add(reserve_address, reserve_account.data.clone(), context_slot);
+        account_data_cache.simulate_then_add(rpc_client, &instructions)?;
     }
 
-    let (account_data, _context_slot) = account_data_cache.get(&reserve_address).unwrap();
+    let (account_data, _context_slot) =
+        account_data_cache.get(rpc_client, reserve_address).unwrap();
     kamino_unsafe_load_reserve_account_data(account_data)
 }
 
@@ -1586,18 +1621,10 @@ fn kamino_unsafe_load_obligation(
     obligation_address: Pubkey,
     account_data_cache: &mut AccountDataCache,
 ) -> Result<kamino::Obligation, Box<dyn std::error::Error>> {
+    let (account_data, _context_slot) = account_data_cache.get(rpc_client, obligation_address)?;
+
     const LEN: usize = std::mem::size_of::<kamino::Obligation>();
-
-    if !account_data_cache.exists(&obligation_address) {
-        account_data_cache.add(
-            obligation_address,
-            rpc_client.get_account_data(&obligation_address)?[8..LEN + 8].into(),
-            0,
-        );
-    }
-
-    let (account_data, _context_slot) = account_data_cache.get(&obligation_address).unwrap();
-    let account_data: [u8; LEN] = account_data.try_into().unwrap();
+    let account_data: [u8; LEN] = account_data[8..LEN + 8].try_into().unwrap();
     let obligation = unsafe { std::mem::transmute(account_data) };
     Ok(obligation)
 }
@@ -1960,12 +1987,10 @@ fn solend_load_reserve(
             ],
         )];
 
-        let (reserve_account, context_slot) =
-            simulate_instructions(rpc_client, &instructions, reserve_address)?;
-        account_data_cache.add(reserve_address, reserve_account.data.clone(), context_slot);
+        account_data_cache.simulate_then_add(rpc_client, &instructions)?;
     }
 
-    let (account_data, context_slot) = account_data_cache.get(&reserve_address).unwrap();
+    let (account_data, context_slot) = account_data_cache.get(rpc_client, reserve_address).unwrap();
     Ok((solend::state::Reserve::unpack(account_data)?, context_slot))
 }
 
@@ -2065,24 +2090,21 @@ fn solend_load_obligation(
     obligation_address: Pubkey,
     account_data_cache: &mut AccountDataCache,
 ) -> Result<solend::state::Obligation, Box<dyn std::error::Error>> {
-    if !account_data_cache.exists(&obligation_address) {
-        account_data_cache.add(
-            obligation_address,
-            rpc_client.get_account_data(&obligation_address)?,
-            0,
-        );
-    }
-
-    let (account_data, _context_slot) = account_data_cache.get(&obligation_address).unwrap();
+    let (account_data, _context_slot) = account_data_cache
+        .get(rpc_client, obligation_address)
+        .unwrap();
     Ok(solend::state::Obligation::unpack(account_data)?)
 }
 
 fn solend_load_lending_market(
     rpc_client: &RpcClient,
     lending_market_address: Pubkey,
+    account_data_cache: &mut AccountDataCache,
 ) -> Result<solend::state::LendingMarket, Box<dyn std::error::Error>> {
-    let account_data = rpc_client.get_account_data(&lending_market_address)?;
-    Ok(solend::state::LendingMarket::unpack(&account_data)?)
+    let account_data = account_data_cache
+        .get(rpc_client, lending_market_address)?
+        .0;
+    Ok(solend::state::LendingMarket::unpack(account_data)?)
 }
 
 fn solend_deposited_amount(
@@ -2135,7 +2157,8 @@ fn solend_deposit_or_withdraw(
     }
     let obligation = solend_load_obligation(rpc_client, market_obligation, account_data_cache)?;
 
-    let lending_market = solend_load_lending_market(rpc_client, reserve.lending_market)?;
+    let lending_market =
+        solend_load_lending_market(rpc_client, reserve.lending_market, account_data_cache)?;
 
     let lending_market_authority = Pubkey::create_program_address(
         &[

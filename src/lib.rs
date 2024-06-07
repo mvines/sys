@@ -5,7 +5,7 @@ use {
         rpc_config::RpcSendTransactionConfig,
         rpc_response,
     },
-    solana_sdk::commitment_config::CommitmentConfig,
+    solana_sdk::{clock::Slot, commitment_config::CommitmentConfig},
     std::{
         thread::sleep,
         time::{Duration, Instant},
@@ -83,6 +83,17 @@ pub fn send_transaction_until_expired(
     transaction: &impl SerializableTransaction,
     last_valid_block_height: u64,
 ) -> bool {
+    send_transaction_until_expired_with_slot(rpc_clients, transaction, last_valid_block_height)
+        .is_some()
+}
+
+// Same as `send_transaction_until_expired` but on success returns a `Slot` that the transaction
+// was observed to be confirmed at
+fn send_transaction_until_expired_with_slot(
+    rpc_clients: &RpcClients,
+    transaction: &impl SerializableTransaction,
+    last_valid_block_height: u64,
+) -> Option<Slot> {
     let mut last_send_attempt = None;
 
     let config = RpcSendTransactionConfig {
@@ -120,10 +131,10 @@ pub fn send_transaction_until_expired(
                 let confirmation_context_slot = context.slot;
                 if let Some(ref transaction_status) = value[0] {
                     match transaction_status.err {
-                        None => return true,
+                        None => return Some(confirmation_context_slot),
                         Some(ref err) => {
                             println!("Transaction failed: {err}");
-                            return false;
+                            return None;
                         }
                     }
                 } else {
@@ -135,7 +146,7 @@ pub fn send_transaction_until_expired(
                                 println!(
                                     "Transaction expired as of slot {confirmation_context_slot}"
                                 );
-                                return false;
+                                return None;
                             }
                             println!(
                                 "(transaction unconfirmed as of slot {}, {} blocks until expiry)",
