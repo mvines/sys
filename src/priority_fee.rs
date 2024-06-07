@@ -78,14 +78,14 @@ fn get_recent_priority_fees_for_instructions(
             instruction
                 .accounts
                 .iter()
-                .map(|account_meta| account_meta.pubkey)
+                .filter_map(|account_meta| account_meta.is_writable.then_some(account_meta.pubkey))
                 .collect::<Vec<_>>()
         })
         .collect();
     account_keys.sort();
     account_keys.dedup();
 
-    let mut prioritization_fees: Vec<_> = rpc_client
+    let prioritization_fees: Vec<_> = rpc_client
         .get_recent_prioritization_fees(&account_keys)
         .map(|response| {
             response
@@ -94,8 +94,6 @@ fn get_recent_priority_fees_for_instructions(
                 .collect()
         })
         .map_err(|err| format!("Failed to invoke RPC method getRecentPrioritizationFees: {err}"))?;
-
-    prioritization_fees.sort();
 
     Ok(prioritization_fees)
 }
