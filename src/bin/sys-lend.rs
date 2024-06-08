@@ -1358,7 +1358,7 @@ fn mfi_deposit_or_withdraw(
     }
 
     let (user_account_address, user_account) = mfi_load_user_account(rpc_client, wallet_address, account_data_cache)?
-        .ok_or_else(|| format!("No MarginFi account found for {wallet_address}. Manually deposit once into the pool and retry"))?;
+        .ok_or_else(|| format!("No MarginFi account found for {wallet_address}. Manually deposit once into MarginFi and retry"))?;
 
     let (instructions, required_compute_units, amount) = match op {
         Operation::Deposit => {
@@ -1876,9 +1876,7 @@ fn kamino_deposit_or_withdraw(
 
     if reserve_farm_state != Pubkey::default() {
         if rpc_client.get_balance(&obligation_farm_user_state)? == 0 {
-            return Err(
-                format!("Manually deposit {token} into {pool} before using sys-lend").into(),
-            );
+            return Err(format!("Manually deposit once into {pool} before using sys-lend").into());
         }
         instructions.push(kamino_refresh_obligation_farms_for_reserve.clone());
     }
@@ -2238,19 +2236,29 @@ fn solend_deposit_or_withdraw(
         &reserve.collateral.mint_pubkey,
     );
 
+    let obligation = solend_load_obligation(rpc_client, obligation_address, account_data_cache)?
+        .ok_or_else(|| {
+            format!(
+                "{pool} obligation account not found for {wallet_address}. \
+                 Manually deposit once into {pool} before using sys-lend"
+            )
+        })?;
+
+    let mut instructions = vec![];
+
     if matches!(
         rpc_client.get_balance(&user_collateral_token_account),
         Ok(0)
     ) {
-        return Err(format!(
-            "{pool} collaterial token account not found for {wallet_address}. \
-                            Manually deposit once into the pool and retry"
-        )
-        .into());
+        instructions.push(
+            spl_associated_token_account::instruction::create_associated_token_account(
+                &wallet_address,
+                &wallet_address,
+                &reserve.collateral.mint_pubkey,
+                &spl_token::id(),
+            ),
+        );
     }
-
-    let mut instructions = vec![];
-
     let (amount, required_compute_units) = match op {
         Operation::Deposit => {
             // Solend: Deposit Reserve Liquidity and Obligation Collateral
@@ -2297,15 +2305,6 @@ fn solend_deposit_or_withdraw(
             (amount, 100_000)
         }
         Operation::Withdraw => {
-            let obligation =
-                solend_load_obligation(rpc_client, obligation_address, account_data_cache)?
-                    .ok_or_else(|| {
-                        format!(
-                            "{pool} obligation account not found for {wallet_address}. \
-                             Manually deposit once into the pool and retry"
-                        )
-                    })?;
-
             let withdraw_amount = if amount == u64::MAX {
                 let collateral_deposited_amount = obligation
                     .deposits
