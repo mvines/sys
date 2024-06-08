@@ -357,7 +357,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .help("Wallet"),
                 )
                 .arg(
-                    Arg::with_name("amount")
+                    Arg::with_name("ui_amount")
                         .value_name("AMOUNT")
                         .takes_value(true)
                         .validator(is_amount_or_all)
@@ -410,7 +410,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .help("Wallet"),
                 )
                 .arg(
-                    Arg::with_name("amount")
+                    Arg::with_name("ui_amount")
                         .value_name("AMOUNT")
                         .takes_value(true)
                         .validator(is_amount_or_all)
@@ -456,7 +456,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .help("Wallet"),
                 )
                 .arg(
-                    Arg::with_name("amount")
+                    Arg::with_name("ui_amount")
                         .value_name("AMOUNT")
                         .takes_value(true)
                         .validator(is_amount_or_all)
@@ -792,7 +792,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let minimum_apy_bps = value_t!(matches, "minimum_apy", u16).unwrap_or(0);
 
             let token_balance = maybe_token.balance(rpc_client, &address)?;
-            let amount = match matches.value_of("amount").unwrap() {
+            let requested_amount = match matches.value_of("ui_amount").unwrap() {
                 "ALL" => {
                     if cmd == Command::Deposit {
                         token_balance.saturating_sub(if maybe_token.is_sol() {
@@ -804,23 +804,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         u64::MAX
                     }
                 }
-                amount => token.amount(amount.parse::<f64>().unwrap()),
+                ui_amount => token.amount(ui_amount.parse::<f64>().unwrap()),
             };
-
-            if cmd == Command::Deposit {
-                if amount > token_balance {
-                    return Err(format!(
-                        "Deposit amount of {} is greater than current balance of {}",
-                        maybe_token.format_amount(amount),
-                        maybe_token.format_amount(token_balance),
-                    )
-                    .into());
-                }
-                if amount == 0 {
-                    println!("Nothing to deposit");
-                    return Ok(());
-                }
-            }
 
             is_token_supported(&token, &pools)?;
 
@@ -872,48 +857,66 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             // Deposit pool has the highest APR
             let deposit_pool = pools.last().ok_or("No available pool")?;
 
-            // Withdraw pool has the lowest APR and a balance >= the requested `amount`
+            // Withdraw pool has the lowest APR and a balance >= `requested_amount`
             let withdraw_pool = pools
                 .iter()
                 .find(|pool| {
                     let balance = *supply_balance.get(*pool).unwrap();
 
-                    if amount == u64::MAX {
+                    if requested_amount == u64::MAX {
                         balance > 1 // Solend/Kamino leave 1 in sometimes :-/
                     } else {
-                        balance >= amount
+                        balance >= requested_amount
                     }
                 })
                 .unwrap_or(deposit_pool);
 
-            let ops = match cmd {
+            let (ops, mut amount) = match cmd {
                 Command::Deposit => {
-                    vec![(Operation::Deposit, deposit_pool)]
-                }
-                Command::Withdraw => vec![(Operation::Withdraw, withdraw_pool)],
-                Command::Rebalance => {
-                    if withdraw_pool == deposit_pool {
-                        println!("Nothing to rebalance");
+                    if requested_amount > token_balance {
+                        return Err(format!(
+                            "Deposit amount of {} is greater than current balance of {}",
+                            maybe_token.format_amount(requested_amount),
+                            maybe_token.format_amount(token_balance),
+                        )
+                        .into());
+                    }
+                    if requested_amount == 0 {
+                        println!("Nothing to deposit");
                         return Ok(());
                     }
 
-                    vec![
-                        (Operation::Withdraw, withdraw_pool),
-                        (Operation::Deposit, deposit_pool),
-                    ]
+                    (vec![(Operation::Deposit, deposit_pool)], requested_amount)
+                }
+                Command::Withdraw | Command::Rebalance => {
+                    let mut requested_amount = requested_amount;
+                    if requested_amount == u64::MAX {
+                        requested_amount = *supply_balance.get(withdraw_pool).unwrap();
+                    }
+
+                    if requested_amount == 0 {
+                        println!("Nothing to withdraw");
+                        return Ok(());
+                    }
+
+                    (
+                        if cmd == Command::Withdraw {
+                            vec![(Operation::Withdraw, withdraw_pool)]
+                        } else {
+                            vec![
+                                (Operation::Withdraw, withdraw_pool),
+                                (Operation::Deposit, deposit_pool),
+                            ]
+                        },
+                        requested_amount,
+                    )
                 }
             };
 
             let mut instructions = vec![];
             let mut address_lookup_tables = vec![];
             let mut required_compute_units = 0;
-            let mut amount = amount;
             for (op, pool) in ops {
-                if amount == u64::MAX {
-                    assert_eq!(op, Operation::Withdraw);
-                    amount = *supply_balance.get(withdraw_pool).unwrap();
-                }
-
                 let result = if pool.starts_with("kamino-") {
                     kamino_deposit_or_withdraw(
                         op,
