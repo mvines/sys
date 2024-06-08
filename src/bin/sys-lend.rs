@@ -381,6 +381,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .validator(is_parsable::<u16>)
                         .help("Do not deposit if the current pool APY is less than this amount of BPS")
                 )
+                .arg(
+                    Arg::with_name("dry_run")
+                        .long("dry-run")
+                        .takes_value(false)
+                )
         )
         .subcommand(
             SubCommand::with_name("withdraw")
@@ -420,6 +425,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .validator(is_valid_token_or_sol)
                         .default_value("USDC")
                         .help("Token to withdraw"),
+                )
+                .arg(
+                    Arg::with_name("dry_run")
+                        .long("dry-run")
+                        .takes_value(false)
                 )
         )
         .subcommand(
@@ -470,6 +480,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .validator(is_parsable::<u16>)
                         .default_value("250")
                         .help("Skip rebalance if the APY improvement would be less than this amount of BPS")
+                )
+                .arg(
+                    Arg::with_name("dry_run")
+                        .long("dry-run")
+                        .takes_value(false)
                 )
         )
         .subcommand(
@@ -769,6 +784,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let maybe_token = MaybeToken::from(value_t!(matches, "token", Token).ok());
             let token = maybe_token.token().unwrap_or(Token::wSOL);
+            let dry_run = matches.is_present("dry_run");
 
             let pools = values_t!(matches, "pool", String)
                 .ok()
@@ -1117,26 +1133,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
 
                     format!(
-                        "Deposit {} from {} into {} at {simulation_deposit_pool_apy:.2}%",
-                        maybe_token.format_amount(amount),
-                        address,
-                        deposit_pool
+                        "Deposit {} from {address} into {deposit_pool} ({deposit_pool_apy:.2}% -> {simulation_deposit_pool_apy:.2}%)",
+                        maybe_token.format_amount(amount)
                     )
                 }
                 Command::Withdraw => {
                     format!(
-                        "Withdrew {} from {} into {}",
-                        maybe_token.format_amount(amount),
-                        withdraw_pool,
-                        address
+                        "Withdraw {} from {withdraw_pool} ({withdraw_pool_apy:.2}% -> {simulation_withdraw_pool_apy:.2}%) into {address}",
+                        maybe_token.format_amount(amount)
                     )
                 }
                 Command::Rebalance => {
                     let msg_prefix = format!("Rebalance of {} from {withdraw_pool} ({withdraw_pool_apy:.2}% -> {simulation_withdraw_pool_apy:.2}%) \
                           to {deposit_pool} ({deposit_pool_apy:.2}% -> {simulation_deposit_pool_apy:.2}%)",
-
-                        maybe_token.format_amount(amount),
-
+                        maybe_token.format_amount(amount)
                     );
 
                     if simulation_apy_improvement_bps < minimum_apy_bps as isize {
@@ -1152,6 +1162,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
 
             println!("{msg}");
+
+            if dry_run {
+                println!("Aborting due to --dry-run flag");
+                return Ok(());
+            }
 
             if !send_transaction_until_expired(&rpc_clients, &transaction, last_valid_block_height)
             {
