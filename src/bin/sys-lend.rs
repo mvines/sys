@@ -909,6 +909,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut required_compute_units = 0;
             let mut amount = amount;
             for (op, pool) in ops {
+                if amount == u64::MAX {
+                    assert_eq!(op, Operation::Withdraw);
+                    amount = *supply_balance.get(withdraw_pool).unwrap();
+                }
+
                 let result = if pool.starts_with("kamino-") {
                     kamino_deposit_or_withdraw(
                         op,
@@ -1399,18 +1404,6 @@ fn mfi_deposit_or_withdraw(
             (vec![instruction], 50_000, amount)
         }
         Operation::Withdraw => {
-            let withdraw_amount = if amount == u64::MAX {
-                let balance = user_account
-                    .lending_account
-                    .get_balance(&bank_address)
-                    .ok_or_else(|| format!("No {token} deposit found"))?;
-
-                let deposit = bank.get_asset_amount(balance.asset_shares.into());
-                deposit.floor().to_num::<u64>()
-            } else {
-                amount
-            };
-
             let liquidity_vault_authority = Pubkey::create_program_address(
                 &[
                     b"liquidity_vault_auth",
@@ -1424,8 +1417,8 @@ fn mfi_deposit_or_withdraw(
             // Marginfi: Lending Account Withdraw
             let marginfi_account_withdraw_data = {
                 let mut v = vec![0x24, 0x48, 0x4a, 0x13, 0xd2, 0xd2, 0xc0, 0xc0];
-                v.extend(withdraw_amount.to_le_bytes());
-                v.extend([1, if amount == u64::MAX { 1 } else { 0 }]); // WithdrawAll flag
+                v.extend(amount.to_le_bytes());
+                v.extend([1, /* WithdrawAll = */ 0]);
                 v
             };
 
@@ -1455,7 +1448,7 @@ fn mfi_deposit_or_withdraw(
             ];
 
             for balance in &user_account.lending_account.balances {
-                if balance.active && !(amount == u64::MAX && balance.bank_pk == bank_address) {
+                if balance.active {
                     account_meta.push(AccountMeta::new_readonly(balance.bank_pk, false));
 
                     let balance_bank =
@@ -1482,7 +1475,7 @@ fn mfi_deposit_or_withdraw(
                 )
             ];
 
-            (instructions, 110_000, withdraw_amount)
+            (instructions, 110_000, amount)
         }
     };
 
@@ -1884,22 +1877,6 @@ fn kamino_deposit_or_withdraw(
 
     let amount = match op {
         Operation::Withdraw => {
-            let withdraw_amount = if amount == u64::MAX {
-                let obligation = obligation.ok_or_else(|| format!("{pool} has {token} deposit"))?;
-
-                let collateral_deposited_amount = obligation
-                    .deposits
-                    .iter()
-                    .find(|collateral| collateral.deposit_reserve == market_reserve_address)
-                    .map(|collateral| collateral.deposited_amount)
-                    .unwrap_or_default();
-
-                let collateral_exchange_rate = reserve.collateral_exchange_rate();
-                collateral_exchange_rate.collateral_to_liquidity(collateral_deposited_amount)
-            } else {
-                amount
-            };
-
             // Instruction: Withdraw Obligation Collateral And Redeem Reserve Collateral
 
             let collateral_exchange_rate = reserve.collateral_exchange_rate();
@@ -1950,7 +1927,7 @@ fn kamino_deposit_or_withdraw(
                 ],
             ));
 
-            withdraw_amount - 1 // HACK!! Sometimes Kamino loses a lamport? This breaks `rebalance`...
+            amount - 1 // HACK!! Sometimes Kamino loses a lamport? This breaks `rebalance`...
         }
         Operation::Deposit => {
             // Instruction: Kamino: Deposit Reserve Liquidity and Obligation Collateral
@@ -2216,7 +2193,7 @@ fn solend_deposit_or_withdraw(
     amount: u64,
     account_data_cache: &mut AccountDataCache,
 ) -> Result<DepositOrWithdrawResult, Box<dyn std::error::Error>> {
-    let (market_reserve_address, reserve, context_slot) =
+    let (market_reserve_address, reserve, _context_slot) =
         solend_load_reserve_for_pool(rpc_client, pool, token, account_data_cache)?;
 
     let obligation_address = solend_find_obligation_address(wallet_address, reserve.lending_market);
@@ -2307,25 +2284,6 @@ fn solend_deposit_or_withdraw(
             (amount, 100_000)
         }
         Operation::Withdraw => {
-            let withdraw_amount = if amount == u64::MAX {
-                let collateral_deposited_amount = obligation
-                    .deposits
-                    .iter()
-                    .find(|collateral| collateral.deposit_reserve == market_reserve_address)
-                    .map(|collateral| collateral.deposited_amount)
-                    .unwrap_or_default();
-
-                let remaining_outflow =
-                    solend_remaining_outflow_for_reserve(reserve.clone(), context_slot)?;
-
-                let collateral_exchange_rate = reserve.collateral_exchange_rate()?;
-                collateral_exchange_rate
-                    .collateral_to_liquidity(collateral_deposited_amount)?
-                    .min(remaining_outflow)
-            } else {
-                amount
-            };
-
             // Instruction: Solend: Refresh Reserve
             let obligation_market_reserves = obligation
                 .deposits
@@ -2402,41 +2360,49 @@ fn solend_deposit_or_withdraw(
                 v
             };
 
+            let mut account_meta = vec![
+                // Reserve Collateral Supply
+                AccountMeta::new(reserve.collateral.supply_pubkey, false),
+                // User Collateral Token Account
+                AccountMeta::new(user_collateral_token_account, false),
+                // Lending Market
+                AccountMeta::new(market_reserve_address, false),
+                // Obligation
+                AccountMeta::new(obligation_address, false),
+                // Lending Market
+                AccountMeta::new(reserve.lending_market, false),
+                // Lending Market Authority
+                AccountMeta::new_readonly(lending_market_authority, false),
+                // User Liquidity Token Account
+                AccountMeta::new(user_liquidity_token_account, false),
+                // Reserve Collateral Mint
+                AccountMeta::new(reserve.collateral.mint_pubkey, false),
+                // Reserve Liquidity Supply
+                AccountMeta::new(reserve.liquidity.supply_pubkey, false),
+                // Obligation Owner
+                AccountMeta::new(wallet_address, true),
+                // User Transfer Authority
+                AccountMeta::new(wallet_address, true),
+                // Token Program
+                AccountMeta::new_readonly(spl_token::id(), false),
+                // Lending Market
+                AccountMeta::new(market_reserve_address, false),
+            ];
+
+            for reserve_address in &obligation_market_reserves {
+                if *reserve_address != market_reserve_address {
+                    account_meta.push(AccountMeta::new(*reserve_address, false));
+                }
+            }
+
             instructions.push(Instruction::new_with_bytes(
                 solend::solend_mainnet::ID,
                 &solend_withdraw_obligation_collateral_and_redeem_reserve_collateral_data,
-                vec![
-                    // Reserve Collateral Supply
-                    AccountMeta::new(reserve.collateral.supply_pubkey, false),
-                    // User Collateral Token Account
-                    AccountMeta::new(user_collateral_token_account, false),
-                    // Lending Market
-                    AccountMeta::new(market_reserve_address, false),
-                    // Obligation
-                    AccountMeta::new(obligation_address, false),
-                    // Lending Market
-                    AccountMeta::new(reserve.lending_market, false),
-                    // Lending Market Authority
-                    AccountMeta::new_readonly(lending_market_authority, false),
-                    // User Liquidity Token Account
-                    AccountMeta::new(user_liquidity_token_account, false),
-                    // Reserve Collateral Mint
-                    AccountMeta::new(reserve.collateral.mint_pubkey, false),
-                    // Reserve Liquidity Supply
-                    AccountMeta::new(reserve.liquidity.supply_pubkey, false),
-                    // Obligation Owner
-                    AccountMeta::new(wallet_address, true),
-                    // User Transfer Authority
-                    AccountMeta::new(wallet_address, true),
-                    // Token Program
-                    AccountMeta::new_readonly(spl_token::id(), false),
-                    // Lending Market
-                    AccountMeta::new(market_reserve_address, false),
-                ],
+                account_meta,
             ));
 
             (
-                withdraw_amount - 1, // HACK!! Sometimes Solend loses a lamport? This breaks `rebalance`...
+                amount - 1, // HACK!! Sometimes Solend loses a lamport? This breaks `rebalance`...
                 150_000,
             )
         }
