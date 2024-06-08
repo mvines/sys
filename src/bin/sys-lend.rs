@@ -1494,6 +1494,7 @@ fn mfi_deposit_or_withdraw(
     })
 }
 
+#[derive(Debug)]
 struct DepositOrWithdrawResult {
     instructions: Vec<Instruction>,
     required_compute_units: u32,
@@ -2112,9 +2113,10 @@ fn solend_remaining_outflow_for_reserve(
     if reserve.rate_limiter.config.window_duration == 0 {
         Ok(u64::MAX)
     } else {
-        let remaining_outflow = reserve.rate_limiter.remaining_outflow(context_slot)?;
-        let collateral_exchange_rate = reserve.collateral_exchange_rate()?;
-        Ok(collateral_exchange_rate.collateral_to_liquidity(remaining_outflow.try_round_u64()?)?)
+        Ok(reserve
+            .rate_limiter
+            .remaining_outflow(context_slot)?
+            .try_floor_u64()?)
     }
 }
 
@@ -2214,7 +2216,7 @@ fn solend_deposit_or_withdraw(
     amount: u64,
     account_data_cache: &mut AccountDataCache,
 ) -> Result<DepositOrWithdrawResult, Box<dyn std::error::Error>> {
-    let (market_reserve_address, reserve, _context_slot) =
+    let (market_reserve_address, reserve, context_slot) =
         solend_load_reserve_for_pool(rpc_client, pool, token, account_data_cache)?;
 
     let obligation_address = solend_find_obligation_address(wallet_address, reserve.lending_market);
@@ -2313,8 +2315,13 @@ fn solend_deposit_or_withdraw(
                     .map(|collateral| collateral.deposited_amount)
                     .unwrap_or_default();
 
+                let remaining_outflow =
+                    solend_remaining_outflow_for_reserve(reserve.clone(), context_slot)?;
+
                 let collateral_exchange_rate = reserve.collateral_exchange_rate()?;
-                collateral_exchange_rate.collateral_to_liquidity(collateral_deposited_amount)?
+                collateral_exchange_rate
+                    .collateral_to_liquidity(collateral_deposited_amount)?
+                    .min(remaining_outflow)
             } else {
                 amount
             };
