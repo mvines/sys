@@ -836,6 +836,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
 
             is_token_supported(&token, &pools)?;
+            if cmd == Command::Rebalance && pools.len() <= 1 {
+                return Err("Rebalance command requires at least two pools".into());
+            }
 
             let supply_balance = pools
                 .iter()
@@ -899,7 +902,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 })
                 .unwrap_or(deposit_pool);
 
-            let (ops, mut amount) = match cmd {
+            let (ops, amount) = match cmd {
                 Command::Deposit => {
                     if requested_amount > token_balance {
                         return Err(format!(
@@ -918,8 +921,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 Command::Withdraw | Command::Rebalance => {
                     let mut requested_amount = requested_amount;
+
+                    let withdraw_pool_supply_balance = *supply_balance.get(withdraw_pool).unwrap();
+
                     if requested_amount == u64::MAX {
-                        requested_amount = *supply_balance.get(withdraw_pool).unwrap();
+                        requested_amount = withdraw_pool_supply_balance;
+                    }
+
+                    if requested_amount > withdraw_pool_supply_balance {
+                        return Err(format!(
+                            "Withdraw amount of {} is greater than current {withdraw_pool} supply balance of {}",
+                            maybe_token.format_amount(requested_amount),
+                            maybe_token.format_amount(withdraw_pool_supply_balance),
+                        )
+                        .into());
                     }
 
                     if requested_amount == 0 {
@@ -931,6 +946,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         if cmd == Command::Withdraw {
                             vec![(Operation::Withdraw, withdraw_pool)]
                         } else {
+                            if withdraw_pool == deposit_pool {
+                                return Err(format!(
+                                    "{} is deposited {withdraw_pool}, which curently has the highest APY",
+                                    maybe_token.format_amount(requested_amount),
+                                )
+                                .into());
+                            }
+
                             vec![
                                 (Operation::Withdraw, withdraw_pool),
                                 (Operation::Deposit, deposit_pool),
@@ -944,6 +967,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut instructions = vec![];
             let mut address_lookup_tables = vec![];
             let mut required_compute_units = 0;
+            let mut amount = amount;
             for (op, pool) in ops {
                 let result = if pool.starts_with("kamino-") {
                     kamino_deposit_or_withdraw(
@@ -1081,16 +1105,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .await;
             }
 
-            let mut address_lookup_table_accounts = vec![];
-            for address_lookup_table in address_lookup_tables {
-                let address_lookup_table_data = AddressLookupTable::deserialize(
-                    account_data_cache.get(rpc_client, address_lookup_table)?.0,
-                )?;
-                address_lookup_table_accounts.push(AddressLookupTableAccount {
-                    key: address_lookup_table,
-                    addresses: address_lookup_table_data.addresses.to_vec(),
-                });
-            }
+            let address_lookup_table_accounts = address_lookup_tables
+                .into_iter()
+                .map(|address_lookup_table_address| {
+                    account_data_cache
+                        .get(rpc_client, address_lookup_table_address)
+                        .and_then(|(address_lookup_table_data, _context_slot)| {
+                            AddressLookupTable::deserialize(address_lookup_table_data)
+                                .map_err(|err| err.into())
+                        })
+                        .map(|address_lookup_table| AddressLookupTableAccount {
+                            key: address_lookup_table_address,
+                            addresses: address_lookup_table.addresses.to_vec(),
+                        })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
 
             apply_priority_fee(
                 rpc_client,
