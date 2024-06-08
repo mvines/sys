@@ -1927,7 +1927,11 @@ fn kamino_deposit_or_withdraw(
     );
 
     if reserve_farm_state != Pubkey::default() {
-        if rpc_client.get_balance(&obligation_farm_user_state)? == 0 {
+        if account_data_cache
+            .get(rpc_client, obligation_farm_user_state)?
+            .0
+            .is_empty()
+        {
             return Err(format!("Manually deposit once into {pool} before using sys-lend").into());
         }
         instructions.push(kamino_refresh_obligation_farms_for_reserve.clone());
@@ -2283,10 +2287,11 @@ fn solend_deposit_or_withdraw(
 
     let mut instructions = vec![];
 
-    if matches!(
-        rpc_client.get_balance(&user_collateral_token_account),
-        Ok(0)
-    ) {
+    if account_data_cache
+        .get(rpc_client, user_collateral_token_account)?
+        .0
+        .is_empty()
+    {
         instructions.push(
             spl_associated_token_account::instruction::create_associated_token_account(
                 &wallet_address,
