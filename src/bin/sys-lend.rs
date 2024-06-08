@@ -382,6 +382,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .help("Do not deposit if the current pool APY is less than this amount of BPS")
                 )
                 .arg(
+                    Arg::with_name("minimum_ui_amount")
+                        .long("minimum-amount")
+                        .value_name("AMOUNT")
+                        .takes_value(true)
+                        .validator(is_parsable::<u64>)
+                        .default_value("0.0")
+                        .help("Do not deposit if AMOUNT is less than this value")
+                )
+                .arg(
                     Arg::with_name("dry_run")
                         .long("dry-run")
                         .takes_value(false)
@@ -425,6 +434,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .validator(is_valid_token_or_sol)
                         .default_value("USDC")
                         .help("Token to withdraw"),
+                )
+                .arg(
+                    Arg::with_name("minimum_ui_amount")
+                        .long("minimum-amount")
+                        .value_name("AMOUNT")
+                        .takes_value(true)
+                        .validator(is_parsable::<u64>)
+                        .default_value("0.0")
+                        .help("Do not deposit if AMOUNT is less than this value")
                 )
                 .arg(
                     Arg::with_name("dry_run")
@@ -480,6 +498,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .validator(is_parsable::<u16>)
                         .default_value("250")
                         .help("Skip rebalance if the APY improvement would be less than this amount of BPS")
+                )
+                .arg(
+                    Arg::with_name("minimum_ui_amount")
+                        .long("minimum-amount")
+                        .value_name("AMOUNT")
+                        .takes_value(true)
+                        .validator(is_parsable::<f64>)
+                        .default_value("1.0")
+                        .help("Do not deposit if AMOUNT is less than this value")
                 )
                 .arg(
                     Arg::with_name("dry_run")
@@ -790,6 +817,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .ok()
                 .unwrap_or_else(|| supported_pools_for_token(token));
             let minimum_apy_bps = value_t!(matches, "minimum_apy", u16).unwrap_or(0);
+            let minimum_ui_amount = value_t_or_exit!(matches, "minimum_ui_amount", f64);
 
             let token_balance = maybe_token.balance(rpc_client, &address)?;
             let requested_amount = match matches.value_of("ui_amount").unwrap() {
@@ -1134,8 +1162,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let minimum_apy = minimum_apy_bps as f64 / 100.;
                     if simulation_deposit_pool_apy < minimum_apy {
                         println!(
-                            "Skipping deposit because the {deposit_pool} APY after deposit, {simulation_deposit_pool_apy:.2}%, \
+                            "Will not deposit. {deposit_pool} APY after deposit, {simulation_deposit_pool_apy:.2}%, \
                              is less than the minimum APY of {minimum_apy:.2}%"
+                        );
+                        return Ok(());
+                    }
+
+                    if amount < token.amount(minimum_ui_amount) {
+                        println!(
+                            "Will not deposit. {} is less than the minimum deposit amount of {}",
+                            maybe_token.format_amount(amount),
+                            maybe_token.format_ui_amount(minimum_ui_amount)
                         );
                         return Ok(());
                     }
@@ -1146,6 +1183,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     )
                 }
                 Command::Withdraw => {
+                    if amount < token.amount(minimum_ui_amount) {
+                        println!(
+                            "Will not withdraw. {} is less than the minimum withdrawal amount of {}",
+                            maybe_token.format_amount(amount),
+                            maybe_token.format_ui_amount(minimum_ui_amount)
+                        );
+                        return Ok(());
+                    }
+
                     format!(
                         "Withdraw {} from {withdraw_pool} ({withdraw_pool_apy:.2}% -> {simulation_withdraw_pool_apy:.2}%) into {address}",
                         maybe_token.format_amount(amount)
@@ -1161,6 +1207,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         println!(
                             "{msg_prefix} will only improve APY by {simulation_apy_improvement_bps}bps \
                                  (minimum required improvement: {minimum_apy_bps}bps)"
+                        );
+                        return Ok(());
+                    }
+
+                    if amount < token.amount(minimum_ui_amount) {
+                        println!(
+                            "Will not rebalance. {} is less than the minimum rebalance amount of {}",
+                            maybe_token.format_amount(amount),
+                            maybe_token.format_ui_amount(minimum_ui_amount)
                         );
                         return Ok(());
                     }
