@@ -279,6 +279,23 @@ impl AccountDataCache {
     }
 }
 
+fn is_amount_or_all_or_auto<T>(amount: T) -> Result<(), String>
+where
+    T: AsRef<str> + std::fmt::Display,
+{
+    if amount.as_ref().parse::<u64>().is_ok()
+        || amount.as_ref().parse::<f64>().is_ok()
+        || amount.as_ref() == "ALL"
+        || amount.as_ref() == "AUTO"
+    {
+        Ok(())
+    } else {
+        Err(format!(
+            "Unable to parse input amount as integer or float, provided: {amount}"
+        ))
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     solana_logger::setup_with_default("solana=info");
@@ -360,9 +377,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     Arg::with_name("ui_amount")
                         .value_name("AMOUNT")
                         .takes_value(true)
-                        .validator(is_amount_or_all)
+                        .validator(is_amount_or_all_or_auto)
                         .required(true)
-                        .help("The amount to deposit; accepts keyword ALL"),
+                        .default_value("AUTO")
+                        .help("The amount of tokens to deposit; accepts keyword ALL and AUTO"),
                 )
                 .arg(
                     Arg::with_name("token")
@@ -424,7 +442,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .takes_value(true)
                         .validator(is_amount_or_all)
                         .required(true)
-                        .help("The amount to withdraw; accepts keyword ALL"),
+                        .help("The amount of tokens to withdraw; accepts keyword ALL"),
                 )
                 .arg(
                     Arg::with_name("token")
@@ -434,15 +452,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .validator(is_valid_token_or_sol)
                         .default_value("USDC")
                         .help("Token to withdraw"),
-                )
-                .arg(
-                    Arg::with_name("minimum_ui_amount")
-                        .long("minimum-amount")
-                        .value_name("AMOUNT")
-                        .takes_value(true)
-                        .validator(is_parsable::<f64>)
-                        .default_value("0.0")
-                        .help("Do not deposit if AMOUNT is less than this value")
                 )
                 .arg(
                     Arg::with_name("dry_run")
@@ -477,9 +486,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     Arg::with_name("ui_amount")
                         .value_name("AMOUNT")
                         .takes_value(true)
-                        .validator(is_amount_or_all)
+                        .validator(is_amount_or_all_or_auto)
                         .required(true)
-                        .help("The amount to rebalance; accepts keyword ALL"),
+                        .default_value("AUTO")
+                        .help("The amount of tokens to rebalance; accepts keyword ALL and AUTO"),
                 )
                 .arg(
                     Arg::with_name("token")
@@ -506,7 +516,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .takes_value(true)
                         .validator(is_parsable::<f64>)
                         .default_value("1.0")
-                        .help("Do not deposit if AMOUNT is less than this value")
+                        .help("Do not rebalance an AMOUNT less than this value")
                 )
                 .arg(
                     Arg::with_name("dry_run")
@@ -791,9 +801,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("{}", token.ui_amount(total_amount));
             }
             if !raw {
+                println!();
+
                 if non_empty_pools_count > 1 {
                     println!(
-                        "\nTotal supply:    {} at {:.2}%",
+                        "Total supply:    {} at {:.2}%",
                         token.format_amount(total_amount),
                         running_weighted_sum / total_amount as f64
                     );
@@ -843,18 +855,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             };
 
-            let token_balance = maybe_token.balance(rpc_client, &address)?;
+            let token_balance = maybe_token.balance(rpc_client, &address)?.saturating_sub(
+                if maybe_token.is_sol() {
+                    sol_to_lamports(0.1) // Never drain all the SOL from `address`
+                } else {
+                    0
+                },
+            );
+
             let requested_amount = match matches.value_of("ui_amount").unwrap() {
                 "ALL" => {
                     if cmd == Command::Deposit {
-                        token_balance.saturating_sub(if maybe_token.is_sol() {
-                            sol_to_lamports(0.1)
-                        } else {
-                            0
-                        })
+                        token_balance
                     } else {
                         u64::MAX
                     }
+                }
+                "AUTO" => {
+                    assert!(matches!(cmd, Command::Deposit | Command::Rebalance));
+                    todo!("AUTO not implemented yet");
                 }
                 ui_amount => token.amount(ui_amount.parse::<f64>().unwrap()),
             };
@@ -988,205 +1007,219 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             };
 
-            let mut instructions = vec![];
-            let mut address_lookup_tables = vec![];
-            let mut required_compute_units = 0;
-            let mut amount = amount;
-            for (op, pool) in ops {
-                let result = if pool.starts_with("kamino-") {
-                    kamino_deposit_or_withdraw(
-                        op,
-                        rpc_client,
-                        pool,
-                        address,
-                        token,
-                        amount,
-                        &mut account_data_cache,
-                    )?
-                } else if pool.starts_with("solend-") {
-                    solend_deposit_or_withdraw(
-                        op,
-                        rpc_client,
-                        pool,
-                        address,
-                        token,
-                        amount,
-                        &mut account_data_cache,
-                    )?
-                } else if pool == "mfi" {
-                    mfi_deposit_or_withdraw(
-                        op,
-                        rpc_client,
-                        address,
-                        token,
-                        amount,
-                        false,
-                        &mut account_data_cache,
-                    )?
-                } else {
-                    unreachable!();
-                };
+            async fn build_message_for_ops(
+                rpc_client: &RpcClient,
+                account_data_cache: &mut AccountDataCache,
+                ops: &[(Operation, &String)],
+                mut amount: u64,
+                priority_fee: PriorityFee,
+                address: Pubkey,
+                token: Token,
+                wrap_unwrap_sol: bool,
+            ) -> Result<(message::v0::Message, AccountDataCache), Box<dyn std::error::Error>>
+            {
+                let mut instructions = vec![];
+                let mut address_lookup_tables = vec![];
+                let mut required_compute_units = 0;
 
-                match op {
-                    Operation::Deposit => {
-                        if maybe_token.is_sol() {
-                            // Wrap SOL into wSOL
-                            instructions.extend(vec![
-                                spl_associated_token_account::instruction::create_associated_token_account_idempotent(
-                                    &address,
-                                    &address,
-                                    &token.mint(),
-                                    &spl_token::id(),
-                                ),
-                                system_instruction::transfer(&address, &token.ata(&address), amount),
-                                spl_token::instruction::sync_native(&spl_token::id(), &token.ata(&address)).unwrap(),
-                            ]);
-                            required_compute_units += 20_000;
+                for (op, pool) in ops {
+                    let result = if pool.starts_with("kamino-") {
+                        kamino_deposit_or_withdraw(
+                            *op,
+                            rpc_client,
+                            pool,
+                            address,
+                            token,
+                            amount,
+                            account_data_cache,
+                        )?
+                    } else if pool.starts_with("solend-") {
+                        solend_deposit_or_withdraw(
+                            *op,
+                            rpc_client,
+                            pool,
+                            address,
+                            token,
+                            amount,
+                            account_data_cache,
+                        )?
+                    } else if *pool == "mfi" {
+                        mfi_deposit_or_withdraw(
+                            *op,
+                            rpc_client,
+                            address,
+                            token,
+                            amount,
+                            false,
+                            account_data_cache,
+                        )?
+                    } else {
+                        unreachable!();
+                    };
+
+                    match op {
+                        Operation::Deposit => {
+                            if wrap_unwrap_sol {
+                                // Wrap SOL into wSOL
+                                instructions.extend(vec![
+                                    spl_associated_token_account::instruction::create_associated_token_account_idempotent(
+                                        &address,
+                                        &address,
+                                        &token.mint(),
+                                        &spl_token::id(),
+                                    ),
+                                    system_instruction::transfer(&address, &token.ata(&address), amount),
+                                    spl_token::instruction::sync_native(&spl_token::id(), &token.ata(&address)).unwrap(),
+                                ]);
+                                required_compute_units += 20_000;
+                            }
+                        }
+                        Operation::Withdraw => {
+                            // Ensure the destination token account exists
+                            instructions.push(
+                                    spl_associated_token_account::instruction::create_associated_token_account_idempotent(
+                                        &address,
+                                        &address,
+                                        &token.mint(),
+                                        &spl_token::id(),
+                                    ),
+                                );
+                            required_compute_units += 25_000;
                         }
                     }
-                    Operation::Withdraw => {
-                        // Ensure the destination token account exists
-                        instructions.push(
-                                spl_associated_token_account::instruction::create_associated_token_account_idempotent(
-                                    &address,
-                                    &address,
-                                    &token.mint(),
-                                    &spl_token::id(),
-                                ),
-                            );
-                        required_compute_units += 25_000;
+
+                    instructions.extend(result.instructions);
+                    if let Some(address_lookup_table) = result.address_lookup_table {
+                        address_lookup_tables.push(address_lookup_table);
                     }
+                    required_compute_units += result.required_compute_units;
+                    amount = result.amount;
+
+                    if wrap_unwrap_sol && *op == Operation::Withdraw {
+                        // Unwrap wSOL into SOL
+
+                        let seed = &Keypair::new().pubkey().to_string()[..31];
+                        let ephemeral_token_account =
+                            Pubkey::create_with_seed(&address, seed, &spl_token::id()).unwrap();
+
+                        let space = spl_token::state::Account::LEN;
+                        let lamports = rpc_client.get_minimum_balance_for_rent_exemption(space)?;
+
+                        instructions.extend(vec![
+                            system_instruction::create_account_with_seed(
+                                &address,
+                                &ephemeral_token_account,
+                                &address,
+                                seed,
+                                lamports,
+                                space as u64,
+                                &spl_token::id(),
+                            ),
+                            spl_token::instruction::initialize_account(
+                                &spl_token::id(),
+                                &ephemeral_token_account,
+                                &token.mint(),
+                                &address,
+                            )
+                            .unwrap(),
+                            spl_token::instruction::transfer_checked(
+                                &spl_token::id(),
+                                &token.ata(&address),
+                                &token.mint(),
+                                &ephemeral_token_account,
+                                &address,
+                                &[],
+                                amount,
+                                token.decimals(),
+                            )
+                            .unwrap(),
+                            spl_token::instruction::close_account(
+                                &spl_token::id(),
+                                &ephemeral_token_account,
+                                &address,
+                                &address,
+                                &[],
+                            )
+                            .unwrap(),
+                        ]);
+
+                        required_compute_units += 30_000;
+                    }
+
+                    let principal_balance_change_ui_amount = match op {
+                        Operation::Deposit => token.ui_amount(amount),
+                        Operation::Withdraw => -token.ui_amount(amount),
+                    };
+                    metrics::push(dp::principal_balance_change(
+                        pool,
+                        &address,
+                        token,
+                        principal_balance_change_ui_amount,
+                    ))
+                    .await;
                 }
 
-                instructions.extend(result.instructions);
-                if let Some(address_lookup_table) = result.address_lookup_table {
-                    address_lookup_tables.push(address_lookup_table);
-                }
-                required_compute_units += result.required_compute_units;
-                amount = result.amount;
+                let address_lookup_table_accounts = address_lookup_tables
+                    .into_iter()
+                    .map(|address_lookup_table_address| {
+                        account_data_cache
+                            .get(rpc_client, address_lookup_table_address)
+                            .and_then(|(address_lookup_table_data, _context_slot)| {
+                                AddressLookupTable::deserialize(address_lookup_table_data)
+                                    .map_err(|err| err.into())
+                            })
+                            .map(|address_lookup_table| AddressLookupTableAccount {
+                                key: address_lookup_table_address,
+                                addresses: address_lookup_table.addresses.to_vec(),
+                            })
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
 
-                if maybe_token.is_sol() && op == Operation::Withdraw {
-                    // Unwrap wSOL into SOL
+                apply_priority_fee(
+                    rpc_client,
+                    &mut instructions,
+                    required_compute_units,
+                    priority_fee,
+                )?;
 
-                    let seed = &Keypair::new().pubkey().to_string()[..31];
-                    let ephemeral_token_account =
-                        Pubkey::create_with_seed(&address, seed, &spl_token::id()).unwrap();
+                // Simulate the transaction's instructions and cache the resulting account changes
+                let mut simulation_account_data_cache = account_data_cache.clone();
+                simulation_account_data_cache.simulate_then_add(
+                    rpc_client,
+                    &instructions,
+                    Some(address),
+                    &address_lookup_table_accounts,
+                )?;
 
-                    let space = spl_token::state::Account::LEN;
-                    let lamports = rpc_client.get_minimum_balance_for_rent_exemption(space)?;
-
-                    instructions.extend(vec![
-                        system_instruction::create_account_with_seed(
-                            &address,
-                            &ephemeral_token_account,
-                            &address,
-                            seed,
-                            lamports,
-                            space as u64,
-                            &spl_token::id(),
-                        ),
-                        spl_token::instruction::initialize_account(
-                            &spl_token::id(),
-                            &ephemeral_token_account,
-                            &token.mint(),
-                            &address,
-                        )
-                        .unwrap(),
-                        spl_token::instruction::transfer_checked(
-                            &spl_token::id(),
-                            &token.ata(&address),
-                            &token.mint(),
-                            &ephemeral_token_account,
-                            &address,
-                            &[],
-                            amount,
-                            token.decimals(),
-                        )
-                        .unwrap(),
-                        spl_token::instruction::close_account(
-                            &spl_token::id(),
-                            &ephemeral_token_account,
-                            &address,
-                            &address,
-                            &[],
-                        )
-                        .unwrap(),
-                    ]);
-
-                    required_compute_units += 30_000;
-                }
-
-                let principal_balance_change_ui_amount = match op {
-                    Operation::Deposit => maybe_token.ui_amount(amount),
-                    Operation::Withdraw => -maybe_token.ui_amount(amount),
-                };
-                metrics::push(dp::principal_balance_change(
-                    pool,
+                let message = message::v0::Message::try_compile(
                     &address,
-                    token,
-                    principal_balance_change_ui_amount,
-                ))
-                .await;
+                    &instructions,
+                    &address_lookup_table_accounts,
+                    solana_sdk::hash::Hash::default(),
+                )?;
+
+                Ok((message, simulation_account_data_cache))
             }
 
-            let address_lookup_table_accounts = address_lookup_tables
-                .into_iter()
-                .map(|address_lookup_table_address| {
-                    account_data_cache
-                        .get(rpc_client, address_lookup_table_address)
-                        .and_then(|(address_lookup_table_data, _context_slot)| {
-                            AddressLookupTable::deserialize(address_lookup_table_data)
-                                .map_err(|err| err.into())
-                        })
-                        .map(|address_lookup_table| AddressLookupTableAccount {
-                            key: address_lookup_table_address,
-                            addresses: address_lookup_table.addresses.to_vec(),
-                        })
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-
-            apply_priority_fee(
+            let (message, mut simulation_account_data_cache) = build_message_for_ops(
                 rpc_client,
-                &mut instructions,
-                required_compute_units,
+                &mut account_data_cache,
+                &ops,
+                amount,
                 priority_fee,
-            )?;
+                address,
+                token,
+                maybe_token.is_sol(),
+            )
+            .await?;
 
-            let (recent_blockhash, last_valid_block_height) =
-                rpc_client.get_latest_blockhash_with_commitment(rpc_client.commitment())?;
-
-            let transaction = if address_lookup_table_accounts.is_empty() {
-                let mut message = Message::new(&instructions, Some(&address));
-                message.recent_blockhash = recent_blockhash;
-                let mut transaction = Transaction::new_unsigned(message);
-                transaction.try_sign(&vec![signer], recent_blockhash)?;
-                transaction.into()
-            } else {
-                VersionedTransaction::try_new(
-                    VersionedMessage::V0(message::v0::Message::try_compile(
-                        &address,
-                        &instructions,
-                        &address_lookup_table_accounts,
-                        recent_blockhash,
-                    )?),
-                    &vec![signer],
-                )?
-            };
+            //
+            // Is it worth it?
+            //
 
             let deposit_pool_apy = apr_to_apy(*supply_apr.get(deposit_pool).unwrap()) * 100.;
             let withdraw_pool_apy = apr_to_apy(*supply_apr.get(withdraw_pool).unwrap()) * 100.;
 
-            // Simulate the transaction's instructions and cache the resulting account changes
-            let mut simulation_account_data_cache = account_data_cache.clone();
-            simulation_account_data_cache.simulate_then_add(
-                rpc_client,
-                &instructions,
-                Some(address),
-                &address_lookup_table_accounts,
-            )?;
-
-            // Is it worth it?
-            //
             let simulation_deposit_pool_apy = apr_to_apy(
                 pool_supply_apr(
                     rpc_client,
@@ -1209,7 +1242,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let simulation_apy_improvement_bps =
                 ((simulation_deposit_pool_apy - simulation_withdraw_pool_apy) * 100.) as isize;
 
-            let signature = transaction.signatures[0];
             let msg = match cmd {
                 Command::Deposit => {
                     let minimum_apy = minimum_apy_bps as f64 / 100.;
@@ -1283,6 +1315,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("Aborting due to --dry-run flag");
                 return Ok(());
             }
+
+            let (recent_blockhash, last_valid_block_height) =
+                rpc_client.get_latest_blockhash_with_commitment(rpc_client.commitment())?;
+
+            let transaction = {
+                let mut message = message;
+                message.recent_blockhash = recent_blockhash;
+                VersionedTransaction::try_new(VersionedMessage::V0(message), &vec![signer])?
+            };
+            let signature = transaction.signatures[0];
 
             if !send_transaction_until_expired(&rpc_clients, &transaction, last_valid_block_height)
             {
