@@ -817,7 +817,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .ok()
                 .unwrap_or_else(|| supported_pools_for_token(token));
             let minimum_apy_bps = value_t!(matches, "minimum_apy", u16).unwrap_or(0);
-            let minimum_ui_amount = value_t_or_exit!(matches, "minimum_ui_amount", f64);
+            let minimum_amount = {
+                let minimum_amount =
+                    maybe_token.amount(value_t_or_exit!(matches, "minimum_ui_amount", f64));
+                if minimum_amount == 0 {
+                    1
+                } else {
+                    minimum_amount
+                }
+            };
 
             let token_balance = maybe_token.balance(rpc_client, &address)?;
             let requested_amount = match matches.value_of("ui_amount").unwrap() {
@@ -834,6 +842,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 ui_amount => token.amount(ui_amount.parse::<f64>().unwrap()),
             };
+
+            if cmd == Command::Deposit {
+                if requested_amount > token_balance {
+                    return Err(format!(
+                        "Deposit amount of {} is greater than current balance of {}",
+                        maybe_token.format_amount(requested_amount),
+                        maybe_token.format_amount(token_balance),
+                    )
+                    .into());
+                }
+                if requested_amount < minimum_amount {
+                    println!("Nothing to deposit");
+                    return Ok(());
+                }
+            }
 
             is_token_supported(&token, &pools)?;
             if cmd == Command::Rebalance && pools.len() <= 1 {
@@ -895,7 +918,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let balance = *supply_balance.get(*pool).unwrap();
 
                     if requested_amount == u64::MAX {
-                        balance > 1 // Solend/Kamino leave 1 in sometimes :-/
+                        balance > 1.max(minimum_amount) // Solend/Kamino leave 1 in sometimes :-/
                     } else {
                         balance >= requested_amount
                     }
@@ -903,22 +926,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .unwrap_or(deposit_pool);
 
             let (ops, amount) = match cmd {
-                Command::Deposit => {
-                    if requested_amount > token_balance {
-                        return Err(format!(
-                            "Deposit amount of {} is greater than current balance of {}",
-                            maybe_token.format_amount(requested_amount),
-                            maybe_token.format_amount(token_balance),
-                        )
-                        .into());
-                    }
-                    if requested_amount == 0 {
-                        println!("Nothing to deposit");
-                        return Ok(());
-                    }
-
-                    (vec![(Operation::Deposit, deposit_pool)], requested_amount)
-                }
+                Command::Deposit => (vec![(Operation::Deposit, deposit_pool)], requested_amount),
                 Command::Withdraw | Command::Rebalance => {
                     let mut requested_amount = requested_amount;
 
@@ -1197,11 +1205,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         return Ok(());
                     }
 
-                    if amount < token.amount(minimum_ui_amount) {
+                    if amount < minimum_amount {
                         println!(
                             "Will not deposit. {} is less than the minimum deposit amount of {}",
                             maybe_token.format_amount(amount),
-                            maybe_token.format_ui_amount(minimum_ui_amount)
+                            maybe_token.format_amount(minimum_amount)
                         );
                         return Ok(());
                     }
@@ -1212,11 +1220,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     )
                 }
                 Command::Withdraw => {
-                    if amount < token.amount(minimum_ui_amount) {
+                    if amount < minimum_amount {
                         println!(
                             "Will not withdraw. {} is less than the minimum withdrawal amount of {}",
                             maybe_token.format_amount(amount),
-                            maybe_token.format_ui_amount(minimum_ui_amount)
+                            maybe_token.format_amount(minimum_amount)
                         );
                         return Ok(());
                     }
@@ -1240,11 +1248,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         return Ok(());
                     }
 
-                    if amount < token.amount(minimum_ui_amount) {
+                    if amount < minimum_amount {
                         println!(
                             "Will not rebalance. {} is less than the minimum rebalance amount of {}",
                             maybe_token.format_amount(amount),
-                            maybe_token.format_ui_amount(minimum_ui_amount)
+                            maybe_token.format_amount(minimum_amount)
                         );
                         return Ok(());
                     }
