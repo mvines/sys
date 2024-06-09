@@ -742,17 +742,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             is_token_supported(&token, &pools)?;
 
             let mut total_amount = 0;
+            let mut running_weighted_sum = 0.;
             let mut non_empty_pools_count = 0;
             for pool in &pools {
                 let (amount, remaining_outflow) =
                     pool_supply_balance(rpc_client, pool, token, address, &mut account_data_cache)?;
                 let apr = pool_supply_apr(rpc_client, pool, token, &mut account_data_cache)?;
 
+                let apy_in_percent = apr_to_apy(apr) * 100.;
+                running_weighted_sum += apy_in_percent * amount as f64;
+
                 let msg = format!(
                     "{:>15}: {} supplied at {:.2}%{}",
                     pool,
                     maybe_token.format_amount(amount),
-                    apr_to_apy(apr) * 100.,
+                    apy_in_percent,
                     if remaining_outflow < amount {
                         format!(
                             ", with {} available to withdraw",
@@ -786,8 +790,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             if raw && total_only {
                 println!("{}", token.ui_amount(total_amount));
             }
-            if !raw && non_empty_pools_count > 1 {
-                println!("\nTotal supply:    {}", token.format_amount(total_amount));
+            if !raw {
+                if non_empty_pools_count > 1 {
+                    println!(
+                        "\nTotal supply:    {} at {:.2}%",
+                        token.format_amount(total_amount),
+                        running_weighted_sum / total_amount as f64
+                    );
+                }
+
+                let wallet_balance = maybe_token.balance(rpc_client, &address)?;
+                println!(
+                    "Wallet balance:  {}",
+                    maybe_token.format_amount(wallet_balance)
+                );
             }
         }
         ("deposit" | "withdraw" | "rebalance", Some(matches)) => {
