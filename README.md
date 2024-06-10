@@ -1,6 +1,6 @@
 ## Sell Your ◎
 
-This program provides tracking from acquisition through disposal of SOL from staking, voting, and validator transaction fee/rent rewards, useful
+`sys` provides tracking from acquisition through disposal of SOL from staking, voting, and validator transaction fee/rent rewards, useful
 for portfolio tracking as well as producing the necessary records for proper tax preparation.
 
 The intended audience for this program is:
@@ -10,8 +10,12 @@ The intended audience for this program is:
 This program does not attempt to be a general purpose crypto trading tracker.
 It's assumed that once you sell your SOL for USD on an exchange of your choice,
 you'd switch to other existing solutions for further trading/transactions. That
-being said, the latest iterations of `sys` include support for Tulip and Jupiter
-Aggregator for when you're not quite ready to part with your SOL yet.
+being said, it also includes support for Jupiter token swaps with a curated set
+of tokens.
+
+Additionally the `sys-lend` companion program provides a unified command-line
+interface into the top Solana lending platforms to easily earn yield for when
+you're not quite ready to part with your SOL, USDC, or other tokens yet.
 
 ## Quick Start
 1. Install Rust from https://rustup.rs/
