@@ -529,7 +529,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .value_name("AMOUNT")
                         .takes_value(true)
                         .validator(is_parsable::<f64>)
-                        .default_value("0.01")
+                        .default_value("1.0")
                         .help("Do not rebalance an AMOUNT less than this value")
                 )
                 .arg(
