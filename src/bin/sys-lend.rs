@@ -450,6 +450,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .help("The amount of tokens to withdraw; accepts keyword ALL"),
                 )
                 .arg(
+                    Arg::with_name("minimum_ui_amount")
+                        .long("minimum-amount")
+                        .value_name("AMOUNT")
+                        .takes_value(true)
+                        .validator(is_parsable::<f64>)
+                        .default_value("0.0")
+                        .help("Do not withdraw if AMOUNT is less than this value")
+                )
+                .arg(
                     Arg::with_name("token")
                         .value_name("TOKEN")
                         .takes_value(true)
@@ -853,7 +862,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let minimum_apy_bps = value_t!(matches, "minimum_apy", u16).unwrap_or(0);
             let minimum_amount = {
                 let minimum_amount =
-                    maybe_token.amount(value_t!(matches, "minimum_ui_amount", f64).unwrap_or(0.));
+                    maybe_token.amount(value_t_or_exit!(matches, "minimum_ui_amount", f64));
                 if minimum_amount == 0 {
                     1
                 } else {
@@ -880,16 +889,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     None
                 }
                 ui_amount => {
-                    let requested_amount = token.amount(ui_amount.parse::<f64>().unwrap());
-                    if requested_amount < minimum_amount {
-                        return Err(format!(
-                            "Requested amount of {} is too small. Minimum amount is {}",
-                            maybe_token.format_amount(requested_amount),
-                            maybe_token.format_amount(minimum_amount),
-                        )
-                        .into());
-                    }
-                    Some(requested_amount)
+                    Some(token.amount(ui_amount.parse::<f64>().unwrap()))
                 }
             };
 
@@ -957,38 +957,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let (ops, minimum_op_amount, maximum_op_amount) = match cmd {
                 Command::Deposit => {
+                    if address_token_balance < minimum_amount {
+                        println!(
+                            "Minimum deposit amount of {} is greater than current wallet balance of {}",
+                            maybe_token.format_amount(minimum_amount),
+                            maybe_token.format_amount(address_token_balance),
+                        );
+                        return Ok(());
+                    }
+
                     let (minimum_op_amount, maximum_op_amount) = match requested_amount {
                         None => (minimum_amount, address_token_balance),
                         Some(u64::MAX) => (address_token_balance, address_token_balance),
-                        Some(requested_amount) => (requested_amount, requested_amount),
+                        Some(requested_amount) => {
+                            if address_token_balance < requested_amount {
+                                println!(
+                                    "Requested deposit amount of {} is greater than current wallet balance of {}",
+                                    maybe_token.format_amount(requested_amount),
+                                    maybe_token.format_amount(address_token_balance),
+                                );
+                                return Ok(());
+                            }
+                            (requested_amount, requested_amount)
+                        },
                     };
-
-                    if maximum_op_amount > address_token_balance {
-                        println!(
-                            "Requested deposit amount of {} is greater than current wallet balance of {}",
-                            maybe_token.format_amount(maximum_op_amount),
-                            maybe_token.format_amount(address_token_balance),
-                        );
-                        return Ok(());
-                    }
-
-                    if minimum_op_amount > address_token_balance {
-                        println!(
-                            "Minimum deposit amount of {} is greater than current wallet balance of {}",
-                            maybe_token.format_amount(minimum_op_amount),
-                            maybe_token.format_amount(address_token_balance),
-                        );
-                        return Ok(());
-                    }
-
-                    if minimum_op_amount > maximum_op_amount {
-                        println!(
-                            "Minimum deposit amount of {} is greater than requested deposit amount of {}",
-                            maybe_token.format_amount(minimum_op_amount),
-                            maybe_token.format_amount(maximum_op_amount),
-                        );
-                        return Ok(());
-                    }
 
                     (
                         vec![(Operation::Deposit, deposit_pool)],
@@ -999,22 +991,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Command::Withdraw | Command::Rebalance => {
                     let withdraw_pool_supply_balance = *supply_balance.get(withdraw_pool).unwrap();
 
-                    let (minimum_op_amount, maximum_op_amount) = match requested_amount {
-                        None => (minimum_amount, withdraw_pool_supply_balance),
-                        Some(u64::MAX) => {
-                            (withdraw_pool_supply_balance, withdraw_pool_supply_balance)
-                        }
-                        Some(requested_amount) => (requested_amount, requested_amount),
-                    };
-
-                    if maximum_op_amount > withdraw_pool_supply_balance {
+                    if withdraw_pool_supply_balance < minimum_amount {
                         println!(
-                            "Withdraw amount of {} is greater than current {withdraw_pool} supply balance of {}",
-                            maybe_token.format_amount(maximum_op_amount),
+                            "The supply balance of {withdraw_pool}, {}, is less than minimum withdraw amount of {}",
                             maybe_token.format_amount(withdraw_pool_supply_balance),
+                            maybe_token.format_amount(minimum_amount),
                         );
                         return Ok(());
                     }
+
+                    let (minimum_op_amount, maximum_op_amount) = match requested_amount {
+                        None => {
+                            (minimum_amount, withdraw_pool_supply_balance)
+                        },
+                        Some(u64::MAX) => {
+                            (withdraw_pool_supply_balance, withdraw_pool_supply_balance)
+                        }
+                        Some(requested_amount) => {
+                            if withdraw_pool_supply_balance < requested_amount {
+                                println!(
+                                    "The supply balance of {withdraw_pool}, {}, is less than requested amount of {}",
+                                    maybe_token.format_amount(withdraw_pool_supply_balance),
+                                    maybe_token.format_amount(requested_amount),
+                                );
+                                return Ok(());
+                            }
+                            (requested_amount, requested_amount)
+                        },
+                    };
 
                     (
                         if cmd == Command::Withdraw {
