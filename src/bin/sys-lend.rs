@@ -888,9 +888,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     assert!(matches!(cmd, Command::Deposit | Command::Rebalance));
                     None
                 }
-                ui_amount => {
-                    Some(token.amount(ui_amount.parse::<f64>().unwrap()))
-                }
+                ui_amount => Some(token.amount(ui_amount.parse::<f64>().unwrap())),
             };
 
             let supply_balance = pools
@@ -979,7 +977,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 return Ok(());
                             }
                             (requested_amount, requested_amount)
-                        },
+                        }
                     };
 
                     (
@@ -1001,9 +999,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
 
                     let (minimum_op_amount, maximum_op_amount) = match requested_amount {
-                        None => {
-                            (minimum_amount, withdraw_pool_supply_balance)
-                        },
+                        None => (minimum_amount, withdraw_pool_supply_balance),
                         Some(u64::MAX) => {
                             (withdraw_pool_supply_balance, withdraw_pool_supply_balance)
                         }
@@ -1017,7 +1013,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 return Ok(());
                             }
                             (requested_amount, requested_amount)
-                        },
+                        }
                     };
 
                     (
