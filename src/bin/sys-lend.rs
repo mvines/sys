@@ -1340,10 +1340,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                         }
                         Command::Rebalance => {
-                            let msg_prefix = format!("Rebalance of {} from {withdraw_pool} ({withdraw_pool_apy:.2}% -> {simulation_withdraw_pool_apy:.2}%) \
-                              to {deposit_pool} ({deposit_pool_apy:.2}% -> {simulation_deposit_pool_apy:.2}%)",
-                            maybe_token.format_amount(amount)
-                        );
+                            let msg_prefix = format!("Rebalance of {} from \
+                                    {withdraw_pool} ({withdraw_pool_apy:.2}% -> {simulation_withdraw_pool_apy:.2}%) \
+                                    to {deposit_pool} ({deposit_pool_apy:.2}% -> {simulation_deposit_pool_apy:.2}%)",
+                                maybe_token.format_amount(amount)
+                            );
 
                             if simulation_apy_improvement_bps < minimum_apy_bps as isize {
                                 (
@@ -1355,13 +1356,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             )
                             } else if amount < minimum_amount {
                                 (
-                                format!(
-                                    "Will not rebalance. {} is less than the minimum rebalance amount of {}",
-                                    maybe_token.format_amount(amount),
-                                    maybe_token.format_amount(minimum_amount)
-                                ),
-                                false
-                            )
+                                    format!(
+                                        "Will not rebalance. {} is less than the minimum rebalance amount of {}",
+                                        maybe_token.format_amount(amount),
+                                        maybe_token.format_amount(minimum_amount)
+                                    ),
+                                    false
+                                )
                             } else {
                                 (format!("{msg_prefix} for an additional {simulation_apy_improvement_bps}bps"), true)
                             }
