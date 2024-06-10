@@ -395,7 +395,9 @@ pub async fn run<T: Signers>(
                 None,
             )?;
 
-            if !send_transaction_until_expired(rpc_clients, &transaction, last_valid_block_height) {
+            if !send_transaction_until_expired(rpc_clients, &transaction, last_valid_block_height)
+                .unwrap_or_default()
+            {
                 db.cancel_transfer(signature)?;
                 eprintln!("Merge failed");
             } else {
@@ -598,7 +600,9 @@ pub async fn run<T: Signers>(
                     rpc_clients,
                     &transaction,
                     last_valid_block_height,
-                ) {
+                )
+                .unwrap_or_default()
+                {
                     eprintln!("Delegation failed");
                     transaction_failures += 1;
                 }

@@ -657,7 +657,9 @@ async fn process_exchange_deposit<T: Signers>(
         lot_selection_method,
         lot_numbers,
     )?;
-    if !send_transaction_until_expired(rpc_clients, &transaction, last_valid_block_height) {
+    if !send_transaction_until_expired(rpc_clients, &transaction, last_valid_block_height)
+        .unwrap_or_default()
+    {
         return Err("Deposit failed".into());
     }
     Ok(())
@@ -1233,7 +1235,9 @@ async fn process_jup_swap<T: Signers>(
             lot_selection_method,
         )?;
 
-        if !send_transaction_until_expired(rpc_clients, &transaction, last_valid_block_height) {
+        if !send_transaction_until_expired(rpc_clients, &transaction, last_valid_block_height)
+            .unwrap_or_default()
+        {
             db.cancel_swap(signature)?;
             return Err("Swap failed".into());
         }
@@ -1364,7 +1368,7 @@ async fn process_tulip_deposit<T: Signers>(
             lot_selection_method,
         )?;
 
-        if !send_transaction_until_expired(rpc_client, &transaction, last_valid_block_height) {
+        if !send_transaction_until_expired(rpc_client, &transaction, last_valid_block_height).unwrap_or_default() {
             db.cancel_swap(signature).expect("cancel_swap");
             return Err("Swap failed".into());
         }
@@ -1460,7 +1464,7 @@ async fn process_tulip_withdraw<T: Signers>(
         lot_selection_method,
     )?;
 
-    if !send_transaction_until_expired(rpc_client, &transaction, last_valid_block_height) {
+    if !send_transaction_until_expired(rpc_client, &transaction, last_valid_block_height).unwrap_or_default() {
         db.cancel_swap(signature).expect("cancel_swap");
         return Err("Swap failed".into());
     }
@@ -3058,7 +3062,9 @@ async fn process_account_merge<T: Signers>(
             None,
         )?;
 
-        if !send_transaction_until_expired(rpc_clients, &transaction, last_valid_block_height) {
+        if !send_transaction_until_expired(rpc_clients, &transaction, last_valid_block_height)
+            .unwrap_or_default()
+        {
             db.cancel_transfer(signature)?;
             return Err("Merge failed".into());
         }
@@ -3404,7 +3410,9 @@ async fn process_account_sweep<T: Signers>(
     )?;
 
     if let Some(transaction) = maybe_transaction {
-        if !send_transaction_until_expired(rpc_clients, &transaction, last_valid_block_height) {
+        if !send_transaction_until_expired(rpc_clients, &transaction, last_valid_block_height)
+            .unwrap_or_default()
+        {
             db.cancel_transfer(signature)?;
             if let Some((transitory_stake_account, ..)) = via_transitory_stake.as_ref() {
                 db.remove_transitory_sweep_stake_address(transitory_stake_account.pubkey())?;
@@ -3544,7 +3552,9 @@ async fn process_account_split<T: Signers>(
         lot_numbers,
     )?;
 
-    if !send_transaction_until_expired(rpc_clients, &transaction, last_valid_block_height) {
+    if !send_transaction_until_expired(rpc_clients, &transaction, last_valid_block_height)
+        .unwrap_or_default()
+    {
         db.cancel_transfer(signature)?;
         db.remove_account(into_keypair.pubkey(), MaybeToken::SOL())?;
         return Err("Split failed".into());
@@ -3658,7 +3668,9 @@ async fn process_account_redelegate<T: Signers>(
         None,
     )?;
 
-    if !send_transaction_until_expired(rpc_clients, &transaction, last_valid_block_height) {
+    if !send_transaction_until_expired(rpc_clients, &transaction, last_valid_block_height)
+        .unwrap_or_default()
+    {
         db.cancel_transfer(signature)?;
         db.remove_account(into_keypair.pubkey(), MaybeToken::SOL())?;
         return Err("Redelegate failed".into());
@@ -3997,7 +4009,9 @@ async fn process_account_wrap<T: Signers>(
         lot_numbers,
     )?;
 
-    if !send_transaction_until_expired(rpc_clients, &transaction, last_valid_block_height) {
+    if !send_transaction_until_expired(rpc_clients, &transaction, last_valid_block_height)
+        .unwrap_or_default()
+    {
         db.cancel_transfer(signature)?;
         return Err("Wrap failed".into());
     }
@@ -4096,7 +4110,9 @@ async fn process_account_unwrap<T: Signers>(
         lot_numbers,
     )?;
 
-    if !send_transaction_until_expired(rpc_clients, &transaction, last_valid_block_height) {
+    if !send_transaction_until_expired(rpc_clients, &transaction, last_valid_block_height)
+        .unwrap_or_default()
+    {
         db.cancel_transfer(signature)?;
         return Err("Wrap failed".into());
     }
@@ -4295,7 +4311,9 @@ async fn process_account_sync_sweep(
             None,
         )?;
 
-        if !send_transaction_until_expired(rpc_clients, &transaction, last_valid_block_height) {
+        if !send_transaction_until_expired(rpc_clients, &transaction, last_valid_block_height)
+            .unwrap_or_default()
+        {
             db.cancel_transfer(signature)?;
             return Err("Merge failed".into());
         }

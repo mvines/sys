@@ -16,7 +16,7 @@ use {
         commitment_config::CommitmentConfig,
         instruction::{AccountMeta, Instruction},
         message::{self, Message, VersionedMessage},
-        native_token::sol_to_lamports,
+        native_token::{lamports_to_sol, sol_to_lamports},
         program_pack::Pack,
         pubkey,
         pubkey::Pubkey,
@@ -93,7 +93,7 @@ mod dp {
     pub fn supply_balance(
         pool: &str,
         address: &Pubkey,
-        maybe_token: Token,
+        maybe_token: MaybeToken,
         ui_amount: f64,
     ) -> metrics::Point {
         metrics::Point::new("sys_lend::supply_balance")
@@ -103,7 +103,7 @@ mod dp {
             .field("amount", ui_amount)
     }
 
-    pub fn supply_apy(pool: &str, maybe_token: Token, apy_bps: u64) -> metrics::Point {
+    pub fn supply_apy(pool: &str, maybe_token: MaybeToken, apy_bps: u64) -> metrics::Point {
         metrics::Point::new("sys_lend::supply_apy")
             .tag("pool", pool)
             .tag("token", maybe_token.name())
@@ -113,7 +113,7 @@ mod dp {
     pub fn principal_balance_change(
         pool: &str,
         address: &Pubkey,
-        maybe_token: Token,
+        maybe_token: MaybeToken,
         ui_amount: f64,
     ) -> metrics::Point {
         metrics::Point::new("sys_lend::principal_balance_change")
@@ -121,6 +121,19 @@ mod dp {
             .tag("address", metrics::dp::pubkey_to_value(address))
             .tag("token", maybe_token.name())
             .field("amount", ui_amount)
+    }
+
+    pub fn priority_fee(
+        command: &str,
+        address: &Pubkey,
+        maybe_token: MaybeToken,
+        priority_fee: f64,
+    ) -> metrics::Point {
+        metrics::Point::new("sys_lend::priority_fee")
+            .tag("command", command)
+            .tag("address", metrics::dp::pubkey_to_value(address))
+            .tag("token", maybe_token.name())
+            .field("priority_fee", priority_fee)
     }
 }
 
@@ -742,7 +755,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if !raw {
                         notifier.send(&msg).await;
                     }
-                    metrics::push(dp::supply_apy(&pool, token, apy_as_bps)).await;
+                    metrics::push(dp::supply_apy(&pool, maybe_token, apy_as_bps)).await;
                     println!("{msg}");
                 }
             }
@@ -793,7 +806,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 metrics::push(dp::supply_balance(
                     pool,
                     &address,
-                    token,
+                    maybe_token,
                     token.ui_amount(amount),
                 ))
                 .await;
@@ -1426,10 +1439,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let (recent_blockhash, last_valid_block_height) =
                 rpc_client.get_latest_blockhash_with_commitment(rpc_client.commitment())?;
 
-            let transaction = {
+            let (transaction, priority_fee) = {
                 let mut instructions = instructions;
 
-                apply_priority_fee(
+                let priority_fee = apply_priority_fee(
                     rpc_client,
                     &mut instructions,
                     required_compute_units,
@@ -1442,25 +1455,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     &address_lookup_table_accounts,
                     recent_blockhash,
                 )?;
-                VersionedTransaction::try_new(VersionedMessage::V0(message), &vec![signer])?
+                (
+                    VersionedTransaction::try_new(VersionedMessage::V0(message), &vec![signer])?,
+                    priority_fee,
+                )
             };
             let signature = transaction.signatures[0];
 
-            if !send_transaction_until_expired(&rpc_clients, &transaction, last_valid_block_height)
-            {
+            let transaction_confirmed =
+                send_transaction_until_expired(&rpc_clients, &transaction, last_valid_block_height);
+            if transaction_confirmed.is_some() {
+                metrics::push(dp::priority_fee(
+                    &format!("{cmd:?}").to_lowercase(),
+                    &address,
+                    maybe_token,
+                    lamports_to_sol(priority_fee),
+                ))
+                .await;
+            }
+            if !transaction_confirmed.unwrap_or_default() {
                 let msg = format!("Transaction failed: {signature}");
                 notifier.send(&msg).await;
                 return Err(msg.into());
-            } else {
-                println!("Transaction confirmed: {signature}");
             }
+            println!("Transaction confirmed: {signature}");
 
             match cmd {
                 Command::Deposit => {
                     metrics::push(dp::principal_balance_change(
                         deposit_pool,
                         &address,
-                        token,
+                        maybe_token,
                         token.ui_amount(amount),
                     ))
                     .await;
@@ -1469,7 +1494,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     metrics::push(dp::principal_balance_change(
                         withdraw_pool,
                         &address,
-                        token,
+                        maybe_token,
                         -token.ui_amount(amount),
                     ))
                     .await;
@@ -1478,14 +1503,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     metrics::push(dp::principal_balance_change(
                         withdraw_pool,
                         &address,
-                        token,
+                        maybe_token,
                         -token.ui_amount(amount),
                     ))
                     .await;
                     metrics::push(dp::principal_balance_change(
                         deposit_pool,
                         &address,
-                        token,
+                        maybe_token,
                         token.ui_amount(amount),
                     ))
                     .await;

@@ -103,7 +103,7 @@ pub fn apply_priority_fee(
     instructions: &mut Vec<Instruction>,
     compute_unit_limit: u32,
     priority_fee: PriorityFee,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<u64, Box<dyn std::error::Error>> {
     let compute_budget = match priority_fee {
         PriorityFee::Exact { lamports } => ComputeBudget::new(compute_unit_limit, lamports),
         PriorityFee::Auto {
@@ -187,5 +187,5 @@ pub fn apply_priority_fee(
         ),
     );
 
-    Ok(())
+    Ok(compute_budget.priority_fee_lamports())
 }

@@ -82,9 +82,9 @@ pub fn send_transaction_until_expired(
     rpc_clients: &RpcClients,
     transaction: &impl SerializableTransaction,
     last_valid_block_height: u64,
-) -> bool {
+) -> Option<bool> {
     send_transaction_until_expired_with_slot(rpc_clients, transaction, last_valid_block_height)
-        .is_some()
+        .map(|(_context_slot, success)| success)
 }
 
 // Same as `send_transaction_until_expired` but on success returns a `Slot` that the transaction
@@ -93,7 +93,7 @@ fn send_transaction_until_expired_with_slot(
     rpc_clients: &RpcClients,
     transaction: &impl SerializableTransaction,
     last_valid_block_height: u64,
-) -> Option<Slot> {
+) -> Option<(Slot, bool)> {
     let mut last_send_attempt = None;
 
     let config = RpcSendTransactionConfig {
@@ -130,13 +130,16 @@ fn send_transaction_until_expired_with_slot(
             Ok(rpc_response::Response { context, value }) => {
                 let confirmation_context_slot = context.slot;
                 if let Some(ref transaction_status) = value[0] {
-                    match transaction_status.err {
-                        None => return Some(confirmation_context_slot),
-                        Some(ref err) => {
-                            println!("Transaction failed: {err}");
-                            return None;
-                        }
-                    }
+                    return Some((
+                        confirmation_context_slot,
+                        match transaction_status.err {
+                            None => true,
+                            Some(ref err) => {
+                                println!("Transaction failed: {err}");
+                                false
+                            }
+                        },
+                    ));
                 } else {
                     match rpc_clients.default().get_epoch_info() {
                         Ok(epoch_info) => {
