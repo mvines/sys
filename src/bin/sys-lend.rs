@@ -1433,10 +1433,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let amount = best_op_amount.unwrap();
 
             println!("{msg}");
-            if dry_run {
-                println!("Aborting due to --dry-run flag");
-                return Ok(());
-            }
             let (recent_blockhash, last_valid_block_height) =
                 rpc_client.get_latest_blockhash_with_commitment(rpc_client.commitment())?;
 
@@ -1461,6 +1457,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     priority_fee,
                 )
             };
+
+            if dry_run {
+                println!("Aborting due to --dry-run flag");
+                return Ok(());
+            }
+
             let signature = transaction.signatures[0];
 
             let transaction_confirmed =
