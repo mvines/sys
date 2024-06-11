@@ -427,6 +427,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .help("Do not deposit if AMOUNT is less than this value")
                 )
                 .arg(
+                    Arg::with_name("retain_ui_amount")
+                        .long("retain")
+                        .value_name("AMOUNT")
+                        .takes_value(true)
+                        .validator(is_amount)
+                        .help("Amount of tokens to always leave in Wallet regardless of requested deposit AMOUNT \
+                              [default: 0.01 for SOL, 0.0 for all other tokens]"),
+                )
+                .arg(
                     Arg::with_name("dry_run")
                         .long("dry-run")
                         .takes_value(false)
@@ -882,12 +891,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     minimum_amount
                 }
             };
+            let retain_amount =
+                maybe_token.amount(value_t!(matches, "retain_ui_amount", f64).unwrap_or(0.));
 
             let address_token_balance = maybe_token.balance(rpc_client, &address)?.saturating_sub(
                 if maybe_token.is_sol() {
-                    sol_to_lamports(0.1) // Never drain all the SOL from `address`
+                    // Never drain all the SOL from `address`.
+                    // Warning: if this is ever changed from 0.01, update the --help for the
+                    // `retain_ui_amount` arg
+                    retain_amount.max(sol_to_lamports(0.01))
                 } else {
-                    0
+                    retain_amount
                 },
             );
 
