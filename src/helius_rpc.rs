@@ -1,7 +1,4 @@
-use {
-    solana_client::rpc_client::RpcClient,
-    solana_sdk::{instruction::Instruction},
-};
+use {solana_client::rpc_client::RpcClient, solana_sdk::instruction::Instruction};
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, Eq, Hash, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -53,7 +50,6 @@ pub fn get_priority_fee_estimate_for_instructions(
     priority_level: HeliusPriorityLevel,
     instructions: &[Instruction],
 ) -> Result<u64, String> {
-
     let mut account_keys: Vec<_> = instructions
         .iter()
         .flat_map(|instruction| {
@@ -85,7 +81,7 @@ pub fn get_priority_fee_estimate_for_instructions(
             request,
         )
         .map(|response| {
-             response
+            response
                 .priority_fee_estimate
                 .expect("priority_fee_estimate") as u64
         })

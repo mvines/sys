@@ -614,7 +614,7 @@ async fn process_exchange_deposit<T: Signers>(
             (instructions, amount, compute_units)
         }
     };
-    apply_priority_fee(rpc_client, &mut instructions, compute_units, priority_fee)?;
+    apply_priority_fee(rpc_clients, &mut instructions, compute_units, priority_fee)?;
 
     if amount == 0 {
         return Err("Nothing to deposit".into());
@@ -3027,7 +3027,7 @@ async fn process_account_merge<T: Signers>(
             )
             .into());
         };
-        apply_priority_fee(rpc_client, &mut instructions, 10_000, priority_fee)?;
+        apply_priority_fee(rpc_clients, &mut instructions, 10_000, priority_fee)?;
 
         println!("Merging {from_address} into {into_address}");
         if from_address != authority_address {
@@ -3363,7 +3363,7 @@ async fn process_account_sweep<T: Signers>(
 
     let (signature, maybe_transaction) = match existing_signature {
         None => {
-            apply_priority_fee(rpc_client, &mut instructions, 7_000, priority_fee)?;
+            apply_priority_fee(rpc_clients, &mut instructions, 7_000, priority_fee)?;
 
             let mut message = Message::new(&instructions, Some(&from_authority_address));
             message.recent_blockhash = recent_blockhash;
@@ -3494,7 +3494,7 @@ async fn process_account_split<T: Signers>(
         .get_minimum_balance_for_rent_exemption(solana_sdk::stake::state::StakeStateV2::size_of())?;
 
     let mut instructions = vec![];
-    apply_priority_fee(rpc_client, &mut instructions, 10_000, priority_fee)?;
+    apply_priority_fee(rpc_clients, &mut instructions, 10_000, priority_fee)?;
 
     instructions.push(system_instruction::transfer(
         &authority_address,
@@ -3980,7 +3980,7 @@ async fn process_account_wrap<T: Signers>(
         spl_token::instruction::sync_native(&spl_token::id(), &wsol_address).unwrap(),
     ]);
 
-    apply_priority_fee(rpc_client, &mut instructions, 30_000, priority_fee)?;
+    apply_priority_fee(rpc_clients, &mut instructions, 30_000, priority_fee)?;
     let message = Message::new(&instructions, Some(&authority_address));
 
     let mut transaction = Transaction::new_unsigned(message);
@@ -4079,7 +4079,7 @@ async fn process_account_unwrap<T: Signers>(
         )
         .unwrap(),
     ];
-    apply_priority_fee(rpc_client, &mut instructions, 30_000, priority_fee)?;
+    apply_priority_fee(rpc_clients, &mut instructions, 30_000, priority_fee)?;
 
     let message = Message::new(&instructions, Some(&authority_address));
 
@@ -4407,6 +4407,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .validator(is_comma_separated_url_or_moniker_list)
                 .help("Optional additional JSON RPC URLs, separated by commas, to \
                        submit transactions with in addition to --url"),
+        )
+        .arg(
+            Arg::with_name("helius_json_rpc_url")
+                .long("helius-url")
+                .value_name("URL")
+                .takes_value(true)
+                .global(true)
+                .validator(is_url)
+                .help("Helium JSON RPC URL to use only for the proprietary getPriorityFeeEstimate RPC method"),
         )
         .arg(
             Arg::with_name("verbose")
@@ -5974,6 +5983,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let rpc_clients = RpcClients::new(
         value_t_or_exit!(app_matches, "json_rpc_url", String),
         value_t!(app_matches, "send_json_rpc_urls", String).ok(),
+        value_t!(app_matches, "helius_json_rpc_url", String).ok(),
     );
 
     let rpc_client = rpc_clients.default();

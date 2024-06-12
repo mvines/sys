@@ -350,6 +350,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         )
         .arg(
+            Arg::with_name("helius_json_rpc_url")
+                .long("helius-url")
+                .value_name("URL")
+                .takes_value(true)
+                .global(true)
+                .validator(is_url)
+                .help("Helium JSON RPC URL to use only for the proprietary getPriorityFeeEstimate RPC method"),
+        )
+        .arg(
             Arg::with_name("priority_fee_exact")
                 .long("priority-fee-exact")
                 .value_name("SOL")
@@ -650,6 +659,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let rpc_clients = RpcClients::new(
         value_t_or_exit!(app_matches, "json_rpc_url", String),
         value_t!(app_matches, "send_json_rpc_urls", String).ok(),
+        value_t!(app_matches, "helius_json_rpc_url", String).ok(),
     );
     let rpc_client = rpc_clients.default();
     let mut account_data_cache = AccountDataCache::new(rpc_client);
@@ -1454,7 +1464,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let mut instructions = instructions;
 
                 let priority_fee = apply_priority_fee(
-                    rpc_client,
+                    &rpc_clients,
                     &mut instructions,
                     required_compute_units,
                     priority_fee,

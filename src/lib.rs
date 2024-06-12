@@ -48,10 +48,15 @@ where
 
 pub struct RpcClients {
     clients: Vec<(String, RpcClient)>,
+    helius: Option<RpcClient>,
 }
 
 impl RpcClients {
-    pub fn new(json_rpc_url: String, send_json_rpc_urls: Option<String>) -> Self {
+    pub fn new(
+        json_rpc_url: String,
+        send_json_rpc_urls: Option<String>,
+        helius: Option<String>,
+    ) -> Self {
         let mut json_rpc_urls = vec![json_rpc_url];
         if let Some(send_json_rpc_urls) = send_json_rpc_urls {
             for send_json_rpc_url in send_json_rpc_urls.split(',') {
@@ -70,11 +75,20 @@ impl RpcClients {
                     )
                 })
                 .collect(),
+            helius: helius.map(|helius_json_rpc_url| {
+                RpcClient::new_with_commitment(helius_json_rpc_url, CommitmentConfig::confirmed())
+            }),
         }
     }
 
     pub fn default(&self) -> &RpcClient {
         &self.clients[0].1
+    }
+
+    pub fn helius_or_default(&self) -> &RpcClient {
+        self.helius
+            .as_ref()
+            .map_or_else(|| self.default(), |helius| helius)
     }
 }
 
