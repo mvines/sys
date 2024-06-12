@@ -987,8 +987,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 })
                 .unwrap_or(deposit_pool);
 
+           // let deposit_pool = &"kamino-main".to_string();
+           // let withdraw_pool = &"mfi".to_string();
+
             let deposit_pool_apy = apr_to_apy(*supply_apr.get(deposit_pool).unwrap()) * 100.;
             let withdraw_pool_apy = apr_to_apy(*supply_apr.get(withdraw_pool).unwrap()) * 100.;
+
+            // Weighted supply balance APY across the deposit and withdraw pools
+            let weighted_deposit_withdraw_pool_apy = {
+                let deposit_pool_balance = *supply_balance.get(deposit_pool).unwrap() as f64;
+                let withdraw_pool_balance = *supply_balance.get(withdraw_pool).unwrap() as f64;
+
+                (deposit_pool_balance * deposit_pool_apy
+                    + withdraw_pool_balance * withdraw_pool_apy)
+                    / (deposit_pool_balance + withdraw_pool_balance)
+            };
 
             let (ops, minimum_op_amount, maximum_op_amount) = match cmd {
                 Command::Deposit => {
@@ -1271,11 +1284,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let mut best_op_amount = None;
             let mut best_op_data = None;
+            let mut best_op_rebalance_apy = minimum_apy_bps as isize;
             loop {
                 assert!(op_amount >= minimum_op_amount);
                 assert!(op_amount <= maximum_op_amount);
 
-                let (msg, maybe_op_data) = {
+                let (msg, maybe_op_data) = if op_amount < minimum_amount {
+                    (
+                        format!(
+                            "Cannot {cmd:?}. {} is less than the minimum deposit amount of {}",
+                            maybe_token.format_amount(op_amount),
+                            maybe_token.format_amount(minimum_amount)
+                        ),
+                        None,
+                    )
+                } else {
                     let amount = op_amount;
 
                     let (
@@ -1297,98 +1320,88 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     // Is it worth it?
                     //
 
+                    // Deposit pool APY after the operation
                     let simulation_deposit_pool_apy = apr_to_apy(
                         pool_supply_apr(deposit_pool, token, &mut simulation_account_data_cache)
                             .unwrap_or(0.),
                     ) * 100.;
+
+                    // Withdraw pool APY after the operation
                     let simulation_withdraw_pool_apy = apr_to_apy(
                         pool_supply_apr(withdraw_pool, token, &mut simulation_account_data_cache)
                             .unwrap_or(0.),
                     ) * 100.;
 
-                    let simulation_apy_improvement_bps = ((simulation_deposit_pool_apy
-                        - simulation_withdraw_pool_apy)
-                        * 100.) as isize;
+                    // Weighted supply balance APY across the deposit and withdraw pools after the operation
+                    let simulation_weighted_deposit_withdraw_pool_apy = {
+                        let simulation_deposit_pool_balance = supply_balance
+                            .get(deposit_pool)
+                            .unwrap()
+                            .saturating_add(amount)
+                            as f64;
+                        let simulation_withdraw_pool_balance = supply_balance
+                            .get(withdraw_pool)
+                            .unwrap()
+                            .saturating_sub(amount)
+                            as f64;
+
+                        (simulation_deposit_pool_balance * simulation_deposit_pool_apy
+                            + simulation_withdraw_pool_balance * simulation_withdraw_pool_apy)
+                            / (simulation_deposit_pool_balance + simulation_withdraw_pool_balance)
+                    };
 
                     let (msg, ok) = match cmd {
                         Command::Deposit => {
                             let minimum_apy = minimum_apy_bps as f64 / 100.;
                             if simulation_deposit_pool_apy < minimum_apy {
                                 (
-                                format!(
-                                    "Will not deposit. {deposit_pool} APY after deposit, {simulation_deposit_pool_apy:.2}%, \
-                                     is less than the minimum APY of {minimum_apy:.2}%"
-                                ),
-                                false
-                            )
-                            } else if amount < minimum_amount {
-                                (
-                                format!(
-                                    "Will not deposit. {} is less than the minimum deposit amount of {}",
-                                    maybe_token.format_amount(amount),
-                                    maybe_token.format_amount(minimum_amount)
-                                ),
-                                false
-                            )
-                            } else {
-                                (
-                                format!(
-                                    "Deposit {} from {address} into \
-                                     {deposit_pool} ({deposit_pool_apy:.2}% -> {simulation_deposit_pool_apy:.2}%)",
-                                    maybe_token.format_amount(amount)
-                                ),
-                                true
-                            )
-                            }
-                        }
-                        Command::Withdraw => {
-                            if amount < minimum_amount {
-                                (
-                                format!(
-                                    "Will not withdraw. {} is less than the minimum withdrawal amount of {}",
-                                    maybe_token.format_amount(amount),
-                                    maybe_token.format_amount(minimum_amount)
-                                ),
-                                false
-                            )
+                                    format!("{deposit_pool} APY after deposit, {simulation_deposit_pool_apy:.2}%, is too low (minimum: {minimum_apy_bps}bps)"),
+                                    false
+                                )
                             } else {
                                 (
                                     format!(
-                                        "Withdraw {} from \
-                                    {withdraw_pool} ({withdraw_pool_apy:.2}% -> \
-                                     {simulation_withdraw_pool_apy:.2}%) into {address}",
+                                        "Deposit {} from {address} into {deposit_pool} ({deposit_pool_apy:.2}% -> {simulation_deposit_pool_apy:.2}%)",
                                         maybe_token.format_amount(amount)
                                     ),
-                                    true,
+                                    true
                                 )
                             }
                         }
+                        Command::Withdraw => (
+                            format!(
+                                "Withdraw {} from \
+                                {withdraw_pool} ({withdraw_pool_apy:.2}% -> \
+                                 {simulation_withdraw_pool_apy:.2}%) into {address}",
+                                maybe_token.format_amount(amount)
+                            ),
+                            true,
+                        ),
                         Command::Rebalance => {
-                            let msg_prefix = format!("Rebalance of {} from \
+                            let weighted_apy_change = format!("{weighted_deposit_withdraw_pool_apy:.2}% -> {simulation_weighted_deposit_withdraw_pool_apy:.2}%");
+                            let msg_prefix = format!("Rebalance of {} ({weighted_apy_change}) from \
                                     {withdraw_pool} ({withdraw_pool_apy:.2}% -> {simulation_withdraw_pool_apy:.2}%) \
                                     to {deposit_pool} ({deposit_pool_apy:.2}% -> {simulation_deposit_pool_apy:.2}%)",
                                 maybe_token.format_amount(amount)
                             );
 
-                            if simulation_apy_improvement_bps < minimum_apy_bps as isize {
-                                (
-                                format!(
-                                    "{msg_prefix} will improve APY by {simulation_apy_improvement_bps}bps \
-                                         (minimum required improvement: {minimum_apy_bps}bps)"
-                                ),
-                                false
-                            )
-                            } else if amount < minimum_amount {
+                            let simulation_weighted_apy_improvement_bps =
+                                ((simulation_weighted_deposit_withdraw_pool_apy
+                                    - weighted_deposit_withdraw_pool_apy)
+                                    * 100.) as isize;
+
+                            if simulation_weighted_apy_improvement_bps < best_op_rebalance_apy {
                                 (
                                     format!(
-                                        "Will not rebalance. {} is less than the minimum rebalance amount of {}",
-                                        maybe_token.format_amount(amount),
-                                        maybe_token.format_amount(minimum_amount)
+                                        "{msg_prefix} will only improve by {simulation_weighted_apy_improvement_bps}bps \
+                                             (minimum: {minimum_apy_bps}bps)"
                                     ),
                                     false
                                 )
                             } else {
-                                (format!("{msg_prefix} for an additional {simulation_apy_improvement_bps}bps"), true)
+                                best_op_rebalance_apy = simulation_weighted_apy_improvement_bps;
+
+                                (format!("{msg_prefix} for {simulation_weighted_apy_improvement_bps}bps"), true)
                             }
                         }
                     };
@@ -1409,7 +1422,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 if report_probes {
                     println!(
-                        "Probe {} [{msg}]",
+                        "{} - {msg}",
                         if maybe_op_data.is_some() {
                             "PASS"
                         } else {
