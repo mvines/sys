@@ -20,7 +20,7 @@ use {
         program_pack::Pack,
         pubkey,
         pubkey::Pubkey,
-        signature::{Keypair, Signer},
+        signature::{Keypair, Signature, Signer},
         system_instruction, system_program, sysvar,
         transaction::{Transaction, VersionedTransaction},
     },
@@ -298,21 +298,319 @@ impl<'a> AccountDataCache<'a> {
     }
 }
 
-fn is_amount_or_all_or_auto<T>(amount: T) -> Result<(), String>
-where
-    T: AsRef<str> + std::fmt::Display,
-{
-    if amount.as_ref().parse::<u64>().is_ok()
-        || amount.as_ref().parse::<f64>().is_ok()
-        || amount.as_ref() == "ALL"
-        || amount.as_ref() == "AUTO"
-    {
-        Ok(())
+fn pool_supply_apr(
+    pool: &str,
+    token: Token,
+    account_data_cache: &mut AccountDataCache,
+) -> Result<f64, Box<dyn std::error::Error>> {
+    Ok(if pool.starts_with("kamino-") {
+        kamino_apr(pool, token, account_data_cache)?
+    } else if pool.starts_with("solend-") {
+        solend_apr(pool, token, account_data_cache)?
+    } else if pool == "mfi" {
+        mfi_apr(token, account_data_cache)?
     } else {
-        Err(format!(
-            "Unable to parse input amount as integer or float, provided: {amount}"
-        ))
+        unreachable!()
+    })
+}
+
+fn pools_supply_apr(
+    pools: &[String],
+    token: Token,
+    account_data_cache: &mut AccountDataCache,
+) -> Result<BTreeMap<String, f64>, Box<dyn std::error::Error>> {
+    let mut supply_apr = BTreeMap::new();
+    for pool in pools {
+        supply_apr.insert(
+            pool.to_string(),
+            pool_supply_apr(pool, token, account_data_cache)?,
+        );
     }
+    Ok(supply_apr)
+}
+
+fn pool_supply_balance(
+    pool: &str,
+    token: Token,
+    address: Pubkey,
+    account_data_cache: &mut AccountDataCache,
+) -> Result<(/*balance: */ u64, /* available_balance: */ u64), Box<dyn std::error::Error>> {
+    Ok(if pool.starts_with("kamino-") {
+        kamino_deposited_amount(pool, address, token, account_data_cache)?
+    } else if pool.starts_with("solend-") {
+        solend_deposited_amount(pool, address, token, account_data_cache)?
+    } else if pool == "mfi" {
+        mfi_deposited_amount(address, token, account_data_cache)?
+    } else {
+        unreachable!()
+    })
+}
+
+type PoolSupplyBalanceMap = BTreeMap<
+    String,
+    (
+        /* apr: */ f64,
+        /* balance: */ u64,
+        /* available_balance: */ u64,
+    ),
+>;
+
+fn pools_supply_balance(
+    pools: &[String],
+    token: Token,
+    address: Pubkey,
+    account_data_cache: &mut AccountDataCache,
+) -> Result<PoolSupplyBalanceMap, Box<dyn std::error::Error>> {
+    let mut supply_balance = BTreeMap::new();
+    for pool in pools {
+        let apr = pool_supply_apr(pool, token, account_data_cache)?;
+        let (balance, available_balance) =
+            pool_supply_balance(pool, token, address, account_data_cache)?;
+        supply_balance.insert(pool.to_string(), (apr, balance, available_balance));
+    }
+    Ok(supply_balance)
+}
+
+fn pools_supply_balance_apr(
+    pools_supply_balance: &PoolSupplyBalanceMap,
+) -> (/* total_apr: */ f64, /* total_balance: */ u64) {
+    let mut total_balance = 0;
+    let mut weighted_sum = 0.;
+
+    for (apr, balance, _available_balance) in pools_supply_balance.values() {
+        weighted_sum += apr * *balance as f64;
+        total_balance += balance;
+    }
+
+    let total_apr = if total_balance == 0 {
+        0.
+    } else {
+        weighted_sum / total_balance as f64
+    };
+    (total_apr, total_balance)
+}
+
+const TOKEN_ACCOUNT_REQUIRED_LAMPORTS: u64 = 2_039_280;
+
+struct InstructionsForOps {
+    instructions: Vec<Instruction>,
+    required_compute_units: u32,
+    address_lookup_table_accounts: Vec<AddressLookupTableAccount>,
+    simulation_total_apy: f64,
+}
+
+async fn build_instructions_for_ops<'a>(
+    account_data_cache: &mut AccountDataCache<'a>,
+    pools: &[String],
+    ops: &[(Operation, &String)],
+    mut amount: u64,
+    address: Pubkey,
+    token: Token,
+    wrap_unwrap_sol: bool,
+) -> Result<
+    InstructionsForOps,
+    /*
+    (
+        /*instructions: */ Vec<Instruction>,
+        /*required_compute_units: */ u32,
+        /* address_lookup_table_accounts: */ Vec<AddressLookupTableAccount>,
+        /* simulation_account_data_cache: */ AccountDataCache<'a>,
+    ),
+    */
+    Box<dyn std::error::Error>,
+> {
+    let mut instructions = vec![];
+    let mut address_lookup_tables = vec![];
+    let mut required_compute_units = 0;
+
+    for (op, pool) in ops {
+        let result = if pool.starts_with("kamino-") {
+            kamino_deposit_or_withdraw(*op, pool, address, token, amount, account_data_cache)?
+        } else if pool.starts_with("solend-") {
+            solend_deposit_or_withdraw(*op, pool, address, token, amount, account_data_cache)?
+        } else if *pool == "mfi" {
+            mfi_deposit_or_withdraw(*op, address, token, amount, false, account_data_cache)?
+        } else {
+            unreachable!();
+        };
+
+        match op {
+            Operation::Deposit => {
+                if wrap_unwrap_sol {
+                    // Wrap SOL into wSOL
+                    instructions.extend(vec![
+                                    spl_associated_token_account::instruction::create_associated_token_account_idempotent(
+                                        &address,
+                                        &address,
+                                        &token.mint(),
+                                        &spl_token::id(),
+                                    ),
+                                    system_instruction::transfer(&address, &token.ata(&address), amount),
+                                    spl_token::instruction::sync_native(&spl_token::id(), &token.ata(&address)).unwrap(),
+                                ]);
+                    required_compute_units += 20_000;
+                }
+            }
+            Operation::Withdraw => {
+                // Ensure the destination token account exists
+                instructions.push(
+                                    spl_associated_token_account::instruction::create_associated_token_account_idempotent(
+                                        &address,
+                                        &address,
+                                        &token.mint(),
+                                        &spl_token::id(),
+                                    ),
+                                );
+                required_compute_units += 25_000;
+            }
+        }
+
+        instructions.extend(result.instructions);
+        if let Some(address_lookup_table) = result.address_lookup_table {
+            address_lookup_tables.push(address_lookup_table);
+        }
+        required_compute_units += result.required_compute_units;
+        amount = result.amount;
+
+        if wrap_unwrap_sol && *op == Operation::Withdraw {
+            // Unwrap wSOL into SOL
+
+            let seed = &Keypair::new().pubkey().to_string()[..31];
+            let ephemeral_token_account =
+                Pubkey::create_with_seed(&address, seed, &spl_token::id()).unwrap();
+
+            instructions.extend(vec![
+                system_instruction::create_account_with_seed(
+                    &address,
+                    &ephemeral_token_account,
+                    &address,
+                    seed,
+                    TOKEN_ACCOUNT_REQUIRED_LAMPORTS,
+                    spl_token::state::Account::LEN as u64,
+                    &spl_token::id(),
+                ),
+                spl_token::instruction::initialize_account(
+                    &spl_token::id(),
+                    &ephemeral_token_account,
+                    &token.mint(),
+                    &address,
+                )
+                .unwrap(),
+                spl_token::instruction::transfer_checked(
+                    &spl_token::id(),
+                    &token.ata(&address),
+                    &token.mint(),
+                    &ephemeral_token_account,
+                    &address,
+                    &[],
+                    amount,
+                    token.decimals(),
+                )
+                .unwrap(),
+                spl_token::instruction::close_account(
+                    &spl_token::id(),
+                    &ephemeral_token_account,
+                    &address,
+                    &address,
+                    &[],
+                )
+                .unwrap(),
+            ]);
+
+            required_compute_units += 30_000;
+        }
+    }
+
+    let address_lookup_table_accounts = address_lookup_tables
+        .into_iter()
+        .map(|address_lookup_table_address| {
+            account_data_cache
+                .get(address_lookup_table_address)
+                .and_then(|(address_lookup_table_data, _context_slot)| {
+                    AddressLookupTable::deserialize(address_lookup_table_data)
+                        .map_err(|err| err.into())
+                })
+                .map(|address_lookup_table| AddressLookupTableAccount {
+                    key: address_lookup_table_address,
+                    addresses: address_lookup_table.addresses.to_vec(),
+                })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    // Simulate the transaction's instructions and cache the resulting account changes
+    let mut simulation_account_data_cache = account_data_cache.clone();
+    simulation_account_data_cache.simulate_then_add(
+        &instructions,
+        Some(address),
+        &address_lookup_table_accounts,
+    )?;
+
+    let simulation_supply_balance =
+        pools_supply_balance(pools, token, address, &mut simulation_account_data_cache)?;
+
+    let simulation_total_apy =
+        apr_to_apy(pools_supply_balance_apr(&simulation_supply_balance).0) * 100.;
+
+    Ok(InstructionsForOps {
+        instructions,
+        required_compute_units,
+        address_lookup_table_accounts,
+        simulation_total_apy,
+    })
+}
+
+async fn send_instructions_for_ops<T: solana_sdk::signers::Signers + ?Sized>(
+    rpc_clients: &RpcClients,
+    address: Pubkey,
+    instructions_for_ops: InstructionsForOps,
+    priority_fee: PriorityFee,
+    dry_run: bool,
+    signers: &T,
+) -> Result<
+    (
+        Signature,
+        /*priority_fee_lamports: */ u64,
+        /*transaction_confirmed:*/ Option<bool>,
+    ),
+    Box<dyn std::error::Error>,
+> {
+    let rpc_client = rpc_clients.default();
+
+    let (recent_blockhash, last_valid_block_height) =
+        rpc_client.get_latest_blockhash_with_commitment(rpc_client.commitment())?;
+
+    let (transaction, priority_fee) = {
+        let mut instructions = instructions_for_ops.instructions;
+
+        let priority_fee = apply_priority_fee(
+            rpc_clients,
+            &mut instructions,
+            instructions_for_ops.required_compute_units,
+            priority_fee,
+        )?;
+
+        let message = message::v0::Message::try_compile(
+            &address,
+            &instructions,
+            &instructions_for_ops.address_lookup_table_accounts,
+            recent_blockhash,
+        )?;
+        (
+            VersionedTransaction::try_new(VersionedMessage::V0(message), signers)?,
+            priority_fee,
+        )
+    };
+
+    let signature = transaction.signatures[0];
+
+    let transaction_confirmed = if dry_run {
+        println!("Dry run. Will not send transaction");
+        None
+    } else {
+        send_transaction_until_expired(rpc_clients, &transaction, last_valid_block_height)
+    };
+
+    Ok((signature, priority_fee, transaction_confirmed))
 }
 
 #[tokio::main]
@@ -389,7 +687,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .multiple(true)
                         .possible_values(&pools)
                         .help("Lending pool to deposit into. \
-                              If multiple pools are provided, the pool with the highest APY is selected \
+                              If multiple pools are provided, the each pool is probed and the one with the highest APY is selected \
                               [default: all support pools for the specified token]")
                 )
                 .arg(
@@ -404,10 +702,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     Arg::with_name("ui_amount")
                         .value_name("AMOUNT")
                         .takes_value(true)
-                        .validator(is_amount_or_all_or_auto)
+                        .validator(is_amount_or_all)
                         .required(true)
-                        .default_value("AUTO")
-                        .help("The amount of tokens to deposit; accepts keyword ALL and AUTO"),
+                        .default_value("ALL")
+                        .help("The amount of tokens to deposit; accepts keyword ALL"),
                 )
                 .arg(
                     Arg::with_name("token")
@@ -424,7 +722,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .value_name("BPS")
                         .takes_value(true)
                         .validator(is_parsable::<u16>)
-                        .help("Do not deposit if the current pool APY is less than this amount of BPS")
+                        .help("Do not deposit if the resulting APY is less than this amount of BPS")
                 )
                 .arg(
                     Arg::with_name("minimum_ui_amount")
@@ -531,10 +829,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     Arg::with_name("ui_amount")
                         .value_name("AMOUNT")
                         .takes_value(true)
-                        .validator(is_amount_or_all_or_auto)
+                        .validator(is_amount_or_all)
                         .required(true)
-                        .default_value("AUTO")
-                        .help("The amount of tokens to rebalance; accepts keyword ALL and AUTO"),
+                        .help("The amount of tokens to rebalance; accepts keyword ALL"),
                 )
                 .arg(
                     Arg::with_name("token")
@@ -551,7 +848,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .value_name("BPS")
                         .takes_value(true)
                         .validator(is_parsable::<u16>)
-                        .default_value("250")
+                        .default_value("200")
                         .help("Skip rebalance if the APY improvement would be less than this amount of BPS")
                 )
                 .arg(
@@ -562,6 +859,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .validator(is_parsable::<f64>)
                         .default_value("1.0")
                         .help("Do not rebalance an AMOUNT less than this value")
+                )
+                .arg(
+                    Arg::with_name("rebalance_amount_step_count")
+                        .long("amount-step-count")
+                        .value_name("NUMBER")
+                        .takes_value(true)
+                        .validator(is_parsable::<u64>)
+                        .default_value("1")
+                        .help("Number of incremental amount steps to try")
                 )
                 .arg(
                     Arg::with_name("dry_run")
@@ -635,12 +941,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .help("Token"),
                 )
                 .arg(
-                    Arg::with_name("diff")
-                        .long("diff")
-                        .takes_value(false)
-                        .help("Display the APY difference between the highest and lowest pool"),
-                )
-                .arg(
                     Arg::with_name("raw")
                         .long("raw")
                         .takes_value(false)
@@ -678,44 +978,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut wallet_manager = None;
     let notifier = Notifier::default();
 
-    fn pool_supply_apr(
-        pool: &str,
-        token: Token,
-        account_data_cache: &mut AccountDataCache,
-    ) -> Result<f64, Box<dyn std::error::Error>> {
-        Ok(if pool.starts_with("kamino-") {
-            kamino_apr(pool, token, account_data_cache)?
-        } else if pool.starts_with("solend-") {
-            solend_apr(pool, token, account_data_cache)?
-        } else if pool == "mfi" {
-            mfi_apr(token, account_data_cache)?
-        } else {
-            unreachable!()
-        })
-    }
-
-    fn pool_supply_balance(
-        pool: &str,
-        token: Token,
-        address: Pubkey,
-        account_data_cache: &mut AccountDataCache,
-    ) -> Result<(u64, u64), Box<dyn std::error::Error>> {
-        Ok(if pool.starts_with("kamino-") {
-            kamino_deposited_amount(pool, address, token, account_data_cache)?
-        } else if pool.starts_with("solend-") {
-            solend_deposited_amount(pool, address, token, account_data_cache)?
-        } else if pool == "mfi" {
-            mfi_balance(address, token, account_data_cache)?
-        } else {
-            unreachable!()
-        })
-    }
-
     match app_matches.subcommand() {
         ("supply-apy", Some(matches)) => {
             let maybe_token = MaybeToken::from(value_t!(matches, "token", Token).ok());
             let token = maybe_token.token().unwrap_or(Token::wSOL);
-            let diff = matches.is_present("diff");
             let raw = matches.is_present("raw");
             let bps = matches.is_present("bps");
             let pools = values_t!(matches, "pool", String)
@@ -724,59 +990,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             is_token_supported(&token, &pools)?;
 
-            let mut pool_apy = BTreeMap::new();
-            for pool in pools {
-                let apy =
-                    apr_to_apy(pool_supply_apr(&pool, token, &mut account_data_cache)?) * 100.;
-                let apy_as_bps = (apy * 100.) as u64;
-                pool_apy.insert(pool, apy_as_bps);
-            }
+            let supply_apr = pools_supply_apr(&pools, token, &mut account_data_cache)?;
 
-            if diff {
-                let min_pool = pool_apy.iter().min().unwrap();
-                let max_pool = pool_apy.iter().max().unwrap();
-                let apy_as_bps_diff = max_pool.1 - min_pool.1;
+            for (pool, apr) in supply_apr {
+                let apy = apr_to_apy(apr) * 100.;
+                let apy_as_bps = (apy * 100.) as u64;
 
                 let value = if bps {
-                    format!("{}", apy_as_bps_diff)
+                    format!("{}", apy_as_bps)
                 } else {
-                    format!("{:.2}", apy_as_bps_diff as f64 / 100.)
+                    format!("{:.2}", apy_as_bps as f64 / 100.)
                 };
 
                 let msg = if raw {
                     value.to_string()
                 } else {
                     format!(
-                        "{maybe_token} APY is {value}{} more on {} than {}",
-                        if bps { "bps" } else { "%" },
-                        max_pool.0,
-                        min_pool.0,
+                        "{pool:>15}: {maybe_token} {value:>5}{}",
+                        if bps { "bps" } else { "%" }
                     )
                 };
-
-                println!("{msg}");
-            } else {
-                for (pool, apy_as_bps) in pool_apy {
-                    let value = if bps {
-                        format!("{}", apy_as_bps)
-                    } else {
-                        format!("{:.2}", apy_as_bps as f64 / 100.)
-                    };
-
-                    let msg = if raw {
-                        value.to_string()
-                    } else {
-                        format!(
-                            "{pool:>15}: {maybe_token} {value:>5}{}",
-                            if bps { "bps" } else { "%" }
-                        )
-                    };
-                    if !raw {
-                        notifier.send(&msg).await;
-                    }
-                    metrics::push(dp::supply_apy(&pool, maybe_token, apy_as_bps)).await;
-                    println!("{msg}");
+                if !raw {
+                    notifier.send(&msg).await;
                 }
+                metrics::push(dp::supply_apy(&pool, maybe_token, apy_as_bps)).await;
+                println!("{msg}");
             }
         }
         ("supply-balance", Some(matches)) => {
@@ -792,65 +1030,55 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             is_token_supported(&token, &pools)?;
 
-            let mut total_amount = 0;
-            let mut running_weighted_sum = 0.;
-            let mut non_empty_pools_count = 0;
-            for pool in &pools {
-                let (amount, remaining_outflow) =
-                    pool_supply_balance(pool, token, address, &mut account_data_cache)?;
-                let apr = pool_supply_apr(pool, token, &mut account_data_cache)?;
+            let supply_balance =
+                pools_supply_balance(&pools, token, address, &mut account_data_cache)?;
 
-                let apy_in_percent = apr_to_apy(apr) * 100.;
-                running_weighted_sum += apy_in_percent * amount as f64;
+            for pool in &pools {
+                let (apr, balance, available_balance) = *supply_balance.get(pool).unwrap();
 
                 let msg = format!(
                     "{:>15}: {} supplied at {:.2}%{}",
                     pool,
-                    maybe_token.format_amount(amount),
-                    apy_in_percent,
-                    if remaining_outflow < amount {
+                    maybe_token.format_amount(balance),
+                    apr_to_apy(apr) * 100.,
+                    if available_balance < balance {
                         format!(
                             ", with {} available to withdraw",
-                            maybe_token.format_amount(remaining_outflow)
+                            maybe_token.format_amount(available_balance)
                         )
                     } else {
                         "".into()
                     }
                 );
-                if amount > 0 {
-                    non_empty_pools_count += 1;
-                    total_amount += amount;
-                }
                 notifier.send(&msg).await;
                 metrics::push(dp::supply_balance(
                     pool,
                     &address,
                     maybe_token,
-                    token.ui_amount(amount),
+                    token.ui_amount(balance),
                 ))
                 .await;
                 if !total_only {
                     if raw {
-                        println!("{}", token.ui_amount(amount))
+                        println!("{}", token.ui_amount(balance))
                     } else {
                         println!("{msg}")
                     }
                 }
             }
 
+            let (total_apr, total_balance) = pools_supply_balance_apr(&supply_balance);
+
             if raw && total_only {
-                println!("{}", token.ui_amount(total_amount));
+                println!("{}", token.ui_amount(total_balance));
             }
             if !raw {
                 println!();
-
-                if non_empty_pools_count > 1 {
-                    println!(
-                        "Total supply:    {} at {:.2}%",
-                        token.format_amount(total_amount),
-                        running_weighted_sum / total_amount as f64
-                    );
-                }
+                println!(
+                    "Total supply:    {} at {:.2}%",
+                    token.format_amount(total_balance),
+                    apr_to_apy(total_apr) * 100.
+                );
 
                 let wallet_balance = maybe_token.balance(rpc_client, &address)?;
                 println!(
@@ -887,11 +1115,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .unwrap_or_else(|| supported_pools_for_token(token));
 
             is_token_supported(&token, &pools)?;
-            if cmd == Command::Rebalance && pools.len() <= 1 {
-                return Err("Rebalance command requires at least two pools".into());
-            }
 
             let minimum_apy_bps = value_t!(matches, "minimum_apy", u16).unwrap_or(0);
+            let minimum_apy = minimum_apy_bps as f64 / 100.;
+            let rebalance_amount_step_count = value_t!(matches, "rebalance_amount_step_count", u64)
+                .unwrap_or(1)
+                .min(9)
+                .max(1);
+
             let minimum_amount = {
                 let minimum_amount =
                     maybe_token.amount(value_t_or_exit!(matches, "minimum_ui_amount", f64));
@@ -916,95 +1147,54 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
 
             let requested_amount = match matches.value_of("ui_amount").unwrap() {
-                "ALL" => Some(if cmd == Command::Deposit {
-                    address_token_balance
-                } else {
-                    u64::MAX
-                }),
-                "AUTO" => {
-                    assert!(matches!(cmd, Command::Deposit | Command::Rebalance));
-                    None
-                }
-                ui_amount => Some(token.amount(ui_amount.parse::<f64>().unwrap())),
+                "ALL" => u64::MAX,
+                ui_amount => token.amount(ui_amount.parse::<f64>().unwrap()),
             };
 
-            let supply_balance = pools
-                .iter()
-                .map(|pool| {
-                    let (supply_balance, remaining_outflow) =
-                        pool_supply_balance(pool, token, address, &mut account_data_cache)
-                            .unwrap_or_else(|err| {
-                                panic!("Unable to read balance for {pool}: {err}")
-                            });
+            let supply_balance =
+                pools_supply_balance(&pools, token, address, &mut account_data_cache)?;
+            let total_apy = apr_to_apy(pools_supply_balance_apr(&supply_balance).0) * 100.;
 
-                    (
-                        pool.clone(),
-                        if remaining_outflow < supply_balance {
-                            // Some Solend reserves have an outflow limit. Try to keep withdrawals within that limit
-                            remaining_outflow
-                        } else {
-                            supply_balance
-                        },
-                    )
-                })
-                .collect::<HashMap<_, _>>();
+            assert_eq!(
+                TOKEN_ACCOUNT_REQUIRED_LAMPORTS,
+                rpc_client
+                    .get_minimum_balance_for_rent_exemption(spl_token::state::Account::LEN)?
+            );
 
-            let supply_apr = pools
-                .iter()
-                .map(|pool| {
-                    let supply_apr = pool_supply_apr(pool, token, &mut account_data_cache)
-                        .unwrap_or_else(|err| panic!("Unable to read apr for {pool}: {err}"));
-                    (pool.clone(), supply_apr)
-                })
-                .collect::<HashMap<_, _>>();
+            struct OperationInfo {
+                op_msg: String,
+                deposit_pool_and_amount: Option<(String, u64)>,
+                withdraw_pool_and_amount: Option<(String, u64)>,
+                instructions_for_ops: InstructionsForOps,
+            }
 
-            // Order pools by low to high APR
-            let pools = {
-                let mut pools = pools;
-                pools.sort_unstable_by(|a, b| {
-                    let a_bps = (supply_apr.get(a).unwrap() * 1000.) as u64;
-                    let b_bps = (supply_apr.get(b).unwrap() * 1000.) as u64;
-                    a_bps.cmp(&b_bps)
-                });
-                pools
-            };
-
-            // Deposit pool has the highest APR
-            let deposit_pool = pools.last().ok_or("No available pool")?;
-
-            // Withdraw pool has the lowest APR and a balance >= `requested_amount`
-            let withdraw_pool = pools
-                .iter()
-                .find(|pool| {
-                    let balance = *supply_balance.get(*pool).unwrap();
-
-                    match requested_amount {
-                        None | Some(u64::MAX) => {
-                            balance > 1.max(minimum_amount) // Solend/Kamino leave 1 in sometimes :-/
-                        }
-                        Some(requested_amount) => balance >= requested_amount,
+            #[derive(Default)]
+            struct BestOperationInfo {
+                maybe: Option<OperationInfo>,
+            }
+            impl BestOperationInfo {
+                fn replace_if_greater_total_apy(&mut self, info: OperationInfo) {
+                    if info.instructions_for_ops.simulation_total_apy
+                        > self
+                            .maybe
+                            .as_ref()
+                            .map(|best_info| best_info.instructions_for_ops.simulation_total_apy)
+                            .unwrap_or_default()
+                    {
+                        self.maybe = Some(info);
                     }
-                })
-                .unwrap_or(deposit_pool);
+                }
+            }
 
-           // let deposit_pool = &"kamino-main".to_string();
-           // let withdraw_pool = &"mfi".to_string();
+            let mut best_operation = BestOperationInfo::default();
 
-            let deposit_pool_apy = apr_to_apy(*supply_apr.get(deposit_pool).unwrap()) * 100.;
-            let withdraw_pool_apy = apr_to_apy(*supply_apr.get(withdraw_pool).unwrap()) * 100.;
-
-            // Weighted supply balance APY across the deposit and withdraw pools
-            let weighted_deposit_withdraw_pool_apy = {
-                let deposit_pool_balance = *supply_balance.get(deposit_pool).unwrap() as f64;
-                let withdraw_pool_balance = *supply_balance.get(withdraw_pool).unwrap() as f64;
-
-                (deposit_pool_balance * deposit_pool_apy
-                    + withdraw_pool_balance * withdraw_pool_apy)
-                    / (deposit_pool_balance + withdraw_pool_balance)
-            };
-
-            let (ops, minimum_op_amount, maximum_op_amount) = match cmd {
+            match cmd {
                 Command::Deposit => {
+                    let requested_amount = match requested_amount {
+                        u64::MAX => address_token_balance,
+                        requested_amount => requested_amount,
+                    };
+
                     if address_token_balance < minimum_amount {
                         println!(
                             "Minimum deposit amount of {} is greater than current wallet balance of {}",
@@ -1014,549 +1204,308 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         return Ok(());
                     }
 
-                    let (minimum_op_amount, maximum_op_amount) = match requested_amount {
-                        None => (minimum_amount, address_token_balance),
-                        Some(u64::MAX) => (address_token_balance, address_token_balance),
-                        Some(requested_amount) => {
-                            if address_token_balance < requested_amount {
-                                println!(
-                                    "Requested deposit amount of {} is greater than current wallet balance of {}",
-                                    maybe_token.format_amount(requested_amount),
-                                    maybe_token.format_amount(address_token_balance),
-                                );
-                                return Ok(());
-                            }
-                            (requested_amount, requested_amount)
-                        }
-                    };
-
-                    (
-                        vec![(Operation::Deposit, deposit_pool)],
-                        minimum_op_amount,
-                        maximum_op_amount,
-                    )
-                }
-                Command::Withdraw | Command::Rebalance => {
-                    let withdraw_pool_supply_balance = *supply_balance.get(withdraw_pool).unwrap();
-
-                    if withdraw_pool_supply_balance < minimum_amount {
+                    if address_token_balance < requested_amount {
                         println!(
-                            "The supply balance of {withdraw_pool}, {}, is less than minimum withdraw amount of {}",
-                            maybe_token.format_amount(withdraw_pool_supply_balance),
-                            maybe_token.format_amount(minimum_amount),
+                            "Requested deposit amount of {} is greater than current wallet balance of {}",
+                            maybe_token.format_amount(requested_amount),
+                            maybe_token.format_amount(address_token_balance),
                         );
                         return Ok(());
                     }
 
-                    let (minimum_op_amount, maximum_op_amount) = match requested_amount {
-                        None => (minimum_amount, withdraw_pool_supply_balance),
-                        Some(u64::MAX) => {
-                            (withdraw_pool_supply_balance, withdraw_pool_supply_balance)
-                        }
-                        Some(requested_amount) => {
-                            if withdraw_pool_supply_balance < requested_amount {
-                                println!(
-                                    "The supply balance of {withdraw_pool}, {}, is less than requested amount of {}",
-                                    maybe_token.format_amount(withdraw_pool_supply_balance),
-                                    maybe_token.format_amount(requested_amount),
-                                );
-                                return Ok(());
-                            }
-                            (requested_amount, requested_amount)
-                        }
-                    };
+                    for pool in &pools {
+                        print!("Probing {pool:<15} | ");
 
-                    (
-                        if cmd == Command::Withdraw {
-                            vec![(Operation::Withdraw, withdraw_pool)]
-                        } else {
-                            if withdraw_pool == deposit_pool {
-                                println!(
-                                    "{} is deposited {withdraw_pool}, which currently has the highest APY",
-                                    maybe_token.format_amount(maximum_op_amount),
-                                );
-                                return Ok(());
-                            }
-
-                            vec![
-                                (Operation::Withdraw, withdraw_pool),
-                                (Operation::Deposit, deposit_pool),
-                            ]
-                        },
-                        minimum_op_amount,
-                        maximum_op_amount,
-                    )
-                }
-            };
-            assert!(minimum_op_amount >= minimum_amount);
-            assert!(maximum_op_amount >= minimum_op_amount);
-
-            const TOKEN_ACCOUNT_REQUIRED_LAMPORTS: u64 = 2_039_280;
-            assert_eq!(
-                TOKEN_ACCOUNT_REQUIRED_LAMPORTS,
-                rpc_client
-                    .get_minimum_balance_for_rent_exemption(spl_token::state::Account::LEN)?
-            );
-
-            async fn build_instructions_for_ops<'a>(
-                account_data_cache: &mut AccountDataCache<'a>,
-                ops: &[(Operation, &String)],
-                mut amount: u64,
-                address: Pubkey,
-                token: Token,
-                wrap_unwrap_sol: bool,
-            ) -> Result<
-                (
-                    /*instructions: */ Vec<Instruction>,
-                    /*required_compute_units: */ u32,
-                    /* address_lookup_table_accounts: */ Vec<AddressLookupTableAccount>,
-                    /* simulation_account_data_cache: */ AccountDataCache<'a>,
-                ),
-                Box<dyn std::error::Error>,
-            > {
-                let mut instructions = vec![];
-                let mut address_lookup_tables = vec![];
-                let mut required_compute_units = 0;
-
-                for (op, pool) in ops {
-                    let result = if pool.starts_with("kamino-") {
-                        kamino_deposit_or_withdraw(
-                            *op,
-                            pool,
+                        let probe = build_instructions_for_ops(
+                            &mut account_data_cache,
+                            &pools,
+                            &[(Operation::Deposit, pool)],
+                            requested_amount,
                             address,
                             token,
-                            amount,
-                            account_data_cache,
-                        )?
-                    } else if pool.starts_with("solend-") {
-                        solend_deposit_or_withdraw(
-                            *op,
-                            pool,
-                            address,
-                            token,
-                            amount,
-                            account_data_cache,
-                        )?
-                    } else if *pool == "mfi" {
-                        mfi_deposit_or_withdraw(
-                            *op,
-                            address,
-                            token,
-                            amount,
-                            false,
-                            account_data_cache,
-                        )?
-                    } else {
-                        unreachable!();
-                    };
-
-                    match op {
-                        Operation::Deposit => {
-                            if wrap_unwrap_sol {
-                                // Wrap SOL into wSOL
-                                instructions.extend(vec![
-                                    spl_associated_token_account::instruction::create_associated_token_account_idempotent(
-                                        &address,
-                                        &address,
-                                        &token.mint(),
-                                        &spl_token::id(),
-                                    ),
-                                    system_instruction::transfer(&address, &token.ata(&address), amount),
-                                    spl_token::instruction::sync_native(&spl_token::id(), &token.ata(&address)).unwrap(),
-                                ]);
-                                required_compute_units += 20_000;
-                            }
-                        }
-                        Operation::Withdraw => {
-                            // Ensure the destination token account exists
-                            instructions.push(
-                                    spl_associated_token_account::instruction::create_associated_token_account_idempotent(
-                                        &address,
-                                        &address,
-                                        &token.mint(),
-                                        &spl_token::id(),
-                                    ),
-                                );
-                            required_compute_units += 25_000;
-                        }
-                    }
-
-                    instructions.extend(result.instructions);
-                    if let Some(address_lookup_table) = result.address_lookup_table {
-                        address_lookup_tables.push(address_lookup_table);
-                    }
-                    required_compute_units += result.required_compute_units;
-                    amount = result.amount;
-
-                    if wrap_unwrap_sol && *op == Operation::Withdraw {
-                        // Unwrap wSOL into SOL
-
-                        let seed = &Keypair::new().pubkey().to_string()[..31];
-                        let ephemeral_token_account =
-                            Pubkey::create_with_seed(&address, seed, &spl_token::id()).unwrap();
-
-                        instructions.extend(vec![
-                            system_instruction::create_account_with_seed(
-                                &address,
-                                &ephemeral_token_account,
-                                &address,
-                                seed,
-                                TOKEN_ACCOUNT_REQUIRED_LAMPORTS,
-                                spl_token::state::Account::LEN as u64,
-                                &spl_token::id(),
-                            ),
-                            spl_token::instruction::initialize_account(
-                                &spl_token::id(),
-                                &ephemeral_token_account,
-                                &token.mint(),
-                                &address,
-                            )
-                            .unwrap(),
-                            spl_token::instruction::transfer_checked(
-                                &spl_token::id(),
-                                &token.ata(&address),
-                                &token.mint(),
-                                &ephemeral_token_account,
-                                &address,
-                                &[],
-                                amount,
-                                token.decimals(),
-                            )
-                            .unwrap(),
-                            spl_token::instruction::close_account(
-                                &spl_token::id(),
-                                &ephemeral_token_account,
-                                &address,
-                                &address,
-                                &[],
-                            )
-                            .unwrap(),
-                        ]);
-
-                        required_compute_units += 30_000;
-                    }
-                }
-
-                let address_lookup_table_accounts = address_lookup_tables
-                    .into_iter()
-                    .map(|address_lookup_table_address| {
-                        account_data_cache
-                            .get(address_lookup_table_address)
-                            .and_then(|(address_lookup_table_data, _context_slot)| {
-                                AddressLookupTable::deserialize(address_lookup_table_data)
-                                    .map_err(|err| err.into())
-                            })
-                            .map(|address_lookup_table| AddressLookupTableAccount {
-                                key: address_lookup_table_address,
-                                addresses: address_lookup_table.addresses.to_vec(),
-                            })
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-
-                // Simulate the transaction's instructions and cache the resulting account changes
-                let mut simulation_account_data_cache = account_data_cache.clone();
-                simulation_account_data_cache.simulate_then_add(
-                    &instructions,
-                    Some(address),
-                    &address_lookup_table_accounts,
-                )?;
-
-                Ok((
-                    instructions,
-                    required_compute_units,
-                    address_lookup_table_accounts,
-                    simulation_account_data_cache,
-                ))
-            }
-
-            let report_probes = minimum_op_amount != maximum_op_amount;
-            if report_probes {
-                println!(
-                    "Probing for optimal {cmd:?} amount between {} and {}",
-                    token.format_amount(minimum_op_amount),
-                    token.format_amount(maximum_op_amount)
-                );
-            }
-
-            let mut minimum_op_amount = minimum_op_amount;
-            let mut maximum_op_amount = maximum_op_amount;
-            let mut op_amount = (minimum_op_amount + maximum_op_amount) / 2;
-
-            let mut best_op_amount = None;
-            let mut best_op_data = None;
-            let mut best_op_rebalance_apy = minimum_apy_bps as isize;
-            loop {
-                assert!(op_amount >= minimum_op_amount);
-                assert!(op_amount <= maximum_op_amount);
-
-                let (msg, maybe_op_data) = if op_amount < minimum_amount {
-                    (
-                        format!(
-                            "Cannot {cmd:?}. {} is less than the minimum deposit amount of {}",
-                            maybe_token.format_amount(op_amount),
-                            maybe_token.format_amount(minimum_amount)
-                        ),
-                        None,
-                    )
-                } else {
-                    let amount = op_amount;
-
-                    let (
-                        instructions,
-                        required_compute_units,
-                        address_lookup_table_accounts,
-                        mut simulation_account_data_cache,
-                    ) = build_instructions_for_ops(
-                        &mut account_data_cache,
-                        &ops,
-                        amount,
-                        address,
-                        token,
-                        maybe_token.is_sol(),
-                    )
-                    .await?;
-
-                    //
-                    // Is it worth it?
-                    //
-
-                    // Deposit pool APY after the operation
-                    let simulation_deposit_pool_apy = apr_to_apy(
-                        pool_supply_apr(deposit_pool, token, &mut simulation_account_data_cache)
-                            .unwrap_or(0.),
-                    ) * 100.;
-
-                    // Withdraw pool APY after the operation
-                    let simulation_withdraw_pool_apy = apr_to_apy(
-                        pool_supply_apr(withdraw_pool, token, &mut simulation_account_data_cache)
-                            .unwrap_or(0.),
-                    ) * 100.;
-
-                    // Weighted supply balance APY across the deposit and withdraw pools after the operation
-                    let simulation_weighted_deposit_withdraw_pool_apy = {
-                        let simulation_deposit_pool_balance = supply_balance
-                            .get(deposit_pool)
-                            .unwrap()
-                            .saturating_add(amount)
-                            as f64;
-                        let simulation_withdraw_pool_balance = supply_balance
-                            .get(withdraw_pool)
-                            .unwrap()
-                            .saturating_sub(amount)
-                            as f64;
-
-                        (simulation_deposit_pool_balance * simulation_deposit_pool_apy
-                            + simulation_withdraw_pool_balance * simulation_withdraw_pool_apy)
-                            / (simulation_deposit_pool_balance + simulation_withdraw_pool_balance)
-                    };
-
-                    let (msg, ok) = match cmd {
-                        Command::Deposit => {
-                            let minimum_apy = minimum_apy_bps as f64 / 100.;
-                            if simulation_deposit_pool_apy < minimum_apy {
-                                (
-                                    format!("{deposit_pool} APY after deposit, {simulation_deposit_pool_apy:.2}%, is too low (minimum: {minimum_apy_bps}bps)"),
-                                    false
-                                )
-                            } else {
-                                (
-                                    format!(
-                                        "Deposit {} from {address} into {deposit_pool} ({deposit_pool_apy:.2}% -> {simulation_deposit_pool_apy:.2}%)",
-                                        maybe_token.format_amount(amount)
-                                    ),
-                                    true
-                                )
-                            }
-                        }
-                        Command::Withdraw => (
-                            format!(
-                                "Withdraw {} from \
-                                {withdraw_pool} ({withdraw_pool_apy:.2}% -> \
-                                 {simulation_withdraw_pool_apy:.2}%) into {address}",
-                                maybe_token.format_amount(amount)
-                            ),
-                            true,
-                        ),
-                        Command::Rebalance => {
-                            let weighted_apy_change = format!("{weighted_deposit_withdraw_pool_apy:.2}% -> {simulation_weighted_deposit_withdraw_pool_apy:.2}%");
-                            let msg_prefix = format!("Rebalance of {} ({weighted_apy_change}) from \
-                                    {withdraw_pool} ({withdraw_pool_apy:.2}% -> {simulation_withdraw_pool_apy:.2}%) \
-                                    to {deposit_pool} ({deposit_pool_apy:.2}% -> {simulation_deposit_pool_apy:.2}%)",
-                                maybe_token.format_amount(amount)
+                            maybe_token.is_sol(),
+                        )
+                        .await
+                        .and_then(|instructions_for_ops| {
+                            let op_msg = format!(
+                                "Deposit {} into {pool} ({total_apy:.2}% -> {:.2}%)",
+                                maybe_token.format_amount(requested_amount),
+                                instructions_for_ops.simulation_total_apy,
                             );
 
-                            let simulation_weighted_apy_improvement_bps =
-                                ((simulation_weighted_deposit_withdraw_pool_apy
-                                    - weighted_deposit_withdraw_pool_apy)
-                                    * 100.) as isize;
-
-                            if simulation_weighted_apy_improvement_bps < best_op_rebalance_apy {
-                                (
-                                    format!(
-                                        "{msg_prefix} will only improve by {simulation_weighted_apy_improvement_bps}bps \
-                                             (minimum: {minimum_apy_bps}bps)"
-                                    ),
-                                    false
-                                )
+                            if instructions_for_ops.simulation_total_apy < minimum_apy {
+                                Err(format!("{op_msg}. {minimum_apy:.2}% minimum APY not met")
+                                    .into())
                             } else {
-                                best_op_rebalance_apy = simulation_weighted_apy_improvement_bps;
+                                Ok(OperationInfo {
+                                    op_msg,
+                                    deposit_pool_and_amount: Some((pool.clone(), requested_amount)),
+                                    withdraw_pool_and_amount: None,
+                                    instructions_for_ops,
+                                })
+                            }
+                        });
 
-                                (format!("{msg_prefix} for {simulation_weighted_apy_improvement_bps}bps"), true)
+                        match probe {
+                            Err(err) => println!("FAIL | {err}"),
+                            Ok(operation_info) => {
+                                println!("PASS | {}", operation_info.op_msg);
+                                best_operation.replace_if_greater_total_apy(operation_info);
                             }
                         }
-                    };
+                    }
+                }
+                Command::Withdraw => {
+                    for pool in &pools {
+                        let withdraw_pool_available_balance = supply_balance.get(pool).unwrap().2;
 
-                    (
-                        msg,
-                        if ok {
-                            Some((
-                                instructions,
-                                required_compute_units,
-                                address_lookup_table_accounts,
-                            ))
-                        } else {
-                            None
-                        },
-                    )
-                };
+                        let requested_amount = match requested_amount {
+                            u64::MAX => {
+                                // Solend/Kamino leave 1 in sometimes :-/
+                                withdraw_pool_available_balance.saturating_sub(1)
+                            }
+                            requested_amount => requested_amount,
+                        };
 
-                if report_probes {
-                    println!(
-                        "{} - {msg}",
-                        if maybe_op_data.is_some() {
-                            "PASS"
+                        print!("Probing {pool:<15} | ");
+                        let probe = if requested_amount > withdraw_pool_available_balance {
+                            Err(format!(
+                                "Withdraw of {} failed due to an insufficient pool supply balance of {}",
+                                maybe_token.format_amount(requested_amount),
+                                maybe_token.format_amount(withdraw_pool_available_balance)
+                            ).into())
+                        } else if requested_amount < minimum_amount {
+                            Err(format!(
+                                "Withdraw of {} failed because it does not meet the minimum withdrawal amount of {}",
+                                maybe_token.format_amount(requested_amount),
+                                maybe_token.format_amount(minimum_amount)
+                            ).into())
                         } else {
-                            "FAIL"
+                            build_instructions_for_ops(
+                                &mut account_data_cache,
+                                &pools,
+                                &[(Operation::Withdraw, pool)],
+                                requested_amount,
+                                address,
+                                token,
+                                maybe_token.is_sol(),
+                            )
+                            .await
+                            .map(|instructions_for_ops| {
+                                OperationInfo {
+                                    op_msg: format!(
+                                        "Withdraw {} from {pool} ({total_apy:.2}% -> {:.2}%)",
+                                        maybe_token.format_amount(requested_amount),
+                                        instructions_for_ops.simulation_total_apy,
+                                    ),
+                                    deposit_pool_and_amount: None,
+                                    withdraw_pool_and_amount: Some((
+                                        pool.clone(),
+                                        requested_amount,
+                                    )),
+                                    instructions_for_ops,
+                                }
+                            })
+                        };
+
+                        match probe {
+                            Err(err) => println!("FAIL | {err}"),
+                            Ok(operation_info) => {
+                                println!("PASS | {}", operation_info.op_msg);
+                                best_operation.replace_if_greater_total_apy(operation_info);
+                            }
                         }
-                    );
-                }
-
-                if let Some(op_data) = maybe_op_data {
-                    best_op_amount = Some(op_amount);
-                    best_op_data = Some((msg, op_data));
-
-                    if op_amount == maximum_op_amount {
-                        break;
-                    }
-
-                    minimum_op_amount = op_amount;
-                    op_amount = if maximum_op_amount - minimum_op_amount < minimum_amount {
-                        maximum_op_amount
-                    } else {
-                        ((minimum_op_amount + maximum_op_amount) / 2 + 1).min(maximum_op_amount)
-                    };
-                } else {
-                    if op_amount == minimum_op_amount {
-                        println!("Abort. {msg}");
-                        return Ok(());
-                    }
-
-                    maximum_op_amount = op_amount;
-                    op_amount = if maximum_op_amount - minimum_op_amount < minimum_amount {
-                        minimum_op_amount
-                    } else {
-                        ((minimum_op_amount + maximum_op_amount) / 2).max(minimum_op_amount)
-                    };
-
-                    if Some(op_amount) == best_op_amount {
-                        assert!(best_op_data.is_some());
-                        break;
                     }
                 }
-            }
+                Command::Rebalance => {
+                    if pools.len() <= 1 {
+                        return Err(
+                            format!("Rebalancing {token} requires at least two pools").into()
+                        );
+                    }
 
-            let (msg, (instructions, required_compute_units, address_lookup_table_accounts)) =
-                best_op_data.unwrap();
-            let amount = best_op_amount.unwrap();
+                    for withdraw_pool in &pools {
+                        let withdraw_pool_available_balance =
+                            supply_balance.get(withdraw_pool).unwrap().2;
 
-            println!("{msg}");
-            let (recent_blockhash, last_valid_block_height) =
-                rpc_client.get_latest_blockhash_with_commitment(rpc_client.commitment())?;
+                        let max_requested_amount = match requested_amount {
+                            u64::MAX => {
+                                // Solend/Kamino leave 1 in sometimes :-/
+                                withdraw_pool_available_balance
+                                    .saturating_sub(1)
+                                    .max(minimum_amount)
+                            }
+                            requested_amount => requested_amount,
+                        };
 
-            let (transaction, priority_fee) = {
-                let mut instructions = instructions;
+                        let min_requested_amount = if rebalance_amount_step_count > 1 {
+                            minimum_amount
+                        } else {
+                            max_requested_amount
+                        };
 
-                let priority_fee = apply_priority_fee(
-                    &rpc_clients,
-                    &mut instructions,
-                    required_compute_units,
-                    priority_fee,
-                )?;
+                        if max_requested_amount > withdraw_pool_available_balance {
+                            println!("Probing {withdraw_pool:<15}                          | FAIL | Rebalance {} failed due to an insufficient {withdraw_pool} supply balance of {}",
+                                    maybe_token.format_amount(max_requested_amount),
+                                    maybe_token.format_amount(withdraw_pool_available_balance)
+                            );
+                            continue;
+                        }
+                        if min_requested_amount < minimum_amount {
+                            println!("Probing {withdraw_pool:<15}                          | FAIL | Rebalance {} failed because it does not meet the minimum withdrawal amount of {}",
+                                    maybe_token.format_amount(min_requested_amount),
+                                    maybe_token.format_amount(minimum_amount)
+                            );
+                            continue;
+                        }
+                        assert!(max_requested_amount >= min_requested_amount);
 
-                let message = message::v0::Message::try_compile(
-                    &address,
-                    &instructions,
-                    &address_lookup_table_accounts,
-                    recent_blockhash,
-                )?;
-                (
-                    VersionedTransaction::try_new(VersionedMessage::V0(message), &vec![signer])?,
-                    priority_fee,
-                )
+                        for deposit_pool in &pools {
+                            if deposit_pool == withdraw_pool {
+                                continue;
+                            }
+
+                            let requested_amounts = if rebalance_amount_step_count > 1 {
+                                let mut requested_amounts = (min_requested_amount..)
+                                    .step_by(
+                                        ((max_requested_amount - min_requested_amount)
+                                            / (rebalance_amount_step_count - 1))
+                                            as usize,
+                                    )
+                                    .take_while(|requested_amount| {
+                                        *requested_amount <= max_requested_amount
+                                    })
+                                    .collect::<Vec<_>>();
+                                requested_amounts.pop();
+                                requested_amounts.push(max_requested_amount);
+                                requested_amounts
+                            } else {
+                                vec![max_requested_amount]
+                            };
+
+                            for (index, requested_amount) in requested_amounts.iter().enumerate() {
+                                let requested_amount = *requested_amount;
+                                print!(
+                                    "Probing {withdraw_pool:<15} -> {deposit_pool:<15} [{}/{}] | ",
+                                    index + 1,
+                                    requested_amounts.len()
+                                );
+
+                                let probe = build_instructions_for_ops(
+                                    &mut account_data_cache,
+                                    &pools,
+                                    &[(Operation::Withdraw, withdraw_pool),
+                                      (Operation::Deposit, deposit_pool)],
+                                    requested_amount,
+                                    address,
+                                    token,
+                                    maybe_token.is_sol(),
+                                )
+                                .await
+                                .and_then(|instructions_for_ops| {
+                                    let apy_improvement = instructions_for_ops.simulation_total_apy - total_apy;
+
+                                    let op_msg = format!(
+                                        "Rebalance {} from {withdraw_pool} to {deposit_pool} ({total_apy:.2}% -> {:.2}%) for an additional {apy_improvement:.2}%",
+                                        maybe_token.format_amount(requested_amount),
+                                        instructions_for_ops.simulation_total_apy
+                                    );
+
+                                    if apy_improvement < minimum_apy {
+                                        Err(format!("{op_msg} (minimum: {minimum_apy:.2}%)").into())
+                                    } else {
+                                        Ok(OperationInfo {
+                                            op_msg,
+                                            deposit_pool_and_amount: Some((
+                                                deposit_pool.clone(),
+                                                requested_amount,
+                                            )),
+                                            withdraw_pool_and_amount: Some((
+                                                withdraw_pool.clone(),
+                                                requested_amount,
+                                            )),
+                                            instructions_for_ops,
+                                        })
+                                    }
+                                });
+
+                                match probe {
+                                    Err(err) => println!("FAIL | {err}"),
+                                    Ok(operation_info) => {
+                                        println!("PASS | {}", operation_info.op_msg);
+                                        best_operation.replace_if_greater_total_apy(operation_info);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             };
 
+            let operation_info = match best_operation.maybe {
+                None => {
+                    println!("Unable to perform {cmd:?}");
+                    return Ok(());
+                }
+                Some(best_operation_info) => best_operation_info,
+            };
+
+            println!("{}", operation_info.op_msg);
+
+            let (signature, priority_fee_lamports, transaction_confirmed) =
+                send_instructions_for_ops(
+                    &rpc_clients,
+                    address,
+                    operation_info.instructions_for_ops,
+                    priority_fee,
+                    dry_run,
+                    &vec![signer],
+                )
+                .await?;
+
             if dry_run {
-                println!("Aborting due to --dry-run flag");
                 return Ok(());
             }
 
-            let signature = transaction.signatures[0];
-
-            let transaction_confirmed =
-                send_transaction_until_expired(&rpc_clients, &transaction, last_valid_block_height);
             if transaction_confirmed.is_some() {
                 metrics::push(dp::priority_fee(
                     &format!("{cmd:?}").to_lowercase(),
                     &address,
                     maybe_token,
-                    lamports_to_sol(priority_fee),
+                    lamports_to_sol(priority_fee_lamports),
                 ))
                 .await;
             }
+
             if !transaction_confirmed.unwrap_or_default() {
-                let msg = format!("Transaction failed: {signature}");
-                notifier.send(&msg).await;
-                return Err(msg.into());
+                let failure_msg = format!("Transaction failed: {signature}");
+                notifier.send(&failure_msg).await;
+                return Err(failure_msg.into());
             }
             println!("Transaction confirmed: {signature}");
 
-            match cmd {
-                Command::Deposit => {
-                    metrics::push(dp::principal_balance_change(
-                        deposit_pool,
-                        &address,
-                        maybe_token,
-                        token.ui_amount(amount),
-                    ))
-                    .await;
-                }
-                Command::Withdraw => {
-                    metrics::push(dp::principal_balance_change(
-                        withdraw_pool,
-                        &address,
-                        maybe_token,
-                        -token.ui_amount(amount),
-                    ))
-                    .await;
-                }
-                Command::Rebalance => {
-                    metrics::push(dp::principal_balance_change(
-                        withdraw_pool,
-                        &address,
-                        maybe_token,
-                        -token.ui_amount(amount),
-                    ))
-                    .await;
-                    metrics::push(dp::principal_balance_change(
-                        deposit_pool,
-                        &address,
-                        maybe_token,
-                        token.ui_amount(amount),
-                    ))
-                    .await;
-                }
+            if let Some((deposit_pool, deposit_amount)) = operation_info.deposit_pool_and_amount {
+                dp::principal_balance_change(
+                    &deposit_pool,
+                    &address,
+                    maybe_token,
+                    token.ui_amount(deposit_amount),
+                );
             }
-            notifier.send(&format!("{msg} via {signature}")).await;
+            if let Some((withdraw_pool, withdraw_amount)) = operation_info.withdraw_pool_and_amount
+            {
+                dp::principal_balance_change(
+                    &withdraw_pool,
+                    &address,
+                    maybe_token,
+                    -token.ui_amount(withdraw_amount),
+                );
+            }
+            notifier
+                .send(&format!("{} via via {signature}", operation_info.op_msg))
+                .await;
+
+            return Ok(());
         }
         _ => unreachable!(),
     }
@@ -1569,6 +1518,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 fn apr_to_apy(apr: f64) -> f64 {
     let compounding_periods = 365. * 24.; // hourly compounding
     (1. + apr / compounding_periods).powf(compounding_periods) - 1.
+}
+
+#[derive(Debug)]
+struct DepositOrWithdrawResult {
+    instructions: Vec<Instruction>,
+    required_compute_units: u32,
+    amount: u64,
+    address_lookup_table: Option<Pubkey>,
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -1690,26 +1647,28 @@ fn mfi_load_user_account(
     })
 }
 
-fn mfi_balance(
+fn mfi_deposited_amount(
     wallet_address: Pubkey,
     token: Token,
     account_data_cache: &mut AccountDataCache,
-) -> Result<(u64, u64), Box<dyn std::error::Error>> {
-    let remaining_outflow = u64::MAX;
+) -> Result<(/*balance: */ u64, /* available_balance: */ u64), Box<dyn std::error::Error>> {
     let bank_address = mfi_lookup_bank_address(token)?;
     let bank = mfi_load_bank(bank_address, account_data_cache)?;
     let user_account = match mfi_load_user_account(wallet_address, account_data_cache)? {
-        None => return Ok((0, remaining_outflow)),
+        None => return Ok((0, 0)),
         Some((_user_account_address, user_account)) => user_account,
     };
 
-    match user_account.lending_account.get_balance(&bank_address) {
-        None => Ok((0, remaining_outflow)),
+    let deposited_amount = match user_account.lending_account.get_balance(&bank_address) {
+        None => 0,
         Some(balance) => {
             let deposit = bank.get_asset_amount(balance.asset_shares.into());
-            Ok((deposit.floor().to_num::<u64>(), remaining_outflow))
+            deposit.floor().to_num::<u64>()
         }
-    }
+    };
+    let remaining_outflow = u64::MAX;
+
+    Ok((deposited_amount, deposited_amount.min(remaining_outflow)))
 }
 
 fn mfi_deposit_or_withdraw(
@@ -1851,14 +1810,6 @@ fn mfi_deposit_or_withdraw(
         amount,
         address_lookup_table: Some(pubkey!["2FyGQ8UZ6PegCSN2Lu7QD1U2UY28GpJdDfdwEfbwxN7p"]),
     })
-}
-
-#[derive(Debug)]
-struct DepositOrWithdrawResult {
-    instructions: Vec<Instruction>,
-    required_compute_units: u32,
-    amount: u64,
-    address_lookup_table: Option<Pubkey>,
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -2053,30 +2004,31 @@ fn kamino_deposited_amount(
     wallet_address: Pubkey,
     token: Token,
     account_data_cache: &mut AccountDataCache,
-) -> Result<(u64, u64), Box<dyn std::error::Error>> {
+) -> Result<(/*balance: */ u64, /* available_balance: */ u64), Box<dyn std::error::Error>> {
     let (market_reserve_address, reserve) =
         kamino_load_pool_reserve(pool, token, account_data_cache)?;
     let remaining_outflow = u64::MAX;
 
     let obligation_address = kamino_find_obligation_address(wallet_address, reserve.lending_market);
 
-    match kamino_unsafe_load_obligation(obligation_address, account_data_cache)? {
-        None => Ok((0, remaining_outflow)),
-        Some(obligation) => {
-            let collateral_deposited_amount = obligation
-                .deposits
-                .iter()
-                .find(|collateral| collateral.deposit_reserve == market_reserve_address)
-                .map(|collateral| collateral.deposited_amount)
-                .unwrap_or_default();
+    let deposited_amount =
+        match kamino_unsafe_load_obligation(obligation_address, account_data_cache)? {
+            None => 0,
+            Some(obligation) => {
+                let collateral_deposited_amount = obligation
+                    .deposits
+                    .iter()
+                    .find(|collateral| collateral.deposit_reserve == market_reserve_address)
+                    .map(|collateral| collateral.deposited_amount)
+                    .unwrap_or_default();
 
-            let collateral_exchange_rate = reserve.collateral_exchange_rate();
-            Ok((
-                collateral_exchange_rate.collateral_to_liquidity(collateral_deposited_amount),
-                remaining_outflow,
-            ))
-        }
-    }
+                reserve
+                    .collateral_exchange_rate()
+                    .collateral_to_liquidity(collateral_deposited_amount)
+            }
+        };
+
+    Ok((deposited_amount, deposited_amount.min(remaining_outflow)))
 }
 
 fn kamino_deposit_or_withdraw(
@@ -2103,6 +2055,10 @@ fn kamino_deposit_or_withdraw(
 
     let obligation_address = kamino_find_obligation_address(wallet_address, reserve.lending_market);
     let obligation = kamino_unsafe_load_obligation(obligation_address, account_data_cache)?;
+
+    if obligation.is_none() {
+        return Err(format!("Manually deposit once into {pool} before using sys-lend").into());
+    }
 
     let obligation_farm_user_state = Pubkey::find_program_address(
         &[
@@ -2511,14 +2467,15 @@ fn solend_deposited_amount(
     wallet_address: Pubkey,
     token: Token,
     account_data_cache: &mut AccountDataCache,
-) -> Result<(u64, u64), Box<dyn std::error::Error>> {
+) -> Result<(/*balance: */ u64, /* available_balance: */ u64), Box<dyn std::error::Error>> {
     let (market_reserve_address, reserve, context_slot) =
         solend_load_reserve_for_pool(pool, token, account_data_cache)?;
     let remaining_outflow = solend_remaining_outflow_for_reserve(reserve.clone(), context_slot)?;
 
     let obligation_address = solend_find_obligation_address(wallet_address, reserve.lending_market);
-    match solend_load_obligation(obligation_address, account_data_cache)? {
-        None => Ok((0, remaining_outflow)),
+
+    let deposited_amount = match solend_load_obligation(obligation_address, account_data_cache)? {
+        None => 0,
         Some(obligation) => {
             let collateral_deposited_amount = obligation
                 .deposits
@@ -2527,13 +2484,13 @@ fn solend_deposited_amount(
                 .map(|collateral| collateral.deposited_amount)
                 .unwrap_or_default();
 
-            let collateral_exchange_rate = reserve.collateral_exchange_rate()?;
-            Ok((
-                collateral_exchange_rate.collateral_to_liquidity(collateral_deposited_amount)?,
-                remaining_outflow,
-            ))
+            reserve
+                .collateral_exchange_rate()?
+                .collateral_to_liquidity(collateral_deposited_amount)?
         }
-    }
+    };
+
+    Ok((deposited_amount, deposited_amount.min(remaining_outflow)))
 }
 
 fn solend_deposit_or_withdraw(
@@ -2736,14 +2693,10 @@ fn solend_deposit_or_withdraw(
                 AccountMeta::new(wallet_address, true),
                 // Token Program
                 AccountMeta::new_readonly(spl_token::id(), false),
-                // Lending Market
-                AccountMeta::new(market_reserve_address, false),
             ];
 
             for reserve_address in &obligation_market_reserves {
-                if *reserve_address != market_reserve_address {
-                    account_meta.push(AccountMeta::new(*reserve_address, false));
-                }
+                account_meta.push(AccountMeta::new(*reserve_address, false));
             }
 
             instructions.push(Instruction::new_with_bytes(
