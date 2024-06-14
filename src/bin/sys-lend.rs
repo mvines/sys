@@ -1110,9 +1110,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let maybe_token = MaybeToken::from(value_t!(matches, "token", Token).ok());
             let token = maybe_token.token().unwrap_or(Token::wSOL);
 
-            let pools = values_t!(matches, "pool", String)
+            let pools = {
+                let mut pools = values_t!(matches, "pool", String)
                 .ok()
                 .unwrap_or_else(|| supported_pools_for_token(token));
+                pools.sort();
+                pools
+            };
 
             is_token_supported(&token, &pools)?;
 
