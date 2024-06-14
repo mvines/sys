@@ -8,6 +8,7 @@ use {
 
 #[derive(Debug, Clone)]
 pub struct GetTransactionAddrssBalanceChange {
+    #[allow(dead_code)]
     pub pre_amount: u64,
     pub post_amount: u64,
     pub slot: Slot,

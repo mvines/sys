@@ -276,7 +276,7 @@ pub async fn run<T: Signers>(
 
                                 let busy = (activating + deactivating) > 0
                                     || (stake.delegation.deactivation_epoch > current_epoch
-                                        && stake.delegation.deactivation_epoch < std::u64::MAX);
+                                        && stake.delegation.deactivation_epoch < u64::MAX);
 
                                 let active = busy || effective > 0;
                                 Some((

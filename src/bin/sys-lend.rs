@@ -1119,9 +1119,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let minimum_apy_bps = value_t!(matches, "minimum_apy", u16).unwrap_or(0);
             let minimum_apy = minimum_apy_bps as f64 / 100.;
             let rebalance_amount_step_count = value_t!(matches, "rebalance_amount_step_count", u64)
-                .unwrap_or(1)
-                .min(9)
-                .max(1);
+                .unwrap_or_default()
+                .clamp(1, 9);
 
             let minimum_amount = {
                 let minimum_amount =
@@ -1554,7 +1553,7 @@ fn mfi_load_bank(
 
     const LEN: usize = std::mem::size_of::<marginfi_v2::Bank>();
     let account_data: [u8; LEN] = account_data[8..LEN + 8].try_into().unwrap();
-    let reserve = unsafe { std::mem::transmute(account_data) };
+    let reserve = unsafe { std::mem::transmute::<[u8; LEN], marginfi_v2::Bank>(account_data) };
     Ok(reserve)
 }
 
@@ -1832,7 +1831,7 @@ fn kamino_unsafe_load_reserve_account_data(
 ) -> Result<kamino::Reserve, Box<dyn std::error::Error>> {
     const LEN: usize = std::mem::size_of::<kamino::Reserve>();
     let account_data: [u8; LEN] = account_data[8..LEN + 8].try_into().unwrap();
-    let reserve = unsafe { std::mem::transmute(account_data) };
+    let reserve = unsafe { std::mem::transmute::<[u8; LEN], kamino::Reserve>(account_data) };
     Ok(reserve)
 }
 
@@ -1995,7 +1994,7 @@ fn kamino_unsafe_load_obligation(
 
     const LEN: usize = std::mem::size_of::<kamino::Obligation>();
     let account_data: [u8; LEN] = account_data[8..LEN + 8].try_into().unwrap();
-    let obligation = unsafe { std::mem::transmute(account_data) };
+    let obligation = unsafe { std::mem::transmute::<[u8; LEN], kamino::Obligation>(account_data) };
     Ok(Some(obligation))
 }
 
