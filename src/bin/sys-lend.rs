@@ -848,7 +848,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .value_name("BPS")
                         .takes_value(true)
                         .validator(is_parsable::<u16>)
-                        .default_value("200")
+                        .default_value("100")
                         .help("Skip rebalance if the APY improvement would be less than this amount of BPS")
                 )
                 .arg(
