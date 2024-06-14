@@ -407,18 +407,7 @@ async fn build_instructions_for_ops<'a>(
     address: Pubkey,
     token: Token,
     wrap_unwrap_sol: bool,
-) -> Result<
-    InstructionsForOps,
-    /*
-    (
-        /*instructions: */ Vec<Instruction>,
-        /*required_compute_units: */ u32,
-        /* address_lookup_table_accounts: */ Vec<AddressLookupTableAccount>,
-        /* simulation_account_data_cache: */ AccountDataCache<'a>,
-    ),
-    */
-    Box<dyn std::error::Error>,
-> {
+) -> Result<InstructionsForOps, Box<dyn std::error::Error>> {
     let mut instructions = vec![];
     let mut address_lookup_tables = vec![];
     let mut required_compute_units = 0;
@@ -1112,8 +1101,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let pools = {
                 let mut pools = values_t!(matches, "pool", String)
-                .ok()
-                .unwrap_or_else(|| supported_pools_for_token(token));
+                    .ok()
+                    .unwrap_or_else(|| supported_pools_for_token(token));
                 pools.sort();
                 pools
             };
