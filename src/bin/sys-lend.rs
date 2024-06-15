@@ -1499,21 +1499,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("Transaction confirmed: {signature}");
 
             if let Some((deposit_pool, deposit_amount)) = operation_info.deposit_pool_and_amount {
-                dp::principal_balance_change(
+                metrics::push(dp::principal_balance_change(
                     &deposit_pool,
                     &address,
                     maybe_token,
                     token.ui_amount(deposit_amount),
-                );
+                ))
+                .await;
             }
             if let Some((withdraw_pool, withdraw_amount)) = operation_info.withdraw_pool_and_amount
             {
-                dp::principal_balance_change(
+                metrics::push(dp::principal_balance_change(
                     &withdraw_pool,
                     &address,
                     maybe_token,
                     -token.ui_amount(withdraw_amount),
-                );
+                ))
+                .await;
             }
             notifier
                 .send(&format!("{} via via {signature}", operation_info.op_msg))
