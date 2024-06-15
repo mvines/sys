@@ -863,6 +863,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .help("Do not rebalance an AMOUNT less than this value")
                 )
                 .arg(
+                    Arg::with_name("maximum_ui_amount")
+                        .long("maximum-amount")
+                        .value_name("AMOUNT")
+                        .takes_value(true)
+                        .validator(is_parsable::<f64>)
+                        .help("Do not rebalance an AMOUNT greater than this value [default: AMOUNT]")
+                )
+                .arg(
                     Arg::with_name("rebalance_amount_step_count")
                         .long("amount-step-count")
                         .value_name("NUMBER")
@@ -1146,6 +1154,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     minimum_amount
                 }
             };
+            let maximum_amount = value_t!(matches, "maximum_ui_amount", f64)
+                .ok()
+                .map(|ui_amount| maybe_token.amount(ui_amount));
+
             let retain_amount =
                 maybe_token.amount(value_t!(matches, "retain_ui_amount", f64).unwrap_or(0.));
 
@@ -1208,6 +1220,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         u64::MAX => address_token_balance,
                         requested_amount => requested_amount,
                     };
+                    assert_eq!(maximum_amount, None); // --maximum_amount is only supported by Rebalance
 
                     if address_token_balance < minimum_amount {
                         println!(
@@ -1270,6 +1283,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
                 Command::Withdraw => {
+                    assert_eq!(maximum_amount, None); // --maximum_amount is only supported by Rebalance
+
                     for pool in &pools {
                         let withdraw_pool_available_balance = supply_balance.get(pool).unwrap().2;
 
@@ -1342,14 +1357,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let withdraw_pool_available_balance =
                             supply_balance.get(withdraw_pool).unwrap().2;
 
-                        let max_requested_amount = match requested_amount {
-                            u64::MAX => {
-                                // Solend/Kamino leave 1 in sometimes :-/
-                                withdraw_pool_available_balance
-                                    .saturating_sub(1)
-                                    .max(minimum_amount)
+                        let max_requested_amount = {
+                            let requested_amount = match requested_amount {
+                                u64::MAX => {
+                                    // Solend/Kamino leave 1 in sometimes :-/
+                                    withdraw_pool_available_balance
+                                        .saturating_sub(1)
+                                        .max(minimum_amount)
+                                }
+                                requested_amount => requested_amount,
+                            };
+
+                            match maximum_amount {
+                                None => requested_amount,
+                                Some(maximum_amount) => {
+                                    if requested_amount > maximum_amount {
+                                        maximum_amount
+                                    } else {
+                                        requested_amount
+                                    }
+                                }
                             }
-                            requested_amount => requested_amount,
                         };
 
                         let min_requested_amount = if rebalance_amount_step_count > 1 {
