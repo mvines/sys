@@ -110,6 +110,19 @@ mod dp {
             .field("apy_bps", apy_bps as f64)
     }
 
+    pub fn total_supply_balance_and_apy(
+        address: &Pubkey,
+        maybe_token: MaybeToken,
+        ui_amount: f64,
+        apy_bps: u64,
+    ) -> metrics::Point {
+        metrics::Point::new("sys_lend::total_supply_balance_and_apy")
+            .tag("address", metrics::dp::pubkey_to_value(address))
+            .tag("token", maybe_token.name())
+            .field("amount", ui_amount)
+            .field("apy_bps", apy_bps as f64)
+    }
+
     pub fn principal_balance_change(
         pool: &str,
         address: &Pubkey,
@@ -1057,6 +1070,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             let (total_apr, total_balance) = pools_supply_balance_apr(&supply_balance);
+            let total_apy = apr_to_apy(total_apr) * 100.;
+
+            metrics::push(dp::total_supply_balance_and_apy(
+                &address,
+                maybe_token,
+                token.ui_amount(total_balance),
+                (total_apy * 100.) as u64,
+            ))
+            .await;
 
             if raw && total_only {
                 println!("{}", token.ui_amount(total_balance));
@@ -1066,7 +1088,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!(
                     "Total supply:    {} at {:.2}%",
                     token.format_amount(total_balance),
-                    apr_to_apy(total_apr) * 100.
+                    total_apy,
                 );
 
                 let wallet_balance = maybe_token.balance(rpc_client, &address)?;
@@ -1496,8 +1518,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             notifier
                 .send(&format!("{} via via {signature}", operation_info.op_msg))
                 .await;
-
-            return Ok(());
         }
         _ => unreachable!(),
     }
