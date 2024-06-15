@@ -741,7 +741,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .value_name("AMOUNT")
                         .takes_value(true)
                         .validator(is_amount)
-                        .help("Amount of tokens to always leave in Wallet regardless of requested deposit AMOUNT \
+                        .help("Amount of tokens to always leave in the wallet regardless of requested deposit AMOUNT \
                               [default: 0.01 for SOL, 0.0 for all other tokens]"),
                 )
                 .arg(
@@ -788,6 +788,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .validator(is_parsable::<f64>)
                         .default_value("0.0")
                         .help("Do not withdraw if AMOUNT is less than this value")
+                )
+                .arg(
+                    Arg::with_name("retain_ui_amount")
+                        .long("retain")
+                        .value_name("AMOUNT")
+                        .takes_value(true)
+                        .validator(is_amount)
+                        .default_value("0.0")
+                        .help("Amount of tokens to always leave in the pool regardless of requested withdrawal AMOUNT"),
                 )
                 .arg(
                     Arg::with_name("token")
@@ -1286,7 +1295,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     assert_eq!(maximum_amount, None); // --maximum_amount is only supported by Rebalance
 
                     for pool in &pools {
-                        let withdraw_pool_available_balance = supply_balance.get(pool).unwrap().2;
+                        let withdraw_pool_available_balance = supply_balance
+                            .get(pool)
+                            .unwrap()
+                            .2
+                            .saturating_sub(retain_amount);
 
                         let requested_amount = match requested_amount {
                             u64::MAX => {
