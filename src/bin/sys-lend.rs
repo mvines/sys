@@ -829,6 +829,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                               [default: all supported pools for the specified token]")
                 )
                 .arg(
+                    Arg::with_name("pool_from")
+                        .long("from")
+                        .value_name("POOL")
+                        .takes_value(true)
+                        .possible_values(&pools)
+                        .help("Declare the lending pool to withdraw from \
+                               [default: The behaviour described by the --pools argument]")
+                )
+                .arg(
+                    Arg::with_name("pool_into")
+                        .long("into")
+                        .value_name("POOL")
+                        .takes_value(true)
+                        .possible_values(&pools)
+                        .help("Declare the lending pool to deposit into \
+                               [default: The behaviour described by the --pools argument]")
+                )
+                .arg(
                     Arg::with_name("signer")
                         .value_name("KEYPAIR")
                         .takes_value(true)
@@ -1145,11 +1163,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let maybe_token = MaybeToken::from(value_t!(matches, "token", Token).ok());
             let token = maybe_token.token().unwrap_or(Token::wSOL);
 
+            let pool_from = value_t!(matches, "pool_from", String).ok();
+            let pool_into = value_t!(matches, "pool_into", String).ok();
+
             let pools = {
                 let mut pools = values_t!(matches, "pool", String)
                     .ok()
                     .unwrap_or_else(|| supported_pools_for_token(token));
+
+                if let Some(pool_from) = &pool_from {
+                    pools.push(pool_from.clone());
+                }
+                if let Some(pool_into) = &pool_into {
+                    pools.push(pool_into.clone());
+                }
                 pools.sort();
+                pools.dedup();
                 pools
             };
 
@@ -1232,11 +1261,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             match cmd {
                 Command::Deposit => {
+                    assert_eq!(maximum_amount, None); // --maximum_amount is only supported by Rebalance
+                    assert!(pool_from.is_none()); // Rebalance only
+                    assert!(pool_into.is_none()); // Rebalance only
+
                     let requested_amount = match requested_amount {
                         u64::MAX => address_token_balance,
                         requested_amount => requested_amount,
                     };
-                    assert_eq!(maximum_amount, None); // --maximum_amount is only supported by Rebalance
 
                     if address_token_balance < minimum_amount {
                         println!(
@@ -1302,6 +1334,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 Command::Withdraw => {
                     assert_eq!(maximum_amount, None); // --maximum_amount is only supported by Rebalance
+                    assert!(pool_from.is_none()); // Rebalance only
+                    assert!(pool_into.is_none()); // Rebalance only
 
                     for pool in &pools {
                         let withdraw_pool_available_balance = supply_balance
@@ -1376,6 +1410,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
 
                     for withdraw_pool in &pools {
+                        if let Some(pool_from) = &pool_from {
+                            if withdraw_pool != pool_from {
+                                continue;
+                            }
+                        }
+
                         let withdraw_pool_available_balance =
                             supply_balance.get(withdraw_pool).unwrap().2;
 
@@ -1427,6 +1467,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         for deposit_pool in &pools {
                             if deposit_pool == withdraw_pool {
                                 continue;
+                            }
+                            if let Some(pool_into) = &pool_into {
+                                if deposit_pool != pool_into {
+                                    continue;
+                                }
                             }
 
                             let requested_amounts = if rebalance_amount_step_count > 1 {
