@@ -2,7 +2,6 @@ use {
     solana_clap_utils::input_validators::normalize_to_url_if_moniker,
     solana_client::{
         rpc_client::{RpcClient, SerializableTransaction},
-        rpc_config::RpcSendTransactionConfig,
         rpc_response,
     },
     solana_sdk::{clock::Slot, commitment_config::CommitmentConfig},
@@ -111,11 +110,6 @@ fn send_transaction_until_expired_with_slot(
 ) -> Option<(Slot, bool)> {
     let mut last_send_attempt = None;
 
-    let config = RpcSendTransactionConfig {
-        skip_preflight: true,
-        ..RpcSendTransactionConfig::default()
-    };
-
     loop {
         if last_send_attempt.is_none()
             || Instant::now()
@@ -129,7 +123,7 @@ fn send_transaction_until_expired_with_slot(
                     transaction.get_signature()
                 );
 
-                if let Err(err) = rpc_client.send_transaction_with_config(transaction, config) {
+                if let Err(err) = rpc_client.send_transaction(transaction) {
                     println!("Unable to send transaction: {err:?}");
                 }
             }
