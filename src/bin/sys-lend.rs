@@ -1210,7 +1210,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             impl BestOperationInfo {
                 fn replace_if_greater_total_apy(&mut self, info: OperationInfo) {
                     if info.instructions_for_ops.simulation_total_apy
-                        > self
+                        >= self
                             .maybe
                             .as_ref()
                             .map(|best_info| best_info.instructions_for_ops.simulation_total_apy)
