@@ -35,6 +35,7 @@ pub enum Token {
     USDT,
     UXD,
     bSOL,
+    hSOL,
     mSOL,
     stSOL,
     JitoSOL,
@@ -61,6 +62,7 @@ impl Token {
             Token::UXD => pubkey!("7kbnvuGBxxj8AG9qp8Scn56muWGaRaFqxg1FsRp3PaFT"),
             Token::tuUSDC => pubkey!("Amig8TisuLpzun8XyGfC5HJHHGUQEscjLgoTWsCCKihg"),
             Token::bSOL => pubkey!("bSo13r4TkiE4KumL71LsHTPpL2euBYLFx6h9HP3piy1"),
+            Token::hSOL => pubkey!("he1iusmfkpAdwvxLNGV8Y1iSbj4rUy6yMhEA3fotn9A"),
             Token::mSOL => pubkey!("mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So"),
             Token::stSOL => pubkey!("7dHbWXmci3dT8UFYWYZweBLXgycu7Y3iL6trKn1Y7ARj"),
             Token::JitoSOL => pubkey!("J1toso1uCk3RLmjorhTtrVwY9HJ7X8V9yYac6Y7kGCPn"),
@@ -90,6 +92,7 @@ impl Token {
             Token::UXD => "UXD$",
             Token::tuUSDC => "tu($)",
             Token::bSOL => "b◎",
+            Token::hSOL => "h◎",
             Token::mSOL => "m◎",
             Token::stSOL => "st◎",
             Token::JitoSOL => "jito◎",
@@ -123,6 +126,7 @@ impl Token {
             Token::stSOL
             | Token::tuSOL
             | Token::bSOL
+            | Token::hSOL
             | Token::mSOL
             | Token::JitoSOL
             | Token::tumSOL
@@ -231,6 +235,7 @@ impl Token {
             | Token::USDT
             | Token::UXD
             | Token::bSOL
+            | Token::hSOL
             | Token::mSOL
             | Token::stSOL
             | Token::JitoSOL

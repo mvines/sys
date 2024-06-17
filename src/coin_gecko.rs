@@ -36,6 +36,7 @@ fn token_to_coin(token: &MaybeToken) -> Result<&'static str, Box<dyn std::error:
             Token::USDT => "tether",
             Token::UXD => "uxd-stablecoin",
             Token::bSOL => "blazestake-staked-sol",
+            Token::hSOL => "msol",
             Token::mSOL => "msol",
             Token::stSOL => "lido-staked-sol",
             Token::JitoSOL => "jito-staked-sol",
@@ -91,6 +92,8 @@ pub async fn get_current_price(token: &MaybeToken) -> Result<Decimal, Box<dyn st
                 solana: Option<CurrencyList>,
                 #[serde(rename = "blazestake-staked-sol")]
                 bsol: Option<CurrencyList>,
+                #[serde(rename = "helius-staked-sol")]
+                hsol: Option<CurrencyList>,
                 msol: Option<CurrencyList>,
                 #[serde(rename = "lido-staked-sol")]
                 stsol: Option<CurrencyList>,
@@ -128,6 +131,7 @@ pub async fn get_current_price(token: &MaybeToken) -> Result<Decimal, Box<dyn st
                 .or(coins.tether)
                 .or(coins.uxd)
                 .or(coins.bsol)
+                .or(coins.hsol)
                 .or(coins.jlp)
                 .or(coins.jup)
                 .or(coins.jto)
