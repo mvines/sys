@@ -893,6 +893,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .long("dry-run")
                         .takes_value(false)
                 )
+                .arg(
+                    Arg::with_name("skip_apy_check")
+                        .long("skip-apy-check")
+                        .takes_value(false)
+                        .help("Skip the --minimum-apy-improvement check"),
+                )
         )
         .subcommand(
             SubCommand::with_name("supply-balance")
@@ -1134,6 +1140,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let address = address.expect("address");
             let signer = signer.expect("signer");
             let dry_run = matches.is_present("dry_run");
+            let skip_apy_check = matches.is_present("skip_apy_check");
 
             let maybe_token = MaybeToken::from(value_t!(matches, "token", Token).ok());
             let token = maybe_token.token().unwrap_or(Token::wSOL);
@@ -1269,7 +1276,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 instructions_for_ops.simulation_total_apy,
                             );
 
-                            if instructions_for_ops.simulation_total_apy < minimum_apy {
+                            if !skip_apy_check
+                                && instructions_for_ops.simulation_total_apy < minimum_apy
+                            {
                                 Err(format!("{op_msg}. {minimum_apy:.2}% minimum APY not met")
                                     .into())
                             } else {
@@ -1466,7 +1475,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         instructions_for_ops.simulation_total_apy
                                     );
 
-                                    if apy_improvement < minimum_apy {
+                                    if !skip_apy_check && apy_improvement < minimum_apy {
                                         Err(format!("{op_msg} (minimum: {minimum_apy:.2}%)").into())
                                     } else {
                                         Ok(OperationInfo {
