@@ -4415,7 +4415,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .takes_value(true)
                 .global(true)
                 .validator(is_url)
-                .help("Helium JSON RPC URL to use only for the proprietary getPriorityFeeEstimate RPC method"),
+                .help("Helius JSON RPC URL to use only for the proprietary getPriorityFeeEstimate RPC method"),
         )
         .arg(
             Arg::with_name("verbose")
@@ -5129,7 +5129,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .setting(AppSettings::InferSubcommands)
                         .subcommand(
                             SubCommand::with_name("swap")
-                                .about("Swap lots in the local database only")
+                                .about("Swap lots")
                                 .arg(
                                     Arg::with_name("lot_number1")
                                         .value_name("LOT NUMBER")
@@ -5146,6 +5146,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         .validator(is_parsable::<usize>)
                                         .help("Second lot number"),
                                 )
+                        )
+                        .subcommand(
+                            SubCommand::with_name("collect")
+                                .about("Collect non-disposed lots of a desired type into an address")
+                                .arg(
+                                    Arg::with_name("token")
+                                        .value_name("SOL or SPL Token")
+                                        .takes_value(true)
+                                        .required(true)
+                                        .validator(is_valid_token_or_sol)
+                                        .help("Token type"),
+                                )
+                                .arg(
+                                    Arg::with_name("address")
+                                        .value_name("ADDRESS")
+                                        .takes_value(true)
+                                        .required(true)
+                                        .validator(is_valid_pubkey)
+                                        .help("Account address"),
+                                )
+                                .arg(lot_selection_arg())
                         )
                         .subcommand(
                             SubCommand::with_name("delete")
@@ -5169,7 +5190,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         )
                         .subcommand(
                             SubCommand::with_name("move")
-                                .about("Move a lot to a new addresses in the local database only. \
+                                .about("Move a lot to a new address. \
                                         Useful if the on-chain state is out of sync with the database")
                                 .arg(
                                     Arg::with_name("lot_number")
@@ -6144,6 +6165,56 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let lot_number2 = value_t_or_exit!(arg_matches, "lot_number2", usize);
                     println!("Swapping lots {lot_number1} and {lot_number2}");
                     db.swap_lots(lot_number1, lot_number2)?;
+                }
+                ("collect", Some(arg_matches)) => {
+                    let address = pubkey_of(arg_matches, "address").unwrap();
+                    let token = MaybeToken::from(value_t!(arg_matches, "token", Token).ok());
+                    let lot_selection_method =
+                        value_t_or_exit!(arg_matches, "lot_selection", LotSelectionMethod);
+
+                    println!(
+                        "Collecting {lot_selection_method:?} lots for {address} ({})",
+                        token.name()
+                    );
+                    loop {
+                        let mut current_lots = vec![];
+                        let mut candidate_lots = vec![];
+                        for account in db.get_accounts() {
+                            if (account.token == token)
+                                || (token.is_sol_or_wsol() && account.token.is_sol_or_wsol())
+                            {
+                                if account.address == address && account.token == token {
+                                    assert!(current_lots.is_empty());
+                                    current_lots = account.lots;
+                                } else {
+                                    candidate_lots.extend(account.lots);
+                                }
+                            }
+                        }
+
+                        sort_lots_by_selection_method(&mut current_lots, lot_selection_method);
+                        sort_lots_by_selection_method(&mut candidate_lots, lot_selection_method);
+
+                        while !current_lots.is_empty() && !candidate_lots.is_empty() {
+                            if lot_selection_method.cmp_lots(&current_lots[0], &candidate_lots[0])
+                                == std::cmp::Ordering::Greater
+                            {
+                                break;
+                            }
+                            current_lots.remove(0);
+                        }
+
+                        if current_lots.is_empty() || candidate_lots.is_empty() {
+                            println!("Done");
+                            break;
+                        }
+
+                        println!(
+                            "Swapping lots {} and {}",
+                            current_lots[0].lot_number, candidate_lots[0].lot_number
+                        );
+                        db.swap_lots(current_lots[0].lot_number, candidate_lots[0].lot_number)?;
+                    }
                 }
                 ("move", Some(arg_matches)) => {
                     let lot_number = value_t_or_exit!(arg_matches, "lot_number", usize);

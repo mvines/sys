@@ -656,7 +656,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .takes_value(true)
                 .global(true)
                 .validator(is_url)
-                .help("Helium JSON RPC URL to use only for the proprietary getPriorityFeeEstimate RPC method"),
+                .help("Helius JSON RPC URL to use only for the proprietary getPriorityFeeEstimate RPC method"),
         )
         .arg(
             Arg::with_name("priority_fee_exact")

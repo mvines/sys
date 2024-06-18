@@ -322,6 +322,10 @@ impl MaybeToken {
         !self.is_token()
     }
 
+    pub fn is_sol_or_wsol(&self) -> bool {
+        self.is_sol() || self.token() == Some(Token::wSOL)
+    }
+
     pub fn ui_amount(&self, amount: u64) -> f64 {
         match self.0 {
             None => lamports_to_sol(amount),

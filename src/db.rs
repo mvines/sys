@@ -273,7 +273,7 @@ impl LotAcquistion {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, EnumString, IntoStaticStr)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize, EnumString, IntoStaticStr)]
 pub enum LotSelectionMethod {
     #[strum(serialize = "fifo")]
     FirstInFirstOut,
@@ -283,6 +283,17 @@ pub enum LotSelectionMethod {
     LowestBasis,
     #[strum(serialize = "highest-basis")]
     HighestBasis,
+}
+
+impl LotSelectionMethod {
+    pub fn cmp_lots(&self, a: &Lot, b: &Lot) -> std::cmp::Ordering {
+        match self {
+            LotSelectionMethod::FirstInFirstOut => a.acquisition.when.cmp(&b.acquisition.when),
+            LotSelectionMethod::LastInFirstOut => b.acquisition.when.cmp(&a.acquisition.when),
+            LotSelectionMethod::LowestBasis => a.acquisition.price().cmp(&b.acquisition.price()),
+            LotSelectionMethod::HighestBasis => b.acquisition.price().cmp(&a.acquisition.price()),
+        }
+    }
 }
 
 pub const POSSIBLE_LOT_SELECTION_METHOD_VALUES: &[&str] =
@@ -328,6 +339,18 @@ impl Lot {
             * Decimal::from_f64(token.ui_amount(self.amount)).unwrap())
         .try_into()
         .unwrap()
+    }
+}
+
+pub fn sort_lots_by_selection_method(
+    lots: &mut Vec<Lot>,
+    lot_selection_method: LotSelectionMethod,
+) {
+    lots.sort_by(|a, b| lot_selection_method.cmp_lots(a, b));
+    if lot_selection_method == LotSelectionMethod::FirstInFirstOut && !lots.is_empty() {
+        // Assume the oldest lot is the rent-reserve. Extract it as the last resort
+        let first_lot = lots.remove(0);
+        lots.push(first_lot);
     }
 }
 
@@ -455,25 +478,7 @@ fn split_lots(
     let mut extracted_lots = vec![];
     let mut remaining_lots = vec![];
 
-    match lot_selection_method {
-        LotSelectionMethod::FirstInFirstOut => {
-            lots.sort_by(|a, b| a.acquisition.when.cmp(&b.acquisition.when));
-            if !lots.is_empty() {
-                // Assume the oldest lot is the rent-reserve. Extract it as the last resort
-                let first_lot = lots.remove(0);
-                lots.push(first_lot);
-            }
-        }
-        LotSelectionMethod::LastInFirstOut => {
-            lots.sort_by(|a, b| b.acquisition.when.cmp(&a.acquisition.when))
-        }
-        LotSelectionMethod::LowestBasis => {
-            lots.sort_by(|a, b| a.acquisition.price().cmp(&b.acquisition.price()))
-        }
-        LotSelectionMethod::HighestBasis => {
-            lots.sort_by(|a, b| b.acquisition.price().cmp(&a.acquisition.price()))
-        }
-    }
+    sort_lots_by_selection_method(&mut lots, lot_selection_method);
 
     let mut amount_remaining = amount;
     for mut lot in lots {
