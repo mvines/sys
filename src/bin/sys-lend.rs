@@ -32,7 +32,7 @@ use {
         send_transaction_until_expired,
         token::*,
         vendor::{
-            kamino, marginfi_v2,
+            drift, kamino, marginfi_v2,
             solend::{self, math::TryMul},
         },
         *,
@@ -45,30 +45,30 @@ lazy_static::lazy_static! {
             Token::USDC,
             Token::USDT,
             Token::wSOL,
-        ])) ,
+        ])),
         ("solend-turbosol", HashSet::from([
             Token::USDC,
-        ])) ,
+        ])),
         ("solend-jlp", HashSet::from([
             Token::USDC,
             Token::wSOL,
-        ])) ,
+        ])),
         ("mfi", HashSet::from([
             Token::USDC,
             Token::USDT,
             Token::UXD,
             Token::wSOL,
-        ])) ,
+        ])),
         ("kamino-main", HashSet::from([
             Token::USDC,
             Token::USDT,
             Token::JitoSOL,
             Token::wSOL,
-        ])) ,
+        ])),
         ("kamino-jlp", HashSet::from([
             Token::USDC,
             Token::JLP,
-        ])) ,
+        ])),
         ("kamino-altcoins", HashSet::from([
             Token::USDC,
             Token::JUP,
@@ -77,7 +77,10 @@ lazy_static::lazy_static! {
             Token::WEN,
             Token::WIF,
             Token::BONK,
-        ]))
+        ])),
+        ("drift", HashSet::from([
+            Token::USDC,
+        ])),
     ]);
 }
 
@@ -322,6 +325,8 @@ fn pool_supply_apr(
         solend_apr(pool, token, account_data_cache)?
     } else if pool == "mfi" {
         mfi_apr(token, account_data_cache)?
+    } else if pool == "drift" {
+        drift_apr(token, account_data_cache)?
     } else {
         unreachable!()
     })
@@ -354,6 +359,8 @@ fn pool_supply_balance(
         solend_deposited_amount(pool, address, token, account_data_cache)?
     } else if pool == "mfi" {
         mfi_deposited_amount(address, token, account_data_cache)?
+    } else if pool == "drift" {
+        drift_deposited_amount(address, token, account_data_cache)?
     } else {
         unreachable!()
     })
@@ -432,6 +439,8 @@ async fn build_instructions_for_ops<'a>(
             solend_deposit_or_withdraw(*op, pool, address, token, amount, account_data_cache)?
         } else if *pool == "mfi" {
             mfi_deposit_or_withdraw(*op, address, token, amount, false, account_data_cache)?
+        } else if *pool == "drift" {
+            drift_deposit_or_withdraw(*op, address, token, amount, false, account_data_cache)?
         } else {
             unreachable!();
         };
@@ -2699,7 +2708,7 @@ fn solend_deposit_or_withdraw(
                     AccountMeta::new_readonly(spl_token::id(), false),
                 ],
             ));
-            (amount, 100_000)
+            (amount, 200_000)
         }
         Operation::Withdraw => {
             // Instruction: Solend: Refresh Reserve
@@ -2817,7 +2826,7 @@ fn solend_deposit_or_withdraw(
 
             (
                 amount - 1, // HACK!! Sometimes Solend loses a lamport? This breaks `rebalance`...
-                150_000,
+                200_000,
             )
         }
     };
@@ -2827,5 +2836,255 @@ fn solend_deposit_or_withdraw(
         required_compute_units,
         amount,
         address_lookup_table: Some(pubkey!["89ig7Cu6Roi9mJMqpY8sBkPYL2cnqzpgP16sJxSUbvct"]),
+    })
+}
+
+//////////////////////////////////////////////////////////////////////////////
+// [ Drift Stuff ] ///////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////////
+
+const DRIFT_PROGRAM: Pubkey = pubkey!["dRiftyHA39MWEi3m9aunc5MzRF1JYuBsbn6VPcn33UH"];
+
+fn drift_load_user(
+    user_address: Pubkey,
+    account_data_cache: &mut AccountDataCache,
+) -> Result<Option<drift::user::User>, Box<dyn std::error::Error>> {
+    let (account_data, _context_slot) = account_data_cache.get(user_address)?;
+
+    if account_data.is_empty() {
+        Ok(None)
+    } else {
+        const LEN: usize = std::mem::size_of::<drift::user::User>();
+        assert_eq!(LEN, drift::user::SIZE - 8);
+        let account_data: [u8; LEN] = account_data[8..LEN + 8].try_into().unwrap();
+        let user = unsafe { std::mem::transmute::<[u8; LEN], drift::user::User>(account_data) };
+        Ok(Some(user))
+    }
+}
+
+fn drift_find_and_load_user(
+    wallet_address: Pubkey,
+    account_data_cache: &mut AccountDataCache,
+) -> Result<(Pubkey, Option<drift::user::User>), Box<dyn std::error::Error>> {
+    let user_address = Pubkey::find_program_address(
+        &[
+            b"user",
+            &wallet_address.to_bytes(),
+            &[0, 0], // subaccount 0
+        ],
+        &DRIFT_PROGRAM,
+    )
+    .0;
+
+    let user = drift_load_user(user_address, account_data_cache)?;
+    if let Some(ref user) = user {
+        assert_eq!(user.authority, wallet_address);
+    }
+
+    Ok((user_address, user))
+}
+
+fn drift_load_spot_market(
+    spot_market_address: Pubkey,
+    account_data_cache: &mut AccountDataCache,
+) -> Result<drift::spot_market::SpotMarket, Box<dyn std::error::Error>> {
+    let (account_data, _context_slot) = account_data_cache.get(spot_market_address)?;
+
+    const LEN: usize = std::mem::size_of::<drift::spot_market::SpotMarket>();
+    assert_eq!(LEN, drift::spot_market::SIZE - 8);
+    let account_data: [u8; LEN] = account_data[8..LEN + 8].try_into().unwrap();
+    let spot_market =
+        unsafe { std::mem::transmute::<[u8; LEN], drift::spot_market::SpotMarket>(account_data) };
+    Ok(spot_market)
+}
+
+fn drift_find_and_load_spot_market(
+    token: Token,
+    account_data_cache: &mut AccountDataCache,
+) -> Result<drift::spot_market::SpotMarket, Box<dyn std::error::Error>> {
+    let market_index: u16 = match token {
+        Token::USDC => 0,
+        _ => return Err(format!("Drift support for {} not added yet", token.name()).into()),
+    };
+
+    let spot_market_address = Pubkey::find_program_address(
+        &[b"spot_market", &market_index.to_le_bytes()],
+        &DRIFT_PROGRAM,
+    )
+    .0;
+
+    let spot_market = drift_load_spot_market(spot_market_address, account_data_cache)?;
+    assert_eq!(spot_market.mint, token.mint());
+    assert_eq!(spot_market.pubkey, spot_market_address);
+    Ok(spot_market)
+}
+
+fn drift_apr(
+    token: Token,
+    account_data_cache: &mut AccountDataCache,
+) -> Result<f64, Box<dyn std::error::Error>> {
+    let spot_market = drift_find_and_load_spot_market(token, account_data_cache)?;
+    Ok(drift::calculate_accumulated_interest(&spot_market).deposit_rate)
+}
+
+fn drift_deposited_amount(
+    wallet_address: Pubkey,
+    token: Token,
+    account_data_cache: &mut AccountDataCache,
+) -> Result<(/*balance: */ u64, /* available_balance: */ u64), Box<dyn std::error::Error>> {
+    let spot_market = drift_find_and_load_spot_market(token, account_data_cache)?;
+    let (_user_address, user) = drift_find_and_load_user(wallet_address, account_data_cache)?;
+
+    let deposited_amount = match user {
+        None => 0,
+        Some(user) => {
+            let scaled_balance = user
+                .spot_positions
+                .iter()
+                .find_map(|spot_position| {
+                    if spot_position.market_index == spot_market.market_index
+                        && spot_position.scaled_balance > 0
+                        && spot_position.balance_type == drift::user::SpotBalanceType::Deposit
+                    {
+                        Some(spot_position.scaled_balance as u128)
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or_default();
+
+            drift::scaled_balance_to_token_amount(
+                scaled_balance,
+                &spot_market,
+                drift::user::SpotBalanceType::Deposit,
+            )
+        }
+    };
+
+    let remaining_outflow = u64::MAX;
+    Ok((deposited_amount, deposited_amount.min(remaining_outflow)))
+}
+
+fn drift_deposit_or_withdraw(
+    op: Operation,
+    wallet_address: Pubkey,
+    token: Token,
+    amount: u64,
+    _verbose: bool,
+    account_data_cache: &mut AccountDataCache,
+) -> Result<DepositOrWithdrawResult, Box<dyn std::error::Error>> {
+    let state_address = Pubkey::find_program_address(&[b"drift_state"], &DRIFT_PROGRAM).0;
+
+    let (user_address, _user) = drift_find_and_load_user(wallet_address, account_data_cache)
+        .map_err(|err| format!("No Drift account found for {wallet_address}. Manually deposit once into Drift and retry ({err})"))?;
+    let user_stats_address =
+        Pubkey::find_program_address(&[b"user_stats", &wallet_address.to_bytes()], &DRIFT_PROGRAM)
+            .0;
+
+    let spot_market = drift_find_and_load_spot_market(token, account_data_cache)?;
+
+    let (instructions, required_compute_units, amount) = match op {
+        Operation::Deposit => {
+            // Drift: Deposit
+            let deposit_data = {
+                let mut v = vec![0xf2, 0x23, 0xc6, 0x89, 0x52, 0xe1, 0xf2, 0xb6];
+                v.extend(spot_market.market_index.to_le_bytes());
+                v.extend(amount.to_le_bytes());
+                v.extend([/* Reduce Only = */ 0]);
+                v
+            };
+
+            let account_meta = vec![
+                // State
+                AccountMeta::new_readonly(state_address, false),
+                // User
+                AccountMeta::new(user_address, false),
+                // User Stats
+                AccountMeta::new(user_stats_address, false),
+                // Authority
+                AccountMeta::new(wallet_address, false),
+                // Spot Market Vault
+                AccountMeta::new(spot_market.vault, false),
+                // User Token Account
+                AccountMeta::new(
+                    spl_associated_token_account::get_associated_token_address(
+                        &wallet_address,
+                        &token.mint(),
+                    ),
+                    false,
+                ),
+                // Token Program
+                AccountMeta::new_readonly(spl_token::id(), false),
+                // Spot Market Oracle
+                AccountMeta::new_readonly(spot_market.oracle, false),
+                // Spot Market
+                AccountMeta::new(spot_market.pubkey, false),
+            ];
+
+            let instructions = vec![Instruction::new_with_bytes(
+                DRIFT_PROGRAM,
+                &deposit_data,
+                account_meta,
+            )];
+
+            (instructions, 100_000, amount)
+        }
+        Operation::Withdraw => {
+            let drift_signer_address =
+                Pubkey::find_program_address(&[b"drift_signer"], &DRIFT_PROGRAM).0;
+
+            // Drift: Withdraw
+            let withdraw_data = {
+                let mut v = vec![0xb7, 0x12, 0x46, 0x9c, 0x94, 0x6d, 0xa1, 0x22];
+                v.extend(spot_market.market_index.to_le_bytes());
+                v.extend(amount.to_le_bytes());
+                v.extend([/* Reduce Only = */ 1]);
+                v
+            };
+
+            let account_meta = vec![
+                // State
+                AccountMeta::new_readonly(state_address, false),
+                // User
+                AccountMeta::new(user_address, false),
+                // User Stats
+                AccountMeta::new(user_stats_address, false),
+                // Authority
+                AccountMeta::new(wallet_address, false),
+                // Spot Market Vault
+                AccountMeta::new(spot_market.vault, false),
+                // Drift Signer
+                AccountMeta::new(drift_signer_address, false),
+                // User Token Account
+                AccountMeta::new(
+                    spl_associated_token_account::get_associated_token_address(
+                        &wallet_address,
+                        &token.mint(),
+                    ),
+                    false,
+                ),
+                // Token Program
+                AccountMeta::new_readonly(spl_token::id(), false),
+                // Spot Market Oracle
+                AccountMeta::new_readonly(spot_market.oracle, false),
+                // Spot Market
+                AccountMeta::new(spot_market.pubkey, false),
+            ];
+
+            let instructions = vec![Instruction::new_with_bytes(
+                DRIFT_PROGRAM,
+                &withdraw_data,
+                account_meta,
+            )];
+
+            (instructions, 200_000, amount)
+        }
+    };
+
+    Ok(DepositOrWithdrawResult {
+        instructions,
+        required_compute_units,
+        amount,
+        address_lookup_table: Some(pubkey!["D9cnvzswDikQDf53k4HpQ3KJ9y1Fv3HGGDFYMXnK5T6c"]),
     })
 }

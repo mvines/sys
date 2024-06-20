@@ -37,7 +37,7 @@ You can also run `./fetch-release.sh` to download the latest Linux and macOS bin
 * Historical and spot price via CoinGecko for SOL and supported tokens.
 * Data is contained in a local `sell-your-sol/` subdirectory that can be easily backed up, and is editable by hand if necessary
 * Full Excel export, useful to hand off to a CPA or your entity's finance department. Sorry no TurboTax import!
-* Companion `sys-lend` program for easy stablecoin and memecoin lending into MarginFi, Kamino and Solend
+* Companion `sys-lend` program for easy stablecoin and memecoin lending into MarginFi, Kamino, Drift and Solend
 
 ## Examples
 Explore the help system instead:
