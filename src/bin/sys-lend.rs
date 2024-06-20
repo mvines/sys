@@ -2157,11 +2157,6 @@ fn kamino_deposit_or_withdraw(
     )
     .0;
 
-    let reserve_farm_state = reserve.farm_collateral;
-    let reserve_liquidity_supply = reserve.liquidity.supply_vault;
-    let reserve_collateral_mint = reserve.collateral.mint_pubkey;
-    let reserve_destination_deposit_collateral = reserve.collateral.supply_vault;
-
     let obligation_address = kamino_find_obligation_address(wallet_address, reserve.lending_market);
     let obligation = kamino_unsafe_load_obligation(obligation_address, account_data_cache)?;
 
@@ -2172,7 +2167,7 @@ fn kamino_deposit_or_withdraw(
     let obligation_farm_user_state = Pubkey::find_program_address(
         &[
             b"user",
-            &reserve_farm_state.to_bytes(),
+            &reserve.farm_collateral.to_bytes(),
             &obligation_address.to_bytes(),
         ],
         &FARMS_PROGRAM,
@@ -2275,7 +2270,7 @@ fn kamino_deposit_or_withdraw(
             // Reserve
             AccountMeta::new(market_reserve_address, false),
             // Reserve Farm State
-            AccountMeta::new(reserve_farm_state, false),
+            AccountMeta::new(reserve.farm_collateral, false),
             // Obligation Farm User State
             AccountMeta::new(obligation_farm_user_state, false),
             // Lending Market
@@ -2284,14 +2279,12 @@ fn kamino_deposit_or_withdraw(
             AccountMeta::new_readonly(FARMS_PROGRAM, false),
             // Rent
             AccountMeta::new_readonly(sysvar::rent::ID, false),
-            // Token Program
-            AccountMeta::new_readonly(spl_token::id(), false),
             // System Program
             AccountMeta::new_readonly(system_program::ID, false),
         ],
     );
 
-    if reserve_farm_state != Pubkey::default() {
+    if reserve.farm_collateral != Pubkey::default() {
         if account_data_cache
             .get(obligation_farm_user_state)?
             .0
@@ -2331,12 +2324,14 @@ fn kamino_deposit_or_withdraw(
                     AccountMeta::new(lending_market_authority, false),
                     // Reserve
                     AccountMeta::new(market_reserve_address, false),
+                    // Reserve Liquidity Mint
+                    AccountMeta::new(reserve.liquidity.mint_pubkey, false),
                     // Reserve Source Collateral
-                    AccountMeta::new(reserve_destination_deposit_collateral, false),
+                    AccountMeta::new(reserve.collateral.supply_vault, false),
                     // Reserve Collateral Mint
-                    AccountMeta::new(reserve_collateral_mint, false),
+                    AccountMeta::new(reserve.collateral.mint_pubkey, false),
                     // Reserve Liquidity Supply
-                    AccountMeta::new(reserve_liquidity_supply, false),
+                    AccountMeta::new(reserve.liquidity.supply_vault, false),
                     // User Liquidity
                     AccountMeta::new(
                         spl_associated_token_account::get_associated_token_address(
@@ -2347,6 +2342,8 @@ fn kamino_deposit_or_withdraw(
                     ),
                     // User Destination Collateral
                     AccountMeta::new_readonly(KAMINO_LEND_PROGRAM, false),
+                    // Token Program
+                    AccountMeta::new_readonly(spl_token::id(), false),
                     // Token Program
                     AccountMeta::new_readonly(spl_token::id(), false),
                     // Sysvar: Instructions
@@ -2378,12 +2375,14 @@ fn kamino_deposit_or_withdraw(
                     AccountMeta::new(lending_market_authority, false),
                     // Reserve
                     AccountMeta::new(market_reserve_address, false),
+                    // Reserve Liquidity Mint
+                    AccountMeta::new(reserve.liquidity.mint_pubkey, false),
                     // Reserve Liquidity Supply
-                    AccountMeta::new(reserve_liquidity_supply, false),
+                    AccountMeta::new(reserve.liquidity.supply_vault, false),
                     // Reserve Collateral Mint
-                    AccountMeta::new(reserve_collateral_mint, false),
+                    AccountMeta::new(reserve.collateral.mint_pubkey, false),
                     // Reserve Destination Deposit Collateral
-                    AccountMeta::new(reserve_destination_deposit_collateral, false),
+                    AccountMeta::new(reserve.collateral.supply_vault, false),
                     // User Source Liquidity
                     AccountMeta::new(
                         spl_associated_token_account::get_associated_token_address(
@@ -2396,6 +2395,8 @@ fn kamino_deposit_or_withdraw(
                     AccountMeta::new_readonly(KAMINO_LEND_PROGRAM, false),
                     // Token Program
                     AccountMeta::new_readonly(spl_token::id(), false),
+                    // Token Program
+                    AccountMeta::new_readonly(spl_token::id(), false),
                     // Sysvar: Instructions
                     AccountMeta::new_readonly(sysvar::instructions::ID, false),
                 ],
@@ -2406,7 +2407,7 @@ fn kamino_deposit_or_withdraw(
     };
 
     // Instruction: Kamino: Refresh Obligation Farms For Reserve
-    if reserve_farm_state != Pubkey::default() {
+    if reserve.farm_collateral != Pubkey::default() {
         instructions.push(kamino_refresh_obligation_farms_for_reserve);
     }
 
