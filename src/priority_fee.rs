@@ -105,8 +105,6 @@ pub fn apply_priority_fee(
     compute_unit_limit: u32,
     priority_fee: PriorityFee,
 ) -> Result<u64, Box<dyn std::error::Error>> {
-    assert_ne!(compute_unit_limit, 0);
-
     let compute_budget = match priority_fee {
         PriorityFee::Exact { lamports } => ComputeBudget::new(compute_unit_limit, lamports),
         PriorityFee::Auto {
@@ -216,13 +214,14 @@ pub fn apply_priority_fee(
         "Priority fee too large, Bug?"
     );
 
+    assert_ne!(compute_budget.compute_unit_limit, 0);
     instructions.push(
         compute_budget::ComputeBudgetInstruction::set_compute_unit_limit(
             compute_budget.compute_unit_limit,
         ),
     );
 
-    if compute_budget.priority_fee_lamports() > 0 {
+    if compute_budget.compute_unit_price_micro_lamports > 0 {
         instructions.push(
             compute_budget::ComputeBudgetInstruction::set_compute_unit_price(
                 compute_budget.compute_unit_price_micro_lamports,
