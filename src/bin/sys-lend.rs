@@ -1622,7 +1622,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .await;
             }
             notifier
-                .send(&format!("{} via via {signature}", operation_info.op_msg))
+                .send(&format!("{} via {signature}", operation_info.op_msg))
                 .await;
         }
         _ => unreachable!(),
