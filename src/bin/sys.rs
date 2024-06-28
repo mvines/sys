@@ -1923,6 +1923,101 @@ async fn process_account_cost_basis(
     Ok(())
 }
 
+fn print_current_holdings(
+    held_tokens: &BTreeMap<
+        MaybeToken,
+        (
+            /*price*/ Option<Decimal>,
+            /*amount*/ u64,
+            RealizedGain,
+        ),
+    >,
+    tax_rate: Option<&TaxRate>,
+) {
+    println!("Current Holdings");
+    let mut held_tokens = held_tokens
+        .iter()
+        .map(
+            |(held_token, (current_token_price, total_held_amount, unrealized_gain))| {
+                let total_value = current_token_price.map(|current_token_price| {
+                    f64::try_from(
+                        Decimal::from_f64(held_token.ui_amount(*total_held_amount)).unwrap()
+                            * current_token_price,
+                    )
+                    .unwrap()
+                });
+
+                (
+                    held_token,
+                    total_value,
+                    current_token_price,
+                    total_held_amount,
+                    unrealized_gain,
+                )
+            },
+        )
+        .collect::<Vec<_>>();
+
+    // Order current holdings by `total_value`
+    held_tokens.sort_unstable_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+    for (held_token, total_value, current_token_price, total_held_amount, unrealized_gain) in
+        held_tokens
+    {
+        if *total_held_amount == 0 {
+            continue;
+        }
+
+        let estimated_tax = tax_rate
+            .and_then(|tax_rate| {
+                let tax = unrealized_gain.short_term_cap_gain * tax_rate.short_term_gain
+                    + unrealized_gain.long_term_cap_gain * tax_rate.long_term_gain;
+
+                if tax > 0. {
+                    Some(format!(
+                        "; ${} estimated tax",
+                        tax.separated_string_with_fixed_place(2)
+                    ))
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_default();
+
+        if held_token.fiat_fungible() {
+            println!(
+                "  {:<7}       {:<20}",
+                held_token.to_string(),
+                held_token.format_amount(*total_held_amount)
+            );
+        } else {
+            println!(
+                "  {:<7}       {:<20} [{}; ${:>4} per {:>4}{}]",
+                held_token.to_string(),
+                held_token.format_amount(*total_held_amount),
+                total_value
+                    .map(|tv| {
+                        format!(
+                            "${:14} ({:>8}%)",
+                            tv.separated_string_with_fixed_place(2),
+                            ((tv - unrealized_gain.basis) / unrealized_gain.basis * 100.)
+                                .separated_string_with_fixed_place(2)
+                        )
+                    })
+                    .unwrap_or_else(|| "?".into()),
+                current_token_price
+                    .map(|current_token_price| f64::try_from(current_token_price)
+                        .unwrap()
+                        .separated_string_with_fixed_place(3))
+                    .unwrap_or_else(|| "?".into()),
+                held_token,
+                estimated_tax,
+            );
+        }
+    }
+    println!();
+}
+
 async fn process_account_list(
     db: &Db,
     rpc_client: &RpcClient,
@@ -2030,6 +2125,24 @@ async fn process_account_list(
             account.assert_lot_balance();
 
             if summary_only {
+                if !account.lots.is_empty() {
+                    let mut account_basis = 0.;
+                    let mut account_value = 0.;
+                    for lot in account.lots.iter() {
+                        let value = current_token_price.map(|price| {
+                            f64::try_from(
+                                Decimal::from_f64(account.token.ui_amount(lot.amount)).unwrap()
+                                    * price,
+                            )
+                            .unwrap()
+                        });
+                        account_basis += lot.basis(account.token);
+                        account_value += value.unwrap_or_default();
+                    }
+                    held_token.2.basis += account_basis;
+                    total_current_basis += account_basis;
+                    total_current_value += account_value;
+                }
                 continue;
             }
 
@@ -2197,6 +2310,17 @@ async fn process_account_list(
             println!();
         }
 
+        if summary_only {
+            print_current_holdings(&held_tokens, db.get_tax_rate());
+            println!(
+                "Current Value:       ${} ({}%)",
+                total_current_value.separated_string_with_fixed_place(2),
+                (((total_current_value - total_current_fiat_value) - total_current_basis)
+                    / total_current_basis
+                    * 100.)
+                    .separated_string_with_fixed_place(2),
+            );
+        }
         if account_filter.is_some() || summary_only {
             return Ok(());
         }
@@ -2364,89 +2488,7 @@ async fn process_account_list(
         }
         println!();
 
-        println!("Current Holdings");
-        let mut held_tokens = held_tokens
-            .into_iter()
-            .map(
-                |(held_token, (current_token_price, total_held_amount, unrealized_gain))| {
-                    let total_value = current_token_price.map(|current_token_price| {
-                        f64::try_from(
-                            Decimal::from_f64(held_token.ui_amount(total_held_amount)).unwrap()
-                                * current_token_price,
-                        )
-                        .unwrap()
-                    });
-
-                    (
-                        held_token,
-                        total_value,
-                        current_token_price,
-                        total_held_amount,
-                        unrealized_gain,
-                    )
-                },
-            )
-            .collect::<Vec<_>>();
-
-        // Order current holdings by `total_value`
-        held_tokens
-            .sort_unstable_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-
-        for (held_token, total_value, current_token_price, total_held_amount, unrealized_gain) in
-            held_tokens
-        {
-            if total_held_amount == 0 {
-                continue;
-            }
-
-            let estimated_tax = tax_rate
-                .and_then(|tax_rate| {
-                    let tax = unrealized_gain.short_term_cap_gain * tax_rate.short_term_gain
-                        + unrealized_gain.long_term_cap_gain * tax_rate.long_term_gain;
-
-                    if tax > 0. {
-                        Some(format!(
-                            "; ${} estimated tax",
-                            tax.separated_string_with_fixed_place(2)
-                        ))
-                    } else {
-                        None
-                    }
-                })
-                .unwrap_or_default();
-
-            if held_token.fiat_fungible() {
-                println!(
-                    "  {:<7}       {:<20}",
-                    held_token.to_string(),
-                    held_token.format_amount(total_held_amount)
-                );
-            } else {
-                println!(
-                    "  {:<7}       {:<20} [{}; ${:>4} per {:>4}{}]",
-                    held_token.to_string(),
-                    held_token.format_amount(total_held_amount),
-                    total_value
-                        .map(|tv| {
-                            format!(
-                                "${:14} ({:>8}%)",
-                                tv.separated_string_with_fixed_place(2),
-                                ((tv - unrealized_gain.basis) / unrealized_gain.basis * 100.)
-                                    .separated_string_with_fixed_place(2)
-                            )
-                        })
-                        .unwrap_or_else(|| "?".into()),
-                    current_token_price
-                        .map(|current_token_price| f64::try_from(current_token_price)
-                            .unwrap()
-                            .separated_string_with_fixed_place(3))
-                        .unwrap_or_else(|| "?".into()),
-                    held_token,
-                    estimated_tax,
-                );
-            }
-        }
-        println!();
+        print_current_holdings(&held_tokens, tax_rate);
 
         println!("Summary");
         println!(
