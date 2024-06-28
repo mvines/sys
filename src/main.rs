@@ -4681,6 +4681,42 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .arg(lot_numbers_arg()),
                 )
                 .subcommand(
+                    SubCommand::with_name("drop")
+                        .about("Manually drop SOL/tokens from an account")
+                        .arg(
+                            Arg::with_name("token")
+                                .value_name("SOL or SPL Token")
+                                .takes_value(true)
+                                .required(true)
+                                .validator(is_valid_token_or_sol)
+                                .help("Token type"),
+                        )
+                        .arg(
+                            Arg::with_name("address")
+                                .value_name("ADDRESS")
+                                .takes_value(true)
+                                .required(true)
+                                .validator(is_valid_pubkey)
+                                .help("Account that the SOL/tokens should be dropped from"),
+                        )
+                        .arg(
+                            Arg::with_name("amount")
+                                .value_name("AMOUNT")
+                                .takes_value(true)
+                                .validator(is_amount)
+                                .required(true)
+                                .help("Amount of SOL/tokens to drop"),
+                        )
+                        .arg(
+                            Arg::with_name("confirm")
+                                .long("confirm")
+                                .takes_value(false)
+                                .help("Confirm the operation"),
+                        )
+                        .arg(lot_selection_arg())
+                        .arg(lot_numbers_arg()),
+                )
+                .subcommand(
                     SubCommand::with_name("ls")
                         .about("List registered accounts")
                         .alias("sl")
@@ -6307,6 +6343,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     lot_numbers,
                 )
                 .await?;
+            }
+            ("drop", Some(arg_matches)) => {
+                let address = pubkey_of(arg_matches, "address").unwrap();
+                let token = MaybeToken::from(value_t!(arg_matches, "token", Token).ok());
+                let ui_amount = value_t_or_exit!(arg_matches, "amount", f64);
+                let lot_numbers = lot_numbers_of(arg_matches, "lot_numbers");
+                let lot_selection_method =
+                    value_t_or_exit!(arg_matches, "lot_selection", LotSelectionMethod);
+                let confirm = arg_matches.is_present("confirm");
+
+                if !confirm {
+                    println!(
+                        "Add --confirm to drop {} from {} ({})",
+                        token.format_ui_amount(ui_amount),
+                        address,
+                        token
+                    );
+                    return Ok(());
+                }
+
+                db.record_drop(
+                    address,
+                    token,
+                    token.amount(ui_amount),
+                    lot_selection_method,
+                    lot_numbers,
+                )?;
             }
             ("ls", Some(arg_matches)) => {
                 let all = arg_matches.is_present("all");

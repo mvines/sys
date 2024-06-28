@@ -1325,6 +1325,23 @@ impl Db {
     }
 
     #[allow(clippy::too_many_arguments)]
+    pub fn record_drop(
+        &mut self,
+        from_address: Pubkey,
+        token: MaybeToken,
+        amount: u64,
+        lot_selection_method: LotSelectionMethod,
+        lot_numbers: Option<HashSet<usize>>,
+    ) -> DbResult<()> {
+        let mut from_account = self
+            .get_account(from_address, token)
+            .ok_or(DbError::AccountDoesNotExist(from_address, token))?;
+        let _ = from_account.extract_lots(self, amount, lot_selection_method, lot_numbers)?;
+        self.update_account(from_account)?; // `update_account` calls `save`...
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
     pub fn record_disposal(
         &mut self,
         from_address: Pubkey,
