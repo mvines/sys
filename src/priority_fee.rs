@@ -56,6 +56,7 @@ pub struct ComputeBudget {
 
 impl ComputeBudget {
     pub fn new(compute_unit_limit: u32, priority_fee_lamports: u64) -> Self {
+        assert_ne!(compute_unit_limit, 0);
         Self {
             compute_unit_price_micro_lamports: priority_fee_lamports * (1e6 as u64)
                 / compute_unit_limit as u64,
@@ -105,6 +106,8 @@ pub fn apply_priority_fee(
     compute_unit_limit: u32,
     priority_fee: PriorityFee,
 ) -> Result<u64, Box<dyn std::error::Error>> {
+    assert_ne!(compute_unit_limit, 0);
+
     let compute_budget = match priority_fee {
         PriorityFee::Exact { lamports } => ComputeBudget::new(compute_unit_limit, lamports),
         PriorityFee::Auto {
