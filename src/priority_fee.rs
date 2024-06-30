@@ -132,7 +132,7 @@ pub fn apply_priority_fee(
 
                 helius_compute_budget
             } else {
-                ComputeBudget::default()
+                ComputeBudget::new(compute_unit_limit, 0)
             };
 
             let sys_compute_budget = {
@@ -209,8 +209,9 @@ pub fn apply_priority_fee(
     };
 
     println!(
-        "Selected priority fee:      {}",
-        Sol(compute_budget.priority_fee_lamports())
+        "Selected priority fee:      {} (for {} CUs)",
+        Sol(compute_budget.priority_fee_lamports()),
+        compute_budget.compute_unit_limit,
     );
     assert!(
         0.01 > lamports_to_sol(compute_budget.priority_fee_lamports()),
