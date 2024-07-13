@@ -172,7 +172,7 @@ pub fn apply_priority_fee(
                         verbose_msg += &format!(". Selected {fee_percentile}th percentile");
                         fee_percentile_compute_unit_price_micro_lamports
                     } else {
-                        verbose_msg += ". Selected mean)";
+                        verbose_msg += ". Selected mean";
                         mean_compute_unit_price_micro_lamports
                     };
 
