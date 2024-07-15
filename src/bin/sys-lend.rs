@@ -2826,7 +2826,7 @@ fn solend_deposit_or_withdraw(
 
             (
                 amount - 1, // HACK!! Sometimes Solend loses a lamport? This breaks `rebalance`...
-                200_000,
+                250_000,
             )
         }
     };
