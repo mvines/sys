@@ -27,10 +27,11 @@ use {
         clock::Slot,
         compute_budget,
         message::Message,
-        native_token::{lamports_to_sol, sol_to_lamports, Sol},
+        native_token::{sol_to_lamports, Sol},
         pubkey::Pubkey,
         signature::{read_keypair_file, Keypair, Signature, Signer},
         signers::Signers,
+        stake::state::Authorized,
         system_instruction, system_program,
         transaction::Transaction,
     },
@@ -70,14 +71,6 @@ where
             "Unable to parse input amount as integer or float, provided: {amount}"
         ))
     }
-}
-
-fn get_deprecated_fee_calculator(
-    rpc_client: &RpcClient,
-) -> solana_client::client_error::Result<solana_sdk::fee_calculator::FeeCalculator> {
-    // TODO: Rework calls to avoid the use of `FeeCalculator`
-    #[allow(deprecated)]
-    rpc_client.get_fees().map(|fees| fees.fee_calculator)
 }
 
 pub(crate) fn today() -> NaiveDate {
@@ -488,7 +481,6 @@ async fn process_exchange_deposit<T: Signers>(
 
     let (recent_blockhash, last_valid_block_height) =
         rpc_client.get_latest_blockhash_with_commitment(rpc_client.commitment())?;
-    let fee_calculator = get_deprecated_fee_calculator(rpc_client)?;
 
     let from_account = rpc_client
         .get_account_with_commitment(&from_address, rpc_client.commitment())?
@@ -505,27 +497,27 @@ async fn process_exchange_deposit<T: Signers>(
             .ok_or_else(|| format!("Authority account, {authority_address}, does not exist"))?
     };
 
-    if authority_account.lamports < fee_calculator.lamports_per_signature {
-        return Err(format!(
-            "Authority has insufficient funds for the transaction fee of {}",
-            lamports_to_sol(fee_calculator.lamports_per_signature)
-        )
-        .into());
-    }
-
     let (mut instructions, amount, compute_units) = match token.token() {
         /*SOL*/
         None => {
             assert_eq!(from_account.lamports, from_account_balance);
 
             if from_account.owner == system_program::id() {
-                let amount = amount.unwrap_or_else(|| {
-                    if from_address == authority_address {
-                        from_account_balance.saturating_sub(fee_calculator.lamports_per_signature)
-                    } else {
-                        from_account_balance
-                    }
-                });
+                let fee = if from_address == authority_address {
+                    let dummy_message = Message::new_with_blockhash(
+                        &[system_instruction::transfer(
+                            &from_address,
+                            &deposit_address,
+                            0,
+                        )],
+                        Some(&authority_address),
+                        &recent_blockhash,
+                    );
+                    rpc_client.get_fee_for_message(&dummy_message)?
+                } else {
+                    0
+                };
+                let amount = amount.unwrap_or_else(|| from_account_balance.saturating_sub(fee));
 
                 (
                     vec![system_instruction::transfer(
@@ -3095,7 +3087,6 @@ async fn process_account_sweep<T: Signers>(
 
     let (recent_blockhash, last_valid_block_height) =
         rpc_client.get_latest_blockhash_with_commitment(rpc_client.commitment())?;
-    let fee_calculator = get_deprecated_fee_calculator(rpc_client)?;
 
     let from_account = rpc_client
         .get_account_with_commitment(&from_address, rpc_client.commitment())?
@@ -3114,8 +3105,6 @@ async fn process_account_sweep<T: Signers>(
             .value
             .ok_or_else(|| format!("Authority account, {from_authority_address}, does not exist"))?
     };
-
-    let mut num_transaction_signatures = 1; // from_address_authority
 
     let (to_address, via_transitory_stake) = if let Some(to_address) = to_address {
         let _ = db
@@ -3145,11 +3134,6 @@ async fn process_account_sweep<T: Signers>(
                 )
             })?;
 
-        num_transaction_signatures += 1; // transitory_stake_account
-        if from_authority_address != sweep_stake_authority_keypair.pubkey() {
-            num_transaction_signatures += 1;
-        }
-
         (
             transitory_stake_account.pubkey(),
             Some((
@@ -3159,16 +3143,6 @@ async fn process_account_sweep<T: Signers>(
             )),
         )
     };
-
-    if authority_account.lamports
-        < num_transaction_signatures * fee_calculator.lamports_per_signature
-    {
-        return Err(format!(
-            "Authority has insufficient funds for the transaction fee of {}",
-            token.ui_amount(num_transaction_signatures * fee_calculator.lamports_per_signature)
-        )
-        .into());
-    }
 
     let apply_exact_amount = |amount: u64| -> Result<u64, Box<dyn std::error::Error>> {
         if let Some(exact_amount) = exact_amount {
@@ -3194,10 +3168,41 @@ async fn process_account_sweep<T: Signers>(
 
         if from_account.owner == system_program::id() {
             let lamports = apply_exact_amount(if from_address == from_authority_address {
-                from_tracked_account.last_update_balance.saturating_sub(
-                    num_transaction_signatures * fee_calculator.lamports_per_signature
-                        + retain_amount,
-                )
+                let mut dummy_instructions =
+                    vec![system_instruction::transfer(&from_address, &to_address, 0)];
+                if let Some((transitory_stake_account, sweep_stake_authority_keypair, _)) =
+                    via_transitory_stake.as_ref()
+                {
+                    dummy_instructions.append(&mut vec![
+                        system_instruction::allocate(
+                            &transitory_stake_account.pubkey(),
+                            std::mem::size_of::<solana_sdk::stake::state::StakeStateV2>() as u64,
+                        ),
+                        system_instruction::assign(
+                            &transitory_stake_account.pubkey(),
+                            &solana_sdk::stake::program::id(),
+                        ),
+                        solana_sdk::stake::instruction::initialize(
+                            &transitory_stake_account.pubkey(),
+                            &Authorized::auto(&Pubkey::default()),
+                            &solana_sdk::stake::state::Lockup::default(),
+                        ),
+                        solana_sdk::stake::instruction::delegate_stake(
+                            &transitory_stake_account.pubkey(),
+                            &sweep_stake_authority_keypair.pubkey(),
+                            &Pubkey::default(),
+                        ),
+                    ]);
+                }
+                let dummy_message = Message::new_with_blockhash(
+                    &dummy_instructions,
+                    Some(&from_authority_address),
+                    &recent_blockhash,
+                );
+                let fee = rpc_client.get_fee_for_message(&dummy_message)?;
+                from_tracked_account
+                    .last_update_balance
+                    .saturating_sub(fee + retain_amount)
             } else {
                 from_tracked_account
                     .last_update_balance
@@ -3367,6 +3372,14 @@ async fn process_account_sweep<T: Signers>(
 
             let mut message = Message::new(&instructions, Some(&from_authority_address));
             message.recent_blockhash = recent_blockhash;
+            let fee = rpc_client.get_fee_for_message(&message)?;
+            if fee > authority_account.lamports {
+                return Err(format!(
+                    "Authority has insufficient funds for the transaction fee of {}",
+                    token.ui_amount(fee)
+                )
+                .into());
+            }
 
             let mut transaction = Transaction::new_unsigned(message);
             let simulation_result = rpc_client.simulate_transaction(&transaction)?.value;
