@@ -49,21 +49,21 @@ separator = "0.4.1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 simple_excel_writer = "0.1.9"
-solana-account-decoder = "=1.17.26"
-solana-clap-utils = "=1.17.26"
-solana-cli-config = "=1.17.26"
-solana-cli-output = "=1.17.26"
-solana-client = "=1.17.26"
-solana-logger = "=1.17.26"
-solana-remote-wallet = "=1.17.26"
-solana-program = "=1.17.26"
-solana-sdk = "=1.17.26"
-solana-transaction-status = "=1.17.26"
-solana-vote-program = "=1.17.26"            # Remove `solana-vote-program` dependency upon update to Solana 1.16
-spl-associated-token-account = "2.3.0"
+solana-account-decoder = "=1.18.26"
+solana-clap-utils = "=1.18.26"
+solana-cli-config = "=1.18.26"
+solana-cli-output = "=1.18.26"
+solana-client = "=1.18.26"
+solana-logger = "=1.18.26"
+solana-remote-wallet = "=1.18.26"
+solana-program = "=1.18.26"
+solana-sdk = "=1.18.26"
+solana-transaction-status = "=1.18.26"
+solana-vote-program = "=1.18.26"            # Remove `solana-vote-program` dependency upon update to Solana 1.16
+spl-associated-token-account = "3.0.4"
 spl-token = "4.0.0"
-spl-token-2022 = "2.0.1"
-spl-token-lending = { git = "https://github.com/solana-labs/solana-program-library.git", rev = "1d1c2b178b8cf2ed3e28006c27b2ba5b3d039d67" }
+spl-token-2022 = "3.0.2"
+spl-token-lending = { git = "https://github.com/solana-labs/solana-program-library.git", rev = "d85ea9ff0573cd82c9245965a55f379b4dc263bc" }
 static_assertions = "1.1.0"
 strum = { version = "0.23", features = ["derive"] }
 thiserror = "1.0"
@@ -71,4 +71,3 @@ tokio = { version = "1", features = ["macros", "time"] }
 #tulipv2-sdk-common = "0.9.5"
 uint = "0.9.5"
 criterion-stats = "0.3.0"
-
