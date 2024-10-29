@@ -536,16 +536,16 @@ async fn process_exchange_deposit<T: Signers>(
                     amount,
                     1_000,
                 )
-            } else if from_account.owner == solana_vote_program::id() {
+            } else if from_account.owner == solana_program::vote::program::id() {
                 let minimum_balance = rpc_client.get_minimum_balance_for_rent_exemption(
-                    solana_vote_program::vote_state::VoteState::size_of(),
+                    solana_program::vote::state::VoteState::size_of(),
                 )?;
 
                 let amount =
                     amount.unwrap_or_else(|| from_account_balance.saturating_sub(minimum_balance));
 
                 (
-                    vec![solana_vote_program::vote_instruction::withdraw(
+                    vec![solana_program::vote::instruction::withdraw(
                         &from_address,
                         &authority_address,
                         amount,
@@ -3212,9 +3212,9 @@ async fn process_account_sweep<T: Signers>(
                 )],
                 lamports,
             )
-        } else if from_account.owner == solana_vote_program::id() {
+        } else if from_account.owner == solana_program::vote::program::id() {
             let minimum_balance = rpc_client.get_minimum_balance_for_rent_exemption(
-                solana_vote_program::vote_state::VoteState::size_of(),
+                solana_program::vote::state::VoteState::size_of(),
             )?;
 
             let lamports = apply_exact_amount(
@@ -3224,7 +3224,7 @@ async fn process_account_sweep<T: Signers>(
             )?;
 
             (
-                vec![solana_vote_program::vote_instruction::withdraw(
+                vec![solana_program::vote::instruction::withdraw(
                     &from_address,
                     &from_authority_address,
                     lamports,
