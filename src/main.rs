@@ -1164,7 +1164,7 @@ async fn process_jup_swap<T: Signers>(
                     static_account_keys.get(instruction.program_id_index as usize)
                 {
                     if *program_id == compute_budget::id() {
-                        match solana_sdk::borsh0_10::try_from_slice_unchecked(&instruction.data) {
+                        match solana_sdk::borsh1::try_from_slice_unchecked(&instruction.data) {
                             Ok(compute_budget::ComputeBudgetInstruction::SetComputeUnitLimit(
                                 compute_unit_limit,
                             )) => {

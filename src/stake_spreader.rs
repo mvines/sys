@@ -270,7 +270,7 @@ pub async fn run<T: Signers>(
                                     deactivating,
                                 } = stake.delegation.stake_activating_and_deactivating(
                                     current_epoch,
-                                    Some(&stake_history),
+                                    &stake_history,
                                     None,
                                 );
 
