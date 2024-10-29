@@ -5377,7 +5377,6 @@ dependencies = [
  "solana-remote-wallet",
  "solana-sdk",
  "solana-transaction-status",
- "solana-vote-program",
  "spl-associated-token-account 3.0.4",
  "spl-token 4.0.0",
  "spl-token-2022 3.0.4",
