@@ -25,10 +25,6 @@ macro_rules! assert_struct_align {
 assert_struct_size!(Bank, 1856);
 assert_struct_align!(Bank, 8);
 #[repr(C)]
-#[cfg_attr(
-    any(feature = "test", feature = "client"),
-    derive(Debug, PartialEq, Eq, TypeLayout)
-)]
 #[derive(Default, Debug)]
 pub struct Bank {
     pub mint: Pubkey,
@@ -90,10 +86,6 @@ impl Bank {
 }
 
 #[repr(C, align(8))]
-#[cfg_attr(
-    any(feature = "test", feature = "client"),
-    derive(PartialEq, Eq, TypeLayout)
-)]
 #[derive(Default, Clone, Copy)]
 pub struct WrappedI80F48 {
     pub value: [u8; 16],
@@ -230,7 +222,6 @@ impl InterestRateConfig {
 }
 
 #[repr(u8)]
-#[cfg_attr(any(feature = "test", feature = "client"), derive(PartialEq, Eq))]
 #[derive(Copy, Clone, Debug)]
 pub enum OracleSetup {
     None,
@@ -324,8 +315,7 @@ pub struct MarginfiAccount {
     /// This is u64 bitfield, where each bit represents a flag.
     ///
     /// Flags:
-    /// - DISABLED_FLAG = 1 << 0 = 1 - This flag indicates that the account is disabled,
-    /// and no further actions can be taken on it.
+    /// - DISABLED_FLAG = 1 << 0 = 1 - This flag indicates that the account is disabled, and no further actions can be taken on it.
     pub account_flags: u64, // 8
     pub _padding: [u64; 63],             // 8 * 63 = 512
 }
