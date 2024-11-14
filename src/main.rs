@@ -231,9 +231,14 @@ async fn process_sync_exchange(
                 response.context.slot, epoch_info.absolute_slot
             );
         }
-        let confirmed = response.value[0]
+        let (confirmed, ok) = response.value[0]
             .as_ref()
-            .map(|status| status.satisfies_commitment(rpc_client.commitment()))
+            .map(|status| {
+                (
+                    status.satisfies_commitment(rpc_client.commitment()),
+                    status.err.is_none(),
+                )
+            })
             .unwrap_or_default();
 
         assert_eq!(
@@ -242,7 +247,7 @@ async fn process_sync_exchange(
         );
         let token = pending_deposit.transfer.to_token;
 
-        if confirmed {
+        if confirmed && ok {
             metrics::push(dp::exchange_deposit(
                 exchange,
                 token,
@@ -321,9 +326,16 @@ async fn process_sync_exchange(
                     }
                 }
             }
+        } else if !ok {
+            println!(
+                "Pending {} deposit failed: {}",
+                token, pending_deposit.transfer.signature
+            );
+            db.cancel_deposit(pending_deposit.transfer.signature)
+                .expect("cancel_deposit");
         } else if epoch_info.block_height > pending_deposit.transfer.last_valid_block_height {
             println!(
-                "Pending {} deposit cancelled: {}",
+                "Pending {} deposit expired: {}",
                 token, pending_deposit.transfer.signature
             );
             db.cancel_deposit(pending_deposit.transfer.signature)
