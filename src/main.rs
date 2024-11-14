@@ -3976,6 +3976,7 @@ async fn process_account_sync_sweep(
         .value
         .ok_or("Sweep stake account does not exist")?;
 
+    #[allow(deprecated)]
     let sweep_stake_activation = rpc_client
         .get_stake_activation(sweep_stake_account_info.address, None)
         .map_err(|err| {
@@ -4030,6 +4031,7 @@ async fn process_account_sync_sweep(
             Some(x) => x,
         };
 
+        #[allow(deprecated)]
         let transient_stake_activation = rpc_client
             .get_stake_activation(transitory_sweep_stake_address, None)
             .map_err(|err| {

@@ -31,6 +31,7 @@ pub fn get_stake_authorized(
 ) -> Result<(Authorized, Pubkey), Box<dyn std::error::Error>> {
     let stake_account = rpc_client.get_account(&stake_account_address)?;
 
+    #[allow(deprecated)]
     match rpc_client
         .get_stake_activation(stake_account_address, None)?
         .state
