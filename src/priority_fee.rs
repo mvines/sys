@@ -214,7 +214,7 @@ pub fn apply_priority_fee(
         compute_budget.compute_unit_limit,
     );
     assert!(
-        0.01 > lamports_to_sol(compute_budget.priority_fee_lamports()),
+        0.2 > lamports_to_sol(compute_budget.priority_fee_lamports()),
         "Priority fee too large, Bug?"
     );
 
