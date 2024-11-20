@@ -159,7 +159,7 @@ fn is_token_supported(token: &Token, pools: &[String]) -> Result<(), Box<dyn std
     Ok(())
 }
 
-fn default_supported_pools_for_token(token: Token) -> Vec<String> {
+fn supported_pools_for_token(token: Token) -> Vec<String> {
     let mut supported_tokens: Vec<_> = SUPPORTED_TOKENS
         .iter()
         .filter_map(|(pool, tokens)| {
@@ -171,12 +171,7 @@ fn default_supported_pools_for_token(token: Token) -> Vec<String> {
         })
         .collect();
     supported_tokens.sort();
-
-    // Exclude solend-jlp by default until they oracle mess is sorted out
     supported_tokens
-        .into_iter()
-        .filter(|pool| pool != "solend-jlp")
-        .collect()
 }
 
 #[derive(Clone)]
@@ -1039,7 +1034,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let bps = matches.is_present("bps");
             let pools = values_t!(matches, "pool", String)
                 .ok()
-                .unwrap_or_else(|| default_supported_pools_for_token(token));
+                .unwrap_or_else(|| supported_pools_for_token(token));
 
             is_token_supported(&token, &pools)?;
 
@@ -1079,7 +1074,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let pools = values_t!(matches, "pool", String)
                 .ok()
-                .unwrap_or_else(|| default_supported_pools_for_token(token));
+                .unwrap_or_else(|| supported_pools_for_token(token));
 
             is_token_supported(&token, &pools)?;
 
@@ -1179,7 +1174,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let pools = {
                 let mut pools = values_t!(matches, "pool", String)
                     .ok()
-                    .unwrap_or_else(|| default_supported_pools_for_token(token));
+                    .unwrap_or_else(|| supported_pools_for_token(token));
 
                 if let Some(pool_from) = &pool_from {
                     pools.push(pool_from.clone());
