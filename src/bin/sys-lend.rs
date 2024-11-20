@@ -1,14 +1,10 @@
 use {
     clap::{value_t, value_t_or_exit, values_t, App, AppSettings, Arg, SubCommand},
-    solana_account_decoder::{UiAccountEncoding, UiDataSliceConfig},
+    solana_account_decoder::UiAccountEncoding,
     solana_clap_utils::{self, input_parsers::*, input_validators::*},
     solana_client::{
         rpc_client::RpcClient,
-        rpc_config::{
-            RpcAccountInfoConfig, RpcProgramAccountsConfig, RpcSimulateTransactionAccountsConfig,
-            RpcSimulateTransactionConfig,
-        },
-        rpc_filter::{self, RpcFilterType},
+        rpc_config::{RpcSimulateTransactionAccountsConfig, RpcSimulateTransactionConfig},
     },
     solana_sdk::{
         address_lookup_table::{state::AddressLookupTable, AddressLookupTableAccount},
@@ -352,18 +348,18 @@ fn pools_supply_apr(
     Ok(supply_apr)
 }
 
-fn pool_supply_balance(
+async fn pool_supply_balance(
     pool: &str,
     token: Token,
     address: Pubkey,
-    account_data_cache: &mut AccountDataCache,
+    account_data_cache: &mut AccountDataCache<'_>,
 ) -> Result<(/*balance: */ u64, /* available_balance: */ u64), Box<dyn std::error::Error>> {
     Ok(if pool.starts_with("kamino-") {
         kamino_deposited_amount(pool, address, token, account_data_cache)?
     } else if pool.starts_with("solend-") {
         solend_deposited_amount(pool, address, token, account_data_cache)?
     } else if pool == "mfi" {
-        mfi_deposited_amount(address, token, account_data_cache)?
+        mfi_deposited_amount(address, token, account_data_cache).await?
     } else if pool == "drift" {
         drift_deposited_amount(address, token, account_data_cache)?
     } else {
@@ -380,17 +376,17 @@ type PoolSupplyBalanceMap = BTreeMap<
     ),
 >;
 
-fn pools_supply_balance(
+async fn pools_supply_balance(
     pools: &[String],
     token: Token,
     address: Pubkey,
-    account_data_cache: &mut AccountDataCache,
+    account_data_cache: &mut AccountDataCache<'_>,
 ) -> Result<PoolSupplyBalanceMap, Box<dyn std::error::Error>> {
     let mut supply_balance = BTreeMap::new();
     for pool in pools {
         let apr = pool_supply_apr(pool, token, account_data_cache)?;
         let (balance, available_balance) =
-            pool_supply_balance(pool, token, address, account_data_cache)?;
+            pool_supply_balance(pool, token, address, account_data_cache).await?;
         supply_balance.insert(pool.to_string(), (apr, balance, available_balance));
     }
     Ok(supply_balance)
@@ -424,8 +420,8 @@ struct InstructionsForOps {
     simulation_total_apy: f64,
 }
 
-async fn build_instructions_for_ops<'a>(
-    account_data_cache: &mut AccountDataCache<'a>,
+async fn build_instructions_for_ops(
+    account_data_cache: &mut AccountDataCache<'_>,
     pools: &[String],
     ops: &[(Operation, &String)],
     mut amount: u64,
@@ -443,7 +439,7 @@ async fn build_instructions_for_ops<'a>(
         } else if pool.starts_with("solend-") {
             solend_deposit_or_withdraw(*op, pool, address, token, amount, account_data_cache)?
         } else if *pool == "mfi" {
-            mfi_deposit_or_withdraw(*op, address, token, amount, false, account_data_cache)?
+            mfi_deposit_or_withdraw(*op, address, token, amount, false, account_data_cache).await?
         } else if *pool == "drift" {
             drift_deposit_or_withdraw(*op, address, token, amount, false, account_data_cache)?
         } else {
@@ -562,7 +558,7 @@ async fn build_instructions_for_ops<'a>(
     )?;
 
     let simulation_supply_balance =
-        pools_supply_balance(pools, token, address, &mut simulation_account_data_cache)?;
+        pools_supply_balance(pools, token, address, &mut simulation_account_data_cache).await?;
 
     let simulation_total_apy =
         apr_to_apy(pools_supply_balance_apr(&simulation_supply_balance).0) * 100.;
@@ -689,7 +685,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .validator(is_parsable::<f64>)
                 .help(
                     "Automatically select the Solana priority fee to use for transactions, \
-                       but do not exceed the specified amount of SOL [default]",
+                       but do not exceed the specified amount of SOL [default: 0.005]",
                 ),
         )
         .subcommand(
@@ -1088,7 +1084,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             is_token_supported(&token, &pools)?;
 
             let supply_balance =
-                pools_supply_balance(&pools, token, address, &mut account_data_cache)?;
+                pools_supply_balance(&pools, token, address, &mut account_data_cache).await?;
 
             for pool in &pools {
                 let (apr, balance, available_balance) = *supply_balance.get(pool).unwrap();
@@ -1237,7 +1233,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
 
             let supply_balance =
-                pools_supply_balance(&pools, token, address, &mut account_data_cache)?;
+                pools_supply_balance(&pools, token, address, &mut account_data_cache).await?;
             let total_apy = apr_to_apy(pools_supply_balance_apr(&supply_balance).0) * 100.;
 
             assert_eq!(
@@ -1713,10 +1709,61 @@ fn mfi_apr(
     Ok(mfi_calc_bank_apr(&bank))
 }
 
+async fn mfi_load_user_account(
+    wallet_address: Pubkey,
+    account_data_cache: &mut AccountDataCache<'_>,
+) -> Result<Option<(Pubkey, marginfi_v2::MarginfiAccount)>, Box<dyn std::error::Error>> {
+    let url = format!("https://account-search.marginfi.com/api/search?address={wallet_address}");
+
+    #[derive(Debug, serde::Serialize, serde::Deserialize)]
+    struct MfiAccount {
+        address: String, // Ignore all other response fields..
+    }
+    #[derive(Debug, serde::Serialize, serde::Deserialize)]
+    struct Response {
+        accounts: Vec<MfiAccount>,
+    }
+
+    let mut accounts = reqwest::get(url)
+        .await?
+        .json::<Response>()
+        .await?
+        .accounts
+        .into_iter();
+
+    let first_user_account = accounts.next();
+    if accounts.next().is_some() {
+        return Err(format!("Multiple MarginFi account found for {}", wallet_address).into());
+    }
+
+    Ok(match first_user_account {
+        None => None,
+        Some(first_user_account) => {
+            let user_account_address = first_user_account.address.parse()?;
+
+            Some((user_account_address, {
+                let (account_data, _context_slot) = account_data_cache.get(user_account_address)?;
+                const LEN: usize = std::mem::size_of::<marginfi_v2::MarginfiAccount>();
+                let data: [u8; LEN] = account_data[8..LEN + 8].try_into()?;
+                unsafe { std::mem::transmute::<[u8; LEN], marginfi_v2::MarginfiAccount>(data) }
+            }))
+        }
+    })
+}
+
+/*
 fn mfi_load_user_account(
     wallet_address: Pubkey,
     account_data_cache: &mut AccountDataCache,
 ) -> Result<Option<(Pubkey, marginfi_v2::MarginfiAccount)>, Box<dyn std::error::Error>> {
+    use {
+        solana_account_decoder::UiDataSliceConfig,
+        solana_client::{
+            rpc_config::{RpcAccountInfoConfig, RpcProgramAccountsConfig},
+            rpc_filter::{self, RpcFilterType},
+        }
+    };
+
     // Big mistake to require using `getProgramAccounts` to locate a MarginFi account for a wallet
     // address. Most public RPC endpoints have disabled this method. Leach off MarginFi's RPC
     // endpoint for this expensive call since they designed their shit wrong
@@ -1769,15 +1816,16 @@ fn mfi_load_user_account(
         })),
     })
 }
+*/
 
-fn mfi_deposited_amount(
+async fn mfi_deposited_amount(
     wallet_address: Pubkey,
     token: Token,
-    account_data_cache: &mut AccountDataCache,
+    account_data_cache: &mut AccountDataCache<'_>,
 ) -> Result<(/*balance: */ u64, /* available_balance: */ u64), Box<dyn std::error::Error>> {
     let bank_address = mfi_lookup_bank_address(token)?;
     let bank = mfi_load_bank(bank_address, account_data_cache)?;
-    let user_account = match mfi_load_user_account(wallet_address, account_data_cache)? {
+    let user_account = match mfi_load_user_account(wallet_address, account_data_cache).await? {
         None => return Ok((0, 0)),
         Some((_user_account_address, user_account)) => user_account,
     };
@@ -1794,13 +1842,13 @@ fn mfi_deposited_amount(
     Ok((deposited_amount, deposited_amount.min(remaining_outflow)))
 }
 
-fn mfi_deposit_or_withdraw(
+async fn mfi_deposit_or_withdraw(
     op: Operation,
     wallet_address: Pubkey,
     token: Token,
     amount: u64,
     verbose: bool,
-    account_data_cache: &mut AccountDataCache,
+    account_data_cache: &mut AccountDataCache<'_>,
 ) -> Result<DepositOrWithdrawResult, Box<dyn std::error::Error>> {
     let bank_address = mfi_lookup_bank_address(token)?;
     let bank = mfi_load_bank(bank_address, account_data_cache)?;
@@ -1811,7 +1859,7 @@ fn mfi_deposit_or_withdraw(
         );
     }
 
-    let (user_account_address, user_account) = mfi_load_user_account(wallet_address, account_data_cache)?
+    let (user_account_address, user_account) = mfi_load_user_account(wallet_address, account_data_cache).await?
         .ok_or_else(|| format!("No MarginFi account found for {wallet_address}. Manually deposit once into MarginFi and retry"))?;
 
     let (instructions, required_compute_units, amount) = match op {
