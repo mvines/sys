@@ -2485,6 +2485,8 @@ fn kamino_deposit_or_withdraw(
 ///[ Solend Stuff ] //////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////////
 
+const SOLEND_JLP_EXTRA_ORACLE: Pubkey = pubkey!["BjUgj6YCnFBZ49wF54ddBVA9qu8TeqkFtkbqmZcee8uW"];
+
 fn solend_load_reserve(
     reserve_address: Pubkey,
     account_data_cache: &mut AccountDataCache,
@@ -2498,18 +2500,27 @@ fn solend_load_reserve(
         // read back the new reserve account data to ensure it's up to date
         //
 
+        let mut refresh_reserve_account_metas = vec![
+            // Reserve
+            AccountMeta::new(reserve_address, false),
+            // Pyth Oracle
+            AccountMeta::new_readonly(rpc_reserve.liquidity.pyth_oracle_pubkey, false),
+            // Switchboard Oracle
+            AccountMeta::new_readonly(rpc_reserve.liquidity.switchboard_oracle_pubkey, false),
+        ];
+
+        // "Extra oracle" for solend-jlp's USDC reserve
+        // TODO: Figure out how to determine `SOLEND_JLP_EXTRA_ORACLE` from on-chain data
+        if reserve_address == pubkey!["GShhnkfbaYy41Fd8vSEk9zoiwZSKqbH1j16jZ2afV2GG"] {
+            refresh_reserve_account_metas
+                .push(AccountMeta::new_readonly(SOLEND_JLP_EXTRA_ORACLE, false));
+        }
+
         // Instruction: Solend: Refresh Reserve
         let instructions = vec![Instruction::new_with_bytes(
             solend::solend_mainnet::ID,
             &[3],
-            vec![
-                // Reserve
-                AccountMeta::new(reserve_address, false),
-                // Pyth Oracle
-                AccountMeta::new_readonly(rpc_reserve.liquidity.pyth_oracle_pubkey, false),
-                // Switchboard Oracle
-                AccountMeta::new_readonly(rpc_reserve.liquidity.switchboard_oracle_pubkey, false),
-            ],
+            refresh_reserve_account_metas,
         )];
 
         account_data_cache.simulate_then_add(&instructions, None, &[])?;
@@ -2788,20 +2799,26 @@ fn solend_deposit_or_withdraw(
             refresh_reserves.push((market_reserve_address, reserve.clone()));
 
             for (reserve_address, reserve) in refresh_reserves {
+                let mut refresh_reserve_account_metas = vec![
+                    // Reserve
+                    AccountMeta::new(reserve_address, false),
+                    // Pyth Oracle
+                    AccountMeta::new_readonly(reserve.liquidity.pyth_oracle_pubkey, false),
+                    // Switchboard Oracle
+                    AccountMeta::new_readonly(reserve.liquidity.switchboard_oracle_pubkey, false),
+                ];
+
+                // "Extra oracle" for solend-jlp's USDC reserve
+                // TODO: Figure out how to determine `SOLEND_JLP_EXTRA_ORACLE` from on-chain data
+                if reserve_address == pubkey!["GShhnkfbaYy41Fd8vSEk9zoiwZSKqbH1j16jZ2afV2GG"] {
+                    refresh_reserve_account_metas
+                        .push(AccountMeta::new_readonly(SOLEND_JLP_EXTRA_ORACLE, false));
+                }
+
                 instructions.push(Instruction::new_with_bytes(
                     solend::solend_mainnet::ID,
                     &[3],
-                    vec![
-                        // Reserve
-                        AccountMeta::new(reserve_address, false),
-                        // Pyth Oracle
-                        AccountMeta::new_readonly(reserve.liquidity.pyth_oracle_pubkey, false),
-                        // Switchboard Oracle
-                        AccountMeta::new_readonly(
-                            reserve.liquidity.switchboard_oracle_pubkey,
-                            false,
-                        ),
-                    ],
+                    refresh_reserve_account_metas,
                 ));
             }
 
