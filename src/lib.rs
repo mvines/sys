@@ -11,15 +11,20 @@ use {
     },
 };
 
+pub mod amount;
 pub mod binance_exchange;
 pub mod coin_gecko;
 pub mod coinbase_exchange;
+pub mod db;
 pub mod exchange;
+pub mod field_as_string;
+pub mod get_transaction_balance_change;
 pub mod helius_rpc;
 pub mod kraken_exchange;
 pub mod metrics;
 pub mod notifier;
 pub mod priority_fee;
+pub mod rpc_client_utils;
 pub mod token;
 pub mod vendor;
 
