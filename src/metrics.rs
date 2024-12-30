@@ -15,6 +15,7 @@ lazy_static::lazy_static! {
 pub struct MetricsConfig {
     pub url: String,
     pub token: String,
+    pub org: String,
     pub bucket: String,
 }
 
@@ -22,6 +23,7 @@ pub fn env_config() -> Option<MetricsConfig> {
     Some(MetricsConfig {
         url: env::var("INFLUX_URL").ok()?,
         token: env::var("INFLUX_API_TOKEN").ok()?,
+        org: env::var("INFLUX_ORG").ok()?,
         bucket: env::var("INFLUX_BUCKET")
             .ok()
             .unwrap_or_else(|| "sys".into()),
@@ -35,6 +37,7 @@ pub async fn push(point: Point) {
 pub async fn send(config: Option<MetricsConfig>) {
     if let Some(config) = config {
         let client = Client::new(config.url, config.token)
+            .with_org(config.org)
             .with_bucket(config.bucket)
             .with_precision(Precision::MS);
         //let client = client.insert_to_stdout();
