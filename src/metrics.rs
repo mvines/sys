@@ -23,7 +23,7 @@ pub fn env_config() -> Option<MetricsConfig> {
     Some(MetricsConfig {
         url: env::var("INFLUX_URL").ok()?,
         token: env::var("INFLUX_API_TOKEN").ok()?,
-        org: env::var("INFLUX_ORG").ok()?,
+        org: env::var("INFLUX_ORG").unwrap_or_default(),
         bucket: env::var("INFLUX_BUCKET")
             .ok()
             .unwrap_or_else(|| "sys".into()),
