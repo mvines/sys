@@ -38,7 +38,7 @@ kraken_sdk_rest = { git = "https://github.com/mvines/kraken_sdk_rust", rev = "80
 #kraken_sdk_rest = "0.18.0"
 lazy_static = "1.4.0"
 log = "0.4.17"
-num-derive = "0.3"
+num-derive = "0.4"
 num-traits = "0.2"
 pickledb = { git = "https://github.com/seladb/pickledb-rs.git", rev = "0.5.0" }
 #pickledb = { path = "../pickledb-rs" }
