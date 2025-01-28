@@ -50,6 +50,7 @@ fn token_to_coin(token: &MaybeToken) -> Result<&'static str, Box<dyn std::error:
             Token::PYTH => "pyth-network",
             Token::WEN => "wen-4",
             Token::WIF => "dogwifcoin",
+            Token::PYUSD => "paypal-usd",
             unsupported_token => {
                 return Err(format!(
                     "Coin Gecko price data not available for {}",
@@ -122,6 +123,8 @@ pub async fn get_current_price(token: &MaybeToken) -> Result<Decimal, Box<dyn st
                 wen: Option<CurrencyList>,
                 #[serde(rename = "dogwifcoin")]
                 wif: Option<CurrencyList>,
+                #[serde(rename = "paypal-usd")]
+                pyusd: Option<CurrencyList>,
             }
 
             let coins = reqwest::get(url).await?.json::<Coins>().await?;
@@ -144,6 +147,7 @@ pub async fn get_current_price(token: &MaybeToken) -> Result<Decimal, Box<dyn st
                 .or(coins.pyth)
                 .or(coins.wen)
                 .or(coins.wif)
+                .or(coins.pyusd)
                 .ok_or_else(|| format!("Simple price data not available for {coin}").into())
                 .map(|price| {
                     let price = Decimal::from_f64(price.usd).unwrap();

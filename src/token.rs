@@ -53,6 +53,7 @@ pub enum Token {
     PYTH,
     WEN,
     WIF,
+    PYUSD,
 }
 
 impl Token {
@@ -80,6 +81,7 @@ impl Token {
             Token::PYTH => pubkey!("HZ1JovNiVvGrGNiiYvEozEVgZ58xaU3RKwX8eACQBCt3"),
             Token::WEN => pubkey!("WENWENvqqNya429ubCdR81ZmD69brwQaaBYY6p3LCpk"),
             Token::WIF => pubkey!("EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm"),
+            Token::PYUSD => pubkey!("2b1kV6DkPAnxd5ixfnxCpjxmKwqjjaYmCZfHsFu24GXo"),
         }
     }
 
@@ -107,6 +109,7 @@ impl Token {
             | Token::PYTH
             | Token::WEN
             | Token::WIF => spl_token::id(),
+            Token::PYUSD => spl_token_2022::id(),
         }
     }
     pub fn ata(&self, wallet_address: &Pubkey) -> Pubkey {
@@ -141,6 +144,7 @@ impl Token {
             Token::PYTH => "PYTH/",
             Token::WEN => "WEN/",
             Token::WIF => "WIF/",
+            Token::PYUSD => "PY($)/",
         }
     }
 
@@ -157,6 +161,7 @@ impl Token {
             | Token::KMNO
             | Token::PYTH
             | Token::WIF => 6,
+            Token::PYUSD => 6,
             Token::stSOL
             | Token::tuSOL
             | Token::bSOL
@@ -282,7 +287,8 @@ impl Token {
             | Token::KMNO
             | Token::PYTH
             | Token::WEN
-            | Token::WIF => coin_gecko::get_current_price(&MaybeToken(Some(*self))).await,
+            | Token::WIF
+            | Token::PYUSD => coin_gecko::get_current_price(&MaybeToken(Some(*self))).await,
             Token::tuUSDC | Token::tuSOL | Token::tumSOL | Token::tustSOL => {
                 Err("tulip support disabled".into())
                 //crate::tulip::get_current_price(rpc_client, self).await
