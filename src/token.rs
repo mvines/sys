@@ -32,6 +32,7 @@ use {
 #[allow(non_camel_case_types)]
 pub enum Token {
     USDC,
+    USDS,
     USDT,
     UXD,
     bSOL,
@@ -58,6 +59,7 @@ impl Token {
     pub fn mint(&self) -> Pubkey {
         match self {
             Token::USDC => pubkey!("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"),
+            Token::USDS => pubkey!("USDSwr9ApdHk5bvJKMjzff41FfuX8bSxdKcR81vTwcA"),
             Token::USDT => pubkey!("Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB"),
             Token::UXD => pubkey!("7kbnvuGBxxj8AG9qp8Scn56muWGaRaFqxg1FsRp3PaFT"),
             Token::tuUSDC => pubkey!("Amig8TisuLpzun8XyGfC5HJHHGUQEscjLgoTWsCCKihg"),
@@ -88,6 +90,7 @@ impl Token {
     pub fn symbol(&self) -> &'static str {
         match self {
             Token::USDC => "($)",
+            Token::USDS => "USDS$",
             Token::USDT => "USDT$",
             Token::UXD => "UXD$",
             Token::tuUSDC => "tu($)",
@@ -115,6 +118,7 @@ impl Token {
         match self {
             Token::BONK | Token::WEN => 5,
             Token::USDC
+            | Token::USDS
             | Token::USDT
             | Token::UXD
             | Token::tuUSDC
@@ -232,6 +236,7 @@ impl Token {
         }
         match self {
             Token::USDC
+            | Token::USDS
             | Token::USDT
             | Token::UXD
             | Token::bSOL
