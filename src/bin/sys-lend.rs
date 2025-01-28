@@ -453,10 +453,10 @@ async fn build_instructions_for_ops(
                                         &address,
                                         &address,
                                         &token.mint(),
-                                        &spl_token::id(),
+                                        &token.program_id(),
                                     ),
                                     system_instruction::transfer(&address, &token.ata(&address), amount),
-                                    spl_token::instruction::sync_native(&spl_token::id(), &token.ata(&address)).unwrap(),
+                                    spl_token::instruction::sync_native(&token.program_id(), &token.ata(&address)).unwrap(),
                                 ]);
                     required_compute_units += 20_000;
                 }
@@ -468,7 +468,7 @@ async fn build_instructions_for_ops(
                                         &address,
                                         &address,
                                         &token.mint(),
-                                        &spl_token::id(),
+                                        &token.program_id(),
                                     ),
                                 );
                 required_compute_units += 25_000;
@@ -487,7 +487,7 @@ async fn build_instructions_for_ops(
 
             let seed = &Keypair::new().pubkey().to_string()[..31];
             let ephemeral_token_account =
-                Pubkey::create_with_seed(&address, seed, &spl_token::id()).unwrap();
+                Pubkey::create_with_seed(&address, seed, &token.program_id()).unwrap();
 
             instructions.extend(vec![
                 system_instruction::create_account_with_seed(
@@ -497,17 +497,17 @@ async fn build_instructions_for_ops(
                     seed,
                     TOKEN_ACCOUNT_REQUIRED_LAMPORTS,
                     spl_token::state::Account::LEN as u64,
-                    &spl_token::id(),
+                    &token.program_id(),
                 ),
                 spl_token::instruction::initialize_account(
-                    &spl_token::id(),
+                    &token.program_id(),
                     &ephemeral_token_account,
                     &token.mint(),
                     &address,
                 )
                 .unwrap(),
                 spl_token::instruction::transfer_checked(
-                    &spl_token::id(),
+                    &token.program_id(),
                     &token.ata(&address),
                     &token.mint(),
                     &ephemeral_token_account,
@@ -518,7 +518,7 @@ async fn build_instructions_for_ops(
                 )
                 .unwrap(),
                 spl_token::instruction::close_account(
-                    &spl_token::id(),
+                    &token.program_id(),
                     &ephemeral_token_account,
                     &address,
                     &address,
@@ -1894,7 +1894,7 @@ async fn mfi_deposit_or_withdraw(
                     // Bank Liquidity Vault
                     AccountMeta::new(bank.liquidity_vault, false),
                     // Token Program
-                    AccountMeta::new_readonly(spl_token::id(), false),
+                    AccountMeta::new_readonly(token.program_id(), false),
                 ],
             );
 
@@ -1941,7 +1941,7 @@ async fn mfi_deposit_or_withdraw(
                 // Bank Liquidity Vault
                 AccountMeta::new(bank.liquidity_vault, false),
                 // Token Program
-                AccountMeta::new_readonly(spl_token::id(), false),
+                AccountMeta::new_readonly(token.program_id(), false),
             ];
 
             for balance in &user_account.lending_account.balances {
@@ -1961,7 +1961,7 @@ async fn mfi_deposit_or_withdraw(
                     &wallet_address,
                     &wallet_address,
                     &bank.mint,
-                    &spl_token::id(),
+                    &token.program_id(),
                 ),
 
                 Instruction::new_with_bytes(
@@ -2407,9 +2407,9 @@ fn kamino_deposit_or_withdraw(
                     // User Destination Collateral
                     AccountMeta::new_readonly(KAMINO_LEND_PROGRAM, false),
                     // Token Program
-                    AccountMeta::new_readonly(spl_token::id(), false),
+                    AccountMeta::new_readonly(token.program_id(), false),
                     // Token Program
-                    AccountMeta::new_readonly(spl_token::id(), false),
+                    AccountMeta::new_readonly(token.program_id(), false),
                     // Sysvar: Instructions
                     AccountMeta::new_readonly(sysvar::instructions::ID, false),
                 ],
@@ -2458,9 +2458,9 @@ fn kamino_deposit_or_withdraw(
                     // User Destination Collateral
                     AccountMeta::new_readonly(KAMINO_LEND_PROGRAM, false),
                     // Token Program
-                    AccountMeta::new_readonly(spl_token::id(), false),
+                    AccountMeta::new_readonly(token.program_id(), false),
                     // Token Program
-                    AccountMeta::new_readonly(spl_token::id(), false),
+                    AccountMeta::new_readonly(token.program_id(), false),
                     // Sysvar: Instructions
                     AccountMeta::new_readonly(sysvar::instructions::ID, false),
                 ],
@@ -2729,7 +2729,7 @@ fn solend_deposit_or_withdraw(
                 &wallet_address,
                 &wallet_address,
                 &reserve.collateral.mint_pubkey,
-                &spl_token::id(),
+                &token.program_id(),
             ),
         );
     }
@@ -2773,7 +2773,7 @@ fn solend_deposit_or_withdraw(
                     // User Transfer Authority
                     AccountMeta::new(wallet_address, true),
                     // Token Program
-                    AccountMeta::new_readonly(spl_token::id(), false),
+                    AccountMeta::new_readonly(token.program_id(), false),
                 ],
             ));
             (amount, 200_000)
@@ -2885,7 +2885,7 @@ fn solend_deposit_or_withdraw(
                 // User Transfer Authority
                 AccountMeta::new(wallet_address, true),
                 // Token Program
-                AccountMeta::new_readonly(spl_token::id(), false),
+                AccountMeta::new_readonly(token.program_id(), false),
             ];
 
             for reserve_address in &obligation_market_reserves {
@@ -3088,7 +3088,7 @@ fn drift_deposit_or_withdraw(
                     false,
                 ),
                 // Token Program
-                AccountMeta::new_readonly(spl_token::id(), false),
+                AccountMeta::new_readonly(token.program_id(), false),
                 // Spot Market Oracle
                 AccountMeta::new_readonly(spot_market.oracle, false),
                 // Spot Market
@@ -3138,7 +3138,7 @@ fn drift_deposit_or_withdraw(
                     false,
                 ),
                 // Token Program
-                AccountMeta::new_readonly(spl_token::id(), false),
+                AccountMeta::new_readonly(token.program_id(), false),
                 // Spot Market Oracle
                 AccountMeta::new_readonly(spot_market.oracle, false),
                 // Spot Market

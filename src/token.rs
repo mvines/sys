@@ -83,8 +83,38 @@ impl Token {
         }
     }
 
+    pub fn program_id(&self) -> Pubkey {
+        match self {
+            Token::USDC
+            | Token::USDS
+            | Token::USDT
+            | Token::UXD
+            | Token::tuUSDC
+            | Token::bSOL
+            | Token::hSOL
+            | Token::mSOL
+            | Token::stSOL
+            | Token::JitoSOL
+            | Token::tuSOL
+            | Token::tumSOL
+            | Token::tustSOL
+            | Token::wSOL
+            | Token::JLP
+            | Token::JUP
+            | Token::JTO
+            | Token::BONK
+            | Token::KMNO
+            | Token::PYTH
+            | Token::WEN
+            | Token::WIF => spl_token::id(),
+        }
+    }
     pub fn ata(&self, wallet_address: &Pubkey) -> Pubkey {
-        spl_associated_token_account::get_associated_token_address(wallet_address, &self.mint())
+        spl_associated_token_account::get_associated_token_address_with_program_id(
+            wallet_address,
+            &self.mint(),
+            &self.program_id(),
+        )
     }
 
     pub fn symbol(&self) -> &'static str {

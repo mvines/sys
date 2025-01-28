@@ -588,7 +588,7 @@ async fn process_exchange_deposit<T: Signers>(
                         &authority_address,
                         &deposit_address,
                         &token.mint(),
-                        &spl_token::id(),
+                        &token.program_id(),
                     ),
                 );
                 compute_units += 20_000
@@ -596,7 +596,7 @@ async fn process_exchange_deposit<T: Signers>(
 
             instructions.push(
                 spl_token::instruction::transfer_checked(
-                    &spl_token::id(),
+                    &token.program_id(),
                     &token.ata(&from_address),
                     &token.mint(),
                     &token.ata(&deposit_address),
@@ -3040,7 +3040,7 @@ async fn process_account_sweep<T: Signers>(
 
         (
             vec![spl_token::instruction::transfer_checked(
-                &spl_token::id(),
+                &token.program_id(),
                 &token.ata(&from_address),
                 &token.mint(),
                 &token.ata(&to_address),
@@ -3759,10 +3759,10 @@ async fn process_account_wrap<T: Signers>(
             &authority_address,
             &address,
             &wsol.mint(),
-            &spl_token::id(),
+            &wsol.program_id(),
         ),
         system_instruction::transfer(&address, &wsol_address, amount),
-        spl_token::instruction::sync_native(&spl_token::id(), &wsol_address).unwrap(),
+        spl_token::instruction::sync_native(&wsol.program_id(), &wsol_address).unwrap(),
     ]);
 
     apply_priority_fee(rpc_clients, &mut instructions, 30_000, priority_fee)?;
@@ -3842,10 +3842,10 @@ async fn process_account_unwrap<T: Signers>(
             &authority_address,
             &ephemeral_token_account.pubkey(),
             &wsol.mint(),
-            &spl_token::id(),
+            &wsol.program_id(),
         ),
         spl_token::instruction::transfer_checked(
-            &spl_token::id(),
+            &wsol.program_id(),
             &wsol.ata(&address),
             &wsol.mint(),
             &wsol.ata(&ephemeral_token_account.pubkey()),
@@ -3856,7 +3856,7 @@ async fn process_account_unwrap<T: Signers>(
         )
         .unwrap(),
         spl_token::instruction::close_account(
-            &spl_token::id(),
+            &wsol.program_id(),
             &wsol.ata(&ephemeral_token_account.pubkey()),
             &address,
             &ephemeral_token_account.pubkey(),
