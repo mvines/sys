@@ -49,6 +49,9 @@ lazy_static::lazy_static! {
             Token::USDC,
             Token::wSOL,
         ])),
+        ("save-jlp", HashSet::from([
+            Token::USDC,
+        ])),
         ("mfi", HashSet::from([
             Token::USDC,
             Token::USDT,
@@ -317,7 +320,7 @@ fn pool_supply_apr(
 ) -> Result<f64, Box<dyn std::error::Error>> {
     Ok(if pool.starts_with("kamino-") {
         kamino_apr(pool, token, account_data_cache)?
-    } else if pool.starts_with("solend-") {
+    } else if pool.starts_with("solend-") || pool.starts_with("save-") {
         solend_apr(pool, token, account_data_cache)?
     } else if pool == "mfi" {
         mfi_apr(token, account_data_cache)?
@@ -351,7 +354,7 @@ async fn pool_supply_balance(
 ) -> Result<(/*balance: */ u64, /* available_balance: */ u64), Box<dyn std::error::Error>> {
     Ok(if pool.starts_with("kamino-") {
         kamino_deposited_amount(pool, address, token, account_data_cache)?
-    } else if pool.starts_with("solend-") {
+    } else if pool.starts_with("solend-") || pool.starts_with("save-") {
         solend_deposited_amount(pool, address, token, account_data_cache)?
     } else if pool == "mfi" {
         mfi_deposited_amount(address, token, account_data_cache).await?
@@ -431,7 +434,7 @@ async fn build_instructions_for_ops(
     for (op, pool) in ops {
         let result = if pool.starts_with("kamino-") {
             kamino_deposit_or_withdraw(*op, pool, address, token, amount, account_data_cache)?
-        } else if pool.starts_with("solend-") {
+        } else if pool.starts_with("solend-") || pool.starts_with("save-") {
             solend_deposit_or_withdraw(*op, pool, address, token, amount, account_data_cache)?
         } else if *pool == "mfi" {
             mfi_deposit_or_withdraw(*op, address, token, amount, false, account_data_cache).await?
@@ -2567,6 +2570,10 @@ fn solend_load_reserve_for_pool(
                 pubkey!["8kd8cDJEioKFXckK8tP2FHNSQLDGguCFj5Vy1vK5eDGV"],
             ),
         ]),
+        "save-jlp" => HashMap::from([(
+            Token::USDC,
+            pubkey!["BJfY2E6TVEQe896kfR1AhhYCECVKfbceGg2ASU2LXdiA"],
+        )]),
         _ => unreachable!(),
     };
     let market_reserve_address = *market_reserve_map
