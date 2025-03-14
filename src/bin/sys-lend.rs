@@ -172,9 +172,6 @@ fn supported_pools_for_token(token: Token) -> Vec<String> {
         .collect();
     supported_tokens.sort();
     supported_tokens
-        .into_iter()
-        .filter(|pool| pool != "mfi")
-        .collect()
 }
 
 #[derive(Clone)]
@@ -1749,9 +1746,9 @@ async fn mfi_load_user_account(
 }
 
 /*
-async fn mfi_load_user_account(
+fn mfi_load_user_account(
     wallet_address: Pubkey,
-    account_data_cache: &mut AccountDataCache<'_>,
+    account_data_cache: &mut AccountDataCache,
 ) -> Result<Option<(Pubkey, marginfi_v2::MarginfiAccount)>, Box<dyn std::error::Error>> {
     use {
         solana_account_decoder::UiDataSliceConfig,
