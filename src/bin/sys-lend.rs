@@ -1713,22 +1713,19 @@ async fn mfi_load_user_account(
     wallet_address: Pubkey,
     account_data_cache: &mut AccountDataCache<'_>,
 ) -> Result<Option<(Pubkey, marginfi_v2::MarginfiAccount)>, Box<dyn std::error::Error>> {
-    let url = format!("https://account-search.marginfi.com/api/search?address={wallet_address}");
+    let url = format!(
+        "https://account-search.marginfi.com/api/search/marginfi/accounts?wallet={wallet_address}"
+    );
 
     #[derive(Debug, serde::Serialize, serde::Deserialize)]
     struct MfiAccount {
         address: String, // Ignore all other response fields..
     }
-    #[derive(Debug, serde::Serialize, serde::Deserialize)]
-    struct Response {
-        accounts: Vec<MfiAccount>,
-    }
 
     let mut accounts = reqwest::get(url)
         .await?
-        .json::<Response>()
+        .json::<Vec<MfiAccount>>()
         .await?
-        .accounts
         .into_iter();
 
     let first_user_account = accounts.next();
