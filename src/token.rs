@@ -305,7 +305,9 @@ impl Token {
             return Ok(Decimal::from_f64(1.).unwrap());
         }
         match self {
-            Token::USDC => coin_gecko::get_historical_price(when, &MaybeToken(Some(*self))).await,
+            Token::USDC | Token::PYUSD => {
+                coin_gecko::get_historical_price(when, &MaybeToken(Some(*self))).await
+            }
             unsupported_token => Err(format!(
                 "Historical price data is not available for {}",
                 unsupported_token.name()
