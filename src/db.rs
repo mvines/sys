@@ -57,6 +57,9 @@ pub enum DbError {
 
     #[error("Import failed: {0}")]
     ImportFailed(String),
+
+    #[error("Keyring failed: {0}")]
+    KeyringFailed(String),
 }
 
 pub type DbResult<T> = std::result::Result<T, DbError>;
@@ -631,6 +634,7 @@ pub struct DbData {
     sweep_stake_account: Option<SweepStakeAccount>,
     transitory_sweep_stake_accounts: Vec<TransitorySweepStake>,
     tax_rate: Option<TaxRate>,
+    exchanges: HashSet<Exchange>,
 }
 
 impl DbData {
@@ -684,6 +688,7 @@ impl DbData {
                 .get("transitory-sweep-stake-accounts")
                 .unwrap_or_default(),
             tax_rate: None,
+            exchanges: HashSet::<Exchange>::new(),
         }
     }
 
@@ -720,16 +725,28 @@ impl Db {
         exchange_account: &str,
         exchange_credentials: ExchangeCredentials,
     ) -> DbResult<()> {
-        self.clear_exchange_credentials(exchange, exchange_account)?;
-
-        self.credentials_db
-            .set(
-                &format!("{exchange:?}{exchange_account}"),
-                &exchange_credentials,
-            )
-            .unwrap();
-
-        Ok(self.credentials_db.dump()?)
+        for entry in [
+            ("api_key", exchange_credentials.api_key),
+            ("secret", exchange_credentials.secret),
+            ("subaccount", exchange_credentials.subaccount.unwrap_or_default()),
+        ] {
+            let user = format!("{exchange_account}_{}", entry.0);
+            let keyring_entry = match keyring::Entry::new(&exchange.to_string(), &user) {
+                Ok(entry) => entry,
+                Err(e) => {
+                    return Err(DbError::KeyringFailed(format!(
+                        "Failed to create keyring entry {user}: {e}"
+                    )))
+                }
+            };
+            if let Err(e) = keyring_entry.set_secret(entry.1.as_bytes()) {
+                return Err(DbError::KeyringFailed(format!(
+                    "Failed to set {}: {e}",
+                    entry.0
+                )));
+            }
+        }
+        self.add_exchange(exchange)
     }
 
     pub fn get_exchange_credentials(
@@ -737,8 +754,35 @@ impl Db {
         exchange: Exchange,
         exchange_account: &str,
     ) -> Option<ExchangeCredentials> {
-        self.credentials_db
-            .get(&format!("{exchange:?}{exchange_account}"))
+        let mut values = vec![];
+        for entry in ["api_key", "secret", "subaccount"] {
+            let user = format!("{exchange_account}_{entry}");
+            let keyring_entry = match keyring::Entry::new(&exchange.to_string(), &user) {
+                Ok(entry) => entry,
+                Err(e) => {
+                    eprintln!("Failed to create keyring entry {user}: {e}");
+                    return None;
+                }
+            };
+            let value = match keyring_entry.get_secret() {
+                Ok(secret) => String::from_utf8(secret).unwrap(),
+                Err(e) => {
+                    eprintln!("Failed to get the {entry}: {e}");
+                    return None;
+                }
+            };
+            values.push(value);
+        }
+        let subaccount = if values[2] != "" {
+            Some(values[2].clone())
+        } else {
+            None
+        };
+        Some(ExchangeCredentials {
+            api_key: values[0].clone(),
+            secret: values[1].clone(),
+            subaccount,
+        })
     }
 
     pub fn clear_exchange_credentials(
@@ -746,31 +790,33 @@ impl Db {
         exchange: Exchange,
         exchange_account: &str,
     ) -> DbResult<()> {
-        if self
-            .get_exchange_credentials(exchange, exchange_account)
-            .is_some()
-        {
-            self.credentials_db
-                .rem(&format!("{exchange:?}{exchange_account}"))
-                .ok();
-            self.credentials_db.dump()?;
+        for entry in ["api_key", "secret", "subaccount"] {
+            let user = format!("{exchange_account}_{entry}");
+            let keyring_entry = match keyring::Entry::new(&exchange.to_string(), &user) {
+                Ok(entry) => entry,
+                Err(e) => {
+                    return Err(DbError::KeyringFailed(format!(
+                        "Failed to create keyring entry {user}: {e}"
+                    )))
+                }
+            };
+            if let Err(e) = keyring_entry.delete_credential() {
+                return Err(DbError::KeyringFailed(format!(
+                    "Failed to delete {entry}: {e}"
+                )));
+            }
         }
-        Ok(())
+        self.remove_exchange(exchange)
     }
 
     pub fn get_default_accounts_from_configured_exchanges(
         &self,
     ) -> Vec<(Exchange, ExchangeCredentials, String)> {
-        self.credentials_db
-            .get_all()
-            .into_iter()
-            .filter_map(|key| {
-                if let Ok(exchange) = key.parse() {
-                    self.get_exchange_credentials(exchange, "")
-                        .map(|exchange_credentials| (exchange, exchange_credentials, "".into()))
-                } else {
-                    None
-                }
+        self.get_exchanges()
+            .iter()
+            .filter_map(|exchange| {
+                self.get_exchange_credentials(*exchange, "")
+                    .map(|exchange_credentials| (*exchange, exchange_credentials, "".into()))
             })
             .collect()
     }
@@ -1584,6 +1630,26 @@ impl Db {
     pub fn set_tax_rate(&mut self, tax_rate: TaxRate) -> DbResult<()> {
         self.data.tax_rate = Some(tax_rate);
         self.save()
+    }
+
+    fn get_exchanges(&self) -> HashSet<Exchange> {
+        self.data.exchanges.clone()
+    }
+
+    fn add_exchange(&mut self, exchange: Exchange) -> DbResult<()> {
+        if self.data.exchanges.insert(exchange) {
+            self.save()
+        } else {
+            Ok(())
+        }
+    }
+
+    fn remove_exchange(&mut self, exchange: Exchange) -> DbResult<()> {
+        if self.data.exchanges.remove(&exchange) {
+            self.save()
+        } else {
+            Ok(())
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
