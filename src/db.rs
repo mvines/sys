@@ -725,26 +725,19 @@ impl Db {
         exchange_account: &str,
         exchange_credentials: ExchangeCredentials,
     ) -> DbResult<()> {
-        for entry in [
-            ("api_key", exchange_credentials.api_key),
-            ("secret", exchange_credentials.secret),
-            ("subaccount", exchange_credentials.subaccount.unwrap_or_default()),
-        ] {
-            let user = format!("{exchange_account}_{}", entry.0);
-            let keyring_entry = match keyring::Entry::new(&exchange.to_string(), &user) {
-                Ok(entry) => entry,
-                Err(e) => {
-                    return Err(DbError::KeyringFailed(format!(
-                        "Failed to create keyring entry {user}: {e}"
-                    )))
-                }
-            };
-            if let Err(e) = keyring_entry.set_secret(entry.1.as_bytes()) {
+        let ec = serde_json::to_string(&exchange_credentials).unwrap();
+        // user can't be an empty string
+        let user = format!("{}_{exchange_account}", exchange.to_string());
+        let keyring_entry = match keyring::Entry::new(&exchange.to_string(), &user) {
+            Ok(entry) => entry,
+            Err(e) => {
                 return Err(DbError::KeyringFailed(format!(
-                    "Failed to set {}: {e}",
-                    entry.0
-                )));
+                    "Failed to create keyring entry: {e}"
+                )))
             }
+        };
+        if let Err(e) = keyring_entry.set_secret(ec.as_bytes()) {
+            return Err(DbError::KeyringFailed(format!("Failed to set: {e}")));
         }
         self.add_exchange(exchange)
     }
@@ -754,35 +747,28 @@ impl Db {
         exchange: Exchange,
         exchange_account: &str,
     ) -> Option<ExchangeCredentials> {
-        let mut values = vec![];
-        for entry in ["api_key", "secret", "subaccount"] {
-            let user = format!("{exchange_account}_{entry}");
-            let keyring_entry = match keyring::Entry::new(&exchange.to_string(), &user) {
-                Ok(entry) => entry,
-                Err(e) => {
-                    eprintln!("Failed to create keyring entry {user}: {e}");
-                    return None;
-                }
-            };
-            let value = match keyring_entry.get_secret() {
-                Ok(secret) => String::from_utf8(secret).unwrap(),
-                Err(e) => {
-                    eprintln!("Failed to get the {entry}: {e}");
-                    return None;
-                }
-            };
-            values.push(value);
-        }
-        let subaccount = if values[2] != "" {
-            Some(values[2].clone())
-        } else {
-            None
+        let user = format!("{}_{exchange_account}", exchange.to_string());
+        let keyring_entry = match keyring::Entry::new(&exchange.to_string(), &user) {
+            Ok(entry) => entry,
+            Err(e) => {
+                eprintln!("Failed to create keyring entry: {e}");
+                return None;
+            }
         };
-        Some(ExchangeCredentials {
-            api_key: values[0].clone(),
-            secret: values[1].clone(),
-            subaccount,
-        })
+        let value = match keyring_entry.get_secret() {
+            Ok(secret) => String::from_utf8(secret).unwrap(),
+            Err(e) => {
+                eprintln!("Failed to get the secret: {e}");
+                return None;
+            }
+        };
+        match serde_json::from_str(&value) {
+            Ok(v) => Some(v),
+            Err(e) => {
+                eprintln!("Failed to deserialize credentials: {e}");
+                None
+            },
+        }
     }
 
     pub fn clear_exchange_credentials(
@@ -790,21 +776,19 @@ impl Db {
         exchange: Exchange,
         exchange_account: &str,
     ) -> DbResult<()> {
-        for entry in ["api_key", "secret", "subaccount"] {
-            let user = format!("{exchange_account}_{entry}");
-            let keyring_entry = match keyring::Entry::new(&exchange.to_string(), &user) {
-                Ok(entry) => entry,
-                Err(e) => {
-                    return Err(DbError::KeyringFailed(format!(
-                        "Failed to create keyring entry {user}: {e}"
-                    )))
-                }
-            };
-            if let Err(e) = keyring_entry.delete_credential() {
+        let user = format!("{}_{exchange_account}", exchange.to_string());
+        let keyring_entry = match keyring::Entry::new(&exchange.to_string(), &user) {
+            Ok(entry) => entry,
+            Err(e) => {
                 return Err(DbError::KeyringFailed(format!(
-                    "Failed to delete {entry}: {e}"
-                )));
+                    "Failed to create keyring entry: {e}"
+                )))
             }
+        };
+        if let Err(e) = keyring_entry.delete_credential() {
+            return Err(DbError::KeyringFailed(format!(
+                "Failed to delete credential: {e}"
+            )));
         }
         self.remove_exchange(exchange)
     }
