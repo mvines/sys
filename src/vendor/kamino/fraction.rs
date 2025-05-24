@@ -7,6 +7,7 @@ pub enum LendingError {
 
 #[allow(clippy::assign_op_pattern)]
 #[allow(clippy::reversed_empty_ranges)]
+#[allow(clippy::manual_div_ceil)]
 mod uint_types {
     use uint::construct_uint;
     construct_uint! {

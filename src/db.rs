@@ -384,7 +384,7 @@ impl LotDisposalKind {
             LotDisposalKind::Other { .. }
             | LotDisposalKind::Swap { .. }
             | LotDisposalKind::WithdrawalFee { .. }
-            | LotDisposalKind::Fiat { .. } => None,
+            | LotDisposalKind::Fiat => None,
         }
     }
 }
@@ -685,9 +685,8 @@ impl DbData {
     fn load(filename: &Path) -> io::Result<Self> {
         let bytes = fs::read(filename)?;
 
-        serde_json::from_str(std::str::from_utf8(&bytes).expect("invalid utf8")).map_err(|err| {
-            io::Error::new(io::ErrorKind::Other, format!("JSON parse failed: {err:?}"))
-        })
+        serde_json::from_str(std::str::from_utf8(&bytes).expect("invalid utf8"))
+            .map_err(|err| io::Error::other(format!("JSON parse failed: {err:?}")))
     }
 
     fn save(&self, filename: &Path) -> io::Result<()> {

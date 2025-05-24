@@ -27,6 +27,7 @@ use std::{convert::TryFrom, fmt};
 use uint::construct_uint;
 
 // U128 with 128 bits consisting of 2 x 64-bit words
+#[allow(clippy::manual_div_ceil)]
 construct_uint! {
     pub struct U128(2);
 }
