@@ -2940,23 +2940,21 @@ fn drift_load_user(
 fn drift_find_and_load_user(
     wallet_address: Pubkey,
     account_data_cache: &mut AccountDataCache,
-) -> Result<(Pubkey, Option<drift::user::User>), Box<dyn std::error::Error>> {
-    let user_address = Pubkey::find_program_address(
-        &[
-            b"user",
-            &wallet_address.to_bytes(),
-            &[0, 0], // subaccount 0
-        ],
-        &DRIFT_PROGRAM,
-    )
-    .0;
+) -> Result<Option<(Pubkey, drift::user::User)>, Box<dyn std::error::Error>> {
+    for subaccount in 0..3 {
+        let user_address = Pubkey::find_program_address(
+            &[b"user", &wallet_address.to_bytes(), &[subaccount, 0]],
+            &DRIFT_PROGRAM,
+        )
+        .0;
 
-    let user = drift_load_user(user_address, account_data_cache)?;
-    if let Some(ref user) = user {
-        assert_eq!(user.authority, wallet_address);
+        let user = drift_load_user(user_address, account_data_cache)?;
+        if let Some(user) = user {
+            assert_eq!(user.authority, wallet_address);
+            return Ok(Some((user_address, user)));
+        }
     }
-
-    Ok((user_address, user))
+    Ok(None)
 }
 
 fn drift_load_spot_market(
@@ -3008,12 +3006,11 @@ fn drift_deposited_amount(
     account_data_cache: &mut AccountDataCache,
 ) -> Result<(/*balance: */ u64, /* available_balance: */ u64), Box<dyn std::error::Error>> {
     let spot_market = drift_find_and_load_spot_market(token, account_data_cache)?;
-    let (_user_address, user) = drift_find_and_load_user(wallet_address, account_data_cache)?;
-
-    let deposited_amount = match user {
+    let user_address_and_data = drift_find_and_load_user(wallet_address, account_data_cache)?;
+    let deposited_amount = match user_address_and_data {
         None => 0,
-        Some(user) => {
-            let scaled_balance = user
+        Some((_user_address, data)) => {
+            let scaled_balance = data
                 .spot_positions
                 .iter()
                 .find_map(|spot_position| {
@@ -3050,8 +3047,9 @@ fn drift_deposit_or_withdraw(
 ) -> Result<DepositOrWithdrawResult, Box<dyn std::error::Error>> {
     let state_address = Pubkey::find_program_address(&[b"drift_state"], &DRIFT_PROGRAM).0;
 
-    let (user_address, _user) = drift_find_and_load_user(wallet_address, account_data_cache)
-        .map_err(|err| format!("No Drift account found for {wallet_address}. Manually deposit once into Drift and retry ({err})"))?;
+    let (user_address, _user) = drift_find_and_load_user(wallet_address, account_data_cache).ok().flatten()
+        .ok_or_else(|| format!("No Drift account found for {wallet_address}. Manually deposit once into Drift and retry"))?;
+
     let user_stats_address =
         Pubkey::find_program_address(&[b"user_stats", &wallet_address.to_bytes()], &DRIFT_PROGRAM)
             .0;
