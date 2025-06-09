@@ -8,19 +8,17 @@ use {
     console::{style, Style},
     db::*,
     itertools::{izip, Itertools},
-    rpc_client_utils::get_signature_date,
+    rpc_client_utils::{get_signature_date, get_stake_activation_state, StakeActivationState},
     rust_decimal::prelude::*,
     separator::FixedPlaceSeparatable,
     solana_clap_utils::{self, input_parsers::*, input_validators::*},
-    solana_client::{
-        rpc_client::RpcClient, rpc_config::RpcTransactionConfig, rpc_response::StakeActivationState,
-    },
+    solana_client::{rpc_client::RpcClient, rpc_config::RpcTransactionConfig},
+    solana_pubkey::Pubkey,
     solana_sdk::{
         clock::Slot,
         compute_budget,
         message::Message,
         native_token::{sol_to_lamports, Sol},
-        pubkey::Pubkey,
         signature::{read_keypair_file, Keypair, Signature, Signer},
         signers::Signers,
         stake::state::Authorized,
@@ -3500,6 +3498,7 @@ async fn process_account_redelegate<T: Signers>(
     }
     let redelegated_amount = from_account.last_update_balance - minimum_stake_account_balance;
 
+    #[allow(deprecated)]
     let instructions = solana_sdk::stake::instruction::redelegate(
         &from_address,
         &authority_address,
@@ -4081,9 +4080,7 @@ async fn process_account_sync_sweep(
         .value
         .ok_or("Sweep stake account does not exist")?;
 
-    #[allow(deprecated)]
-    let sweep_stake_activation = rpc_client
-        .get_stake_activation(sweep_stake_account_info.address, None)
+    let sweep_stake_activation_state = get_stake_activation_state(rpc_client, &sweep_stake_account)
         .map_err(|err| {
             format!(
                 "Unable to get activation information for sweep stake account: {}: {}",
@@ -4091,9 +4088,9 @@ async fn process_account_sync_sweep(
             )
         })?;
 
-    if sweep_stake_activation.state != StakeActivationState::Active {
+    if sweep_stake_activation_state != StakeActivationState::Active {
         println!(
-            "Sweep stake account is not active, unable to continue: {sweep_stake_activation:?}"
+            "Sweep stake account is not active, unable to continue: {sweep_stake_activation_state:?}"
         );
         return Ok(());
     }
@@ -4136,17 +4133,18 @@ async fn process_account_sync_sweep(
             Some(x) => x,
         };
 
-        #[allow(deprecated)]
-        let transient_stake_activation = rpc_client
-            .get_stake_activation(transitory_sweep_stake_address, None)
+        let transient_stake_activation_state = get_stake_activation_state(
+            rpc_client,
+            &transitory_sweep_stake_account,
+        )
             .map_err(|err| {
                 format!(
                     "Unable to get activation information for transient stake: {transitory_sweep_stake_address}: {err}"
                 )
             })?;
 
-        if transient_stake_activation.state != StakeActivationState::Active {
-            println!("  Transitory stake is not yet active: {transient_stake_activation:?}");
+        if transient_stake_activation_state != StakeActivationState::Active {
+            println!("  Transitory stake is not yet active: {transient_stake_activation_state:?}");
             continue;
         }
 
