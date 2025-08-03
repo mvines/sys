@@ -11,6 +11,7 @@
 #![allow(clippy::assign_op_pattern)]
 #![allow(clippy::ptr_offset_with_cast)]
 #![allow(clippy::manual_range_contains)]
+#![allow(clippy::manual_div_ceil)]
 
 use crate::vendor::solend::{
     error::LendingError,
@@ -21,7 +22,6 @@ use std::{convert::TryFrom, fmt};
 use uint::construct_uint;
 
 // U192 with 192 bits consisting of 3 x 64-bit words
-#[allow(clippy::manual_div_ceil)]
 construct_uint! {
     pub struct U192(3);
 }
@@ -124,7 +124,7 @@ impl fmt::Display for Decimal {
 
 impl fmt::Debug for Decimal {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self)
+        write!(f, "{self}")
     }
 }
 

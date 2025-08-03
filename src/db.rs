@@ -642,38 +642,42 @@ impl DbData {
                 .collect(),
             open_orders: db.get("orders").unwrap_or_default(),
             disposed_lots: db.get("disposed-lots").unwrap_or_default(),
-            pending_deposits: db
-                .lexists("deposits")
-                .then(|| {
+            pending_deposits: if db.lexists("deposits") {
+                {
                     db.liter("deposits")
                         .filter_map(|item_iter| item_iter.get_item())
                         .collect()
-                })
-                .unwrap_or_default(),
-            pending_withdrawals: db
-                .lexists("withdrawals")
-                .then(|| {
+                }
+            } else {
+                Default::default()
+            },
+            pending_withdrawals: if db.lexists("withdrawals") {
+                {
                     db.liter("withdrawals")
                         .filter_map(|item_iter| item_iter.get_item())
                         .collect()
-                })
-                .unwrap_or_default(),
-            pending_transfers: db
-                .lexists("transfers")
-                .then(|| {
+                }
+            } else {
+                Default::default()
+            },
+            pending_transfers: if db.lexists("transfers") {
+                {
                     db.liter("transfers")
                         .filter_map(|item_iter| item_iter.get_item())
                         .collect()
-                })
-                .unwrap_or_default(),
-            pending_swaps: db
-                .lexists("swaps")
-                .then(|| {
+                }
+            } else {
+                Default::default()
+            },
+            pending_swaps: if db.lexists("swaps") {
+                {
                     db.liter("swaps")
                         .filter_map(|item_iter| item_iter.get_item())
                         .collect()
-                })
-                .unwrap_or_default(),
+                }
+            } else {
+                Default::default()
+            },
             sweep_stake_account: db.get("sweep-stake-account"),
             transitory_sweep_stake_accounts: db
                 .get("transitory-sweep-stake-accounts")
