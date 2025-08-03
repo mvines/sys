@@ -57,6 +57,9 @@ pub enum DbError {
 
     #[error("Import failed: {0}")]
     ImportFailed(String),
+
+    #[error("Keyring failed: {0}")]
+    KeyringFailed(String),
 }
 
 pub type DbResult<T> = std::result::Result<T, DbError>;
@@ -630,6 +633,7 @@ pub struct DbData {
     sweep_stake_account: Option<SweepStakeAccount>,
     transitory_sweep_stake_accounts: Vec<TransitorySweepStake>,
     tax_rate: Option<TaxRate>,
+    exchanges: HashSet<Exchange>,
 }
 
 impl DbData {
@@ -683,6 +687,7 @@ impl DbData {
                 .get("transitory-sweep-stake-accounts")
                 .unwrap_or_default(),
             tax_rate: None,
+            exchanges: HashSet::<Exchange>::new(),
         }
     }
 
@@ -719,16 +724,21 @@ impl Db {
         exchange_account: &str,
         exchange_credentials: ExchangeCredentials,
     ) -> DbResult<()> {
-        self.clear_exchange_credentials(exchange, exchange_account)?;
-
-        self.credentials_db
-            .set(
-                &format!("{exchange:?}{exchange_account}"),
-                &exchange_credentials,
-            )
-            .unwrap();
-
-        Ok(self.credentials_db.dump()?)
+        let ec = serde_json::to_string(&exchange_credentials).unwrap();
+        // user can't be an empty string
+        let user = format!("{exchange}_{exchange_account}");
+        let keyring_entry = match keyring::Entry::new(&exchange.to_string(), &user) {
+            Ok(entry) => entry,
+            Err(e) => {
+                return Err(DbError::KeyringFailed(format!(
+                    "Failed to create keyring entry: {e}"
+                )))
+            }
+        };
+        if let Err(e) = keyring_entry.set_secret(ec.as_bytes()) {
+            return Err(DbError::KeyringFailed(format!("Failed to set: {e}")));
+        }
+        self.add_exchange(exchange)
     }
 
     pub fn get_exchange_credentials(
@@ -736,8 +746,28 @@ impl Db {
         exchange: Exchange,
         exchange_account: &str,
     ) -> Option<ExchangeCredentials> {
-        self.credentials_db
-            .get(&format!("{exchange:?}{exchange_account}"))
+        let user = format!("{exchange}_{exchange_account}");
+        let keyring_entry = match keyring::Entry::new(&exchange.to_string(), &user) {
+            Ok(entry) => entry,
+            Err(e) => {
+                eprintln!("Failed to create keyring entry: {e}");
+                return None;
+            }
+        };
+        let value = match keyring_entry.get_secret() {
+            Ok(secret) => String::from_utf8(secret).unwrap(),
+            Err(e) => {
+                eprintln!("Failed to get the secret: {e}");
+                return None;
+            }
+        };
+        match serde_json::from_str(&value) {
+            Ok(v) => Some(v),
+            Err(e) => {
+                eprintln!("Failed to deserialize credentials: {e}");
+                None
+            }
+        }
     }
 
     pub fn clear_exchange_credentials(
@@ -745,31 +775,31 @@ impl Db {
         exchange: Exchange,
         exchange_account: &str,
     ) -> DbResult<()> {
-        if self
-            .get_exchange_credentials(exchange, exchange_account)
-            .is_some()
-        {
-            self.credentials_db
-                .rem(&format!("{exchange:?}{exchange_account}"))
-                .ok();
-            self.credentials_db.dump()?;
+        let user = format!("{exchange}_{exchange_account}");
+        let keyring_entry = match keyring::Entry::new(&exchange.to_string(), &user) {
+            Ok(entry) => entry,
+            Err(e) => {
+                return Err(DbError::KeyringFailed(format!(
+                    "Failed to create keyring entry: {e}"
+                )))
+            }
+        };
+        if let Err(e) = keyring_entry.delete_credential() {
+            return Err(DbError::KeyringFailed(format!(
+                "Failed to delete credential: {e}"
+            )));
         }
-        Ok(())
+        self.remove_exchange(exchange)
     }
 
     pub fn get_default_accounts_from_configured_exchanges(
         &self,
     ) -> Vec<(Exchange, ExchangeCredentials, String)> {
-        self.credentials_db
-            .get_all()
-            .into_iter()
-            .filter_map(|key| {
-                if let Ok(exchange) = key.parse() {
-                    self.get_exchange_credentials(exchange, "")
-                        .map(|exchange_credentials| (exchange, exchange_credentials, "".into()))
-                } else {
-                    None
-                }
+        self.get_exchanges()
+            .iter()
+            .filter_map(|exchange| {
+                self.get_exchange_credentials(*exchange, "")
+                    .map(|exchange_credentials| (*exchange, exchange_credentials, "".into()))
             })
             .collect()
     }
@@ -1579,6 +1609,26 @@ impl Db {
     pub fn set_tax_rate(&mut self, tax_rate: TaxRate) -> DbResult<()> {
         self.data.tax_rate = Some(tax_rate);
         self.save()
+    }
+
+    fn get_exchanges(&self) -> HashSet<Exchange> {
+        self.data.exchanges.clone()
+    }
+
+    fn add_exchange(&mut self, exchange: Exchange) -> DbResult<()> {
+        if self.data.exchanges.insert(exchange) {
+            self.save()
+        } else {
+            Ok(())
+        }
+    }
+
+    fn remove_exchange(&mut self, exchange: Exchange) -> DbResult<()> {
+        if self.data.exchanges.remove(&exchange) {
+            self.save()
+        } else {
+            Ok(())
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
