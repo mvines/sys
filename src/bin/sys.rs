@@ -1068,7 +1068,7 @@ async fn process_jup_swap<T: Signers>(
             .into());
         }
 
-        let swap_prefix = format!("Swap {}->{}", from_token, to_token);
+        let swap_prefix = format!("Swap {from_token}->{to_token}");
 
         if let Some(if_from_balance_exceeds) = if_from_balance_exceeds {
             if from_account.last_update_balance < if_from_balance_exceeds {
@@ -2799,9 +2799,9 @@ async fn process_account_csv(
                 disposed_lot.token.ui_amount(disposed_lot.lot.amount)
             ),
             disposed_lot.lot.acquisition.when.to_string(),
-            format!("{:.9}", cost),
+            format!("{cost:.9}"),
             disposed_lot.when.to_string(),
-            format!("{:.9}", proceedings),
+            format!("{proceedings:.9}"),
         ])?;
     }
 
@@ -3015,7 +3015,7 @@ async fn process_account_sweep<T: Signers>(
     let apply_exact_amount = |amount: u64| -> Result<u64, Box<dyn std::error::Error>> {
         if let Some(exact_amount) = exact_amount {
             if exact_amount > amount {
-                Err(format!("Account has insufficient balance: {}", from_address).into())
+                Err(format!("Account has insufficient balance: {from_address}").into())
             } else {
                 Ok(exact_amount)
             }
