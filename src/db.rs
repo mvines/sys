@@ -727,7 +727,7 @@ impl Db {
     ) -> DbResult<()> {
         let ec = serde_json::to_string(&exchange_credentials).unwrap();
         // user can't be an empty string
-        let user = format!("{}_{exchange_account}", exchange.to_string());
+        let user = format!("{exchange}_{exchange_account}");
         let keyring_entry = match keyring::Entry::new(&exchange.to_string(), &user) {
             Ok(entry) => entry,
             Err(e) => {
@@ -747,7 +747,7 @@ impl Db {
         exchange: Exchange,
         exchange_account: &str,
     ) -> Option<ExchangeCredentials> {
-        let user = format!("{}_{exchange_account}", exchange.to_string());
+        let user = format!("{exchange}_{exchange_account}");
         let keyring_entry = match keyring::Entry::new(&exchange.to_string(), &user) {
             Ok(entry) => entry,
             Err(e) => {
@@ -776,7 +776,7 @@ impl Db {
         exchange: Exchange,
         exchange_account: &str,
     ) -> DbResult<()> {
-        let user = format!("{}_{exchange_account}", exchange.to_string());
+        let user = format!("{exchange}_{exchange_account}");
         let keyring_entry = match keyring::Entry::new(&exchange.to_string(), &user) {
             Ok(entry) => entry,
             Err(e) => {
