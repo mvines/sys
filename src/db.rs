@@ -767,7 +767,7 @@ impl Db {
             Err(e) => {
                 eprintln!("Failed to deserialize credentials: {e}");
                 None
-            },
+            }
         }
     }
 
