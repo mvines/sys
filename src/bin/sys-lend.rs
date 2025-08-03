@@ -1048,7 +1048,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let apy_as_bps = (apy * 100.) as u64;
 
                 let value = if bps {
-                    format!("{}", apy_as_bps)
+                    format!("{apy_as_bps}")
                 } else {
                     format!("{:.2}", apy_as_bps as f64 / 100.)
                 };
@@ -1730,7 +1730,7 @@ async fn mfi_load_user_account(
 
     let first_user_account = accounts.next();
     if accounts.next().is_some() {
-        return Err(format!("Multiple MarginFi account found for {}", wallet_address).into());
+        return Err(format!("Multiple MarginFi account found for {wallet_address}").into());
     }
 
     Ok(match first_user_account {
