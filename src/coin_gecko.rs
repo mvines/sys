@@ -177,7 +177,7 @@ pub async fn get_historical_price(
 
             let (maybe_pro, x_cg_pro_api_key) = get_cg_pro_api_key();
             let url = format!(
-                "https://{maybe_pro}api.coingecko.com/api/v3/coins/{}/history?date={}-{}-{}&localization=false{x_cg_pro_api_key}",
+                "https://{maybe_pro}api.coingecko.com/api/v3/coins/{}/history?date={:02}-{:02}-{:4}&localization=false{x_cg_pro_api_key}",
                 coin,
                 when.day(),
                 when.month(),
