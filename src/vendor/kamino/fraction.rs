@@ -294,6 +294,7 @@ impl TryFrom<U256> for U128 {
     }
 }
 
+#[allow(dead_code)]
 pub struct FractionDisplay<'a>(&'a Fraction);
 
 impl Display for FractionDisplay<'_> {
