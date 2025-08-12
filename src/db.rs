@@ -157,6 +157,7 @@ pub struct PendingSwap {
     pub to_token_price: Decimal,
 
     pub lot_selection_method: LotSelectionMethod,
+    pub lot_numbers: Option<HashSet<usize>>,
 }
 
 #[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
@@ -909,6 +910,7 @@ impl Db {
         to_token: MaybeToken,
         to_token_price: Decimal,
         lot_selection_method: LotSelectionMethod,
+        lot_numbers: Option<HashSet<usize>>,
     ) -> DbResult<()> {
         let _ = self
             .get_account(address, from_token)
@@ -923,6 +925,7 @@ impl Db {
             to_token,
             to_token_price,
             lot_selection_method,
+            lot_numbers,
         });
         self.save()
     }
@@ -940,6 +943,7 @@ impl Db {
             to_token,
             to_token_price,
             lot_selection_method,
+            lot_numbers,
             ..
         } = self
             .data
@@ -962,7 +966,8 @@ impl Db {
 
         self.auto_save(false)?;
         if let Some((when, from_amount, to_amount)) = success {
-            let lots = from_account.extract_lots(self, from_amount, lot_selection_method, None)?;
+            let lots =
+                from_account.extract_lots(self, from_amount, lot_selection_method, lot_numbers)?;
 
             let to_amount_over_from_amount = to_amount as f64 / from_amount as f64;
             for lot in lots {

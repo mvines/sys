@@ -1024,6 +1024,7 @@ async fn process_jup_swap<T: Signers>(
     ui_amount: Option<f64>,
     slippage_bps: u64,
     lot_selection_method: LotSelectionMethod,
+    lot_numbers: Option<HashSet<usize>>,
     signers: T,
     existing_signature: Option<Signature>,
     if_from_balance_exceeds: Option<u64>,
@@ -1051,6 +1052,7 @@ async fn process_jup_swap<T: Signers>(
             to_token,
             to_token_price,
             lot_selection_method,
+            lot_numbers,
         )?;
     } else {
         let amount = match ui_amount {
@@ -1228,6 +1230,7 @@ async fn process_jup_swap<T: Signers>(
             to_token,
             to_token_price,
             lot_selection_method,
+            lot_numbers,
         )?;
 
         if !send_transaction_until_expired(rpc_clients, &transaction, last_valid_block_height)
@@ -5287,6 +5290,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                       price exceeds this percentage"),
                         )
                         .arg(lot_selection_arg())
+                        .arg(lot_numbers_arg())
                         .arg(
                             Arg::with_name("transaction")
                                 .long("transaction")
@@ -6471,6 +6475,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let address = address.expect("address");
                 let lot_selection_method =
                     value_t_or_exit!(arg_matches, "lot_selection", LotSelectionMethod);
+                let lot_numbers = lot_numbers_of(arg_matches, "lot_numbers");
                 let signature = value_t!(arg_matches, "transaction", Signature).ok();
                 let if_from_balance_exceeds = value_t!(arg_matches, "if_from_balance_exceeds", f64)
                     .ok()
@@ -6488,6 +6493,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     ui_amount,
                     slippage_bps,
                     lot_selection_method,
+                    lot_numbers,
                     vec![signer],
                     signature,
                     if_from_balance_exceeds,
