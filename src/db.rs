@@ -634,7 +634,7 @@ pub struct DbData {
     sweep_stake_account: Option<SweepStakeAccount>,
     transitory_sweep_stake_accounts: Vec<TransitorySweepStake>,
     tax_rate: Option<TaxRate>,
-    exchanges: HashSet<Exchange>,
+    exchanges: Option<HashSet<Exchange>>,
 }
 
 impl DbData {
@@ -688,7 +688,7 @@ impl DbData {
                 .get("transitory-sweep-stake-accounts")
                 .unwrap_or_default(),
             tax_rate: None,
-            exchanges: HashSet::<Exchange>::new(),
+            exchanges: None,
         }
     }
 
@@ -747,6 +747,12 @@ impl Db {
         exchange: Exchange,
         exchange_account: &str,
     ) -> Option<ExchangeCredentials> {
+        if let Some(cred) = self
+            .credentials_db
+            .get(&format!("{exchange:?}{exchange_account}"))
+        {
+            return Some(cred);
+        }
         let user = format!("{exchange}_{exchange_account}");
         let keyring_entry = match keyring::Entry::new(&exchange.to_string(), &user) {
             Ok(entry) => entry,
@@ -776,6 +782,16 @@ impl Db {
         exchange: Exchange,
         exchange_account: &str,
     ) -> DbResult<()> {
+        if self
+            .get_exchange_credentials(exchange, exchange_account)
+            .is_some()
+        {
+            self.credentials_db
+                .rem(&format!("{exchange:?}{exchange_account}"))
+                .ok();
+            self.credentials_db.dump()?;
+            return Ok(());
+        }
         let user = format!("{exchange}_{exchange_account}");
         let keyring_entry = match keyring::Entry::new(&exchange.to_string(), &user) {
             Ok(entry) => entry,
@@ -796,13 +812,28 @@ impl Db {
     pub fn get_default_accounts_from_configured_exchanges(
         &self,
     ) -> Vec<(Exchange, ExchangeCredentials, String)> {
-        self.get_exchanges()
-            .iter()
-            .filter_map(|exchange| {
-                self.get_exchange_credentials(*exchange, "")
-                    .map(|exchange_credentials| (*exchange, exchange_credentials, "".into()))
-            })
-            .collect()
+        if let Some(exchanges) = self.get_exchanges() {
+            exchanges
+                .iter()
+                .filter_map(|exchange| {
+                    self.get_exchange_credentials(*exchange, "")
+                        .map(|exchange_credentials| (*exchange, exchange_credentials, "".into()))
+                })
+                .collect()
+        } else {
+            self.credentials_db
+                .get_all()
+                .into_iter()
+                .filter_map(|key| {
+                    if let Ok(exchange) = key.parse() {
+                        self.get_exchange_credentials(exchange, "")
+                            .map(|exchange_credentials| (exchange, exchange_credentials, "".into()))
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        }
     }
 
     pub fn set_metrics_config(&mut self, metrics_config: MetricsConfig) -> DbResult<()> {
@@ -1616,12 +1647,15 @@ impl Db {
         self.save()
     }
 
-    fn get_exchanges(&self) -> HashSet<Exchange> {
+    fn get_exchanges(&self) -> Option<HashSet<Exchange>> {
         self.data.exchanges.clone()
     }
 
     fn add_exchange(&mut self, exchange: Exchange) -> DbResult<()> {
-        if self.data.exchanges.insert(exchange) {
+        if self.data.exchanges.is_none() {
+            self.data.exchanges = Some(HashSet::<_>::new());
+        }
+        if self.data.exchanges.as_mut().unwrap().insert(exchange) {
             self.save()
         } else {
             Ok(())
@@ -1629,7 +1663,8 @@ impl Db {
     }
 
     fn remove_exchange(&mut self, exchange: Exchange) -> DbResult<()> {
-        if self.data.exchanges.remove(&exchange) {
+        if self.data.exchanges.is_some() && self.data.exchanges.as_mut().unwrap().remove(&exchange)
+        {
             self.save()
         } else {
             Ok(())
