@@ -3378,7 +3378,7 @@ async fn process_account_split<T: Signers>(
         .get_minimum_balance_for_rent_exemption(solana_sdk::stake::state::StakeStateV2::size_of())?;
 
     let mut instructions = vec![];
-    apply_priority_fee(rpc_clients, &mut instructions, 10_000, priority_fee)?;
+    apply_priority_fee(rpc_clients, &mut instructions, 22_000, priority_fee)?;
 
     instructions.push(system_instruction::transfer(
         &authority_address,
