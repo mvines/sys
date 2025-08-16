@@ -2890,7 +2890,7 @@ async fn process_account_merge<T: Signers>(
             )
             .into());
         };
-        apply_priority_fee(rpc_clients, &mut instructions, 10_000, priority_fee)?;
+        apply_priority_fee(rpc_clients, &mut instructions, 20_000, priority_fee)?;
 
         println!("Merging {from_address} into {into_address}");
         if from_address != authority_address {
