@@ -175,6 +175,9 @@ fn supported_pools_for_token(token: Token) -> Vec<String> {
         .collect();
     supported_tokens.sort();
     supported_tokens
+        .into_iter()
+        .filter(|pool| pool != "mfi")
+        .collect()
 }
 
 #[derive(Clone)]
