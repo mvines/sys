@@ -274,8 +274,10 @@ impl LotAcquistion {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize, EnumString, IntoStaticStr)]
+#[derive(Default)]
 pub enum LotSelectionMethod {
     #[strum(serialize = "fifo")]
+    #[default]
     FirstInFirstOut,
     #[strum(serialize = "lifo")]
     LastInFirstOut,
@@ -299,11 +301,6 @@ impl LotSelectionMethod {
 pub const POSSIBLE_LOT_SELECTION_METHOD_VALUES: &[&str] =
     &["fifo", "lifo", "lowest-basis", "highest-basis"];
 
-impl Default for LotSelectionMethod {
-    fn default() -> Self {
-        Self::FirstInFirstOut
-    }
-}
 
 #[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
 pub struct Lot {

@@ -76,7 +76,7 @@ impl Rate {
     /// Calculates base^exp
     pub fn try_pow(&self, mut exp: u64) -> Result<Rate, ProgramError> {
         let mut base = *self;
-        let mut ret = if exp % 2 != 0 {
+        let mut ret = if !exp.is_multiple_of(2) {
             base
         } else {
             Rate(Self::wad())
@@ -86,7 +86,7 @@ impl Rate {
             exp /= 2;
             base = base.try_mul(base)?;
 
-            if exp % 2 != 0 {
+            if !exp.is_multiple_of(2) {
                 ret = ret.try_mul(base)?;
             }
         }
