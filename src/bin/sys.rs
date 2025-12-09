@@ -3239,7 +3239,7 @@ async fn process_account_sweep<T: Signers>(
 
     let (signature, maybe_transaction) = match existing_signature {
         None => {
-            apply_priority_fee(rpc_clients, &mut instructions, 7_000, priority_fee)?;
+            apply_priority_fee(rpc_clients, &mut instructions, 20_000, priority_fee)?;
 
             let mut message = Message::new(&instructions, Some(&from_authority_address));
             message.recent_blockhash = recent_blockhash;
