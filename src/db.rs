@@ -273,8 +273,9 @@ impl LotAcquistion {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize, EnumString, IntoStaticStr)]
-#[derive(Default)]
+#[derive(
+    Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize, EnumString, IntoStaticStr, Default,
+)]
 pub enum LotSelectionMethod {
     #[strum(serialize = "fifo")]
     #[default]
@@ -300,7 +301,6 @@ impl LotSelectionMethod {
 
 pub const POSSIBLE_LOT_SELECTION_METHOD_VALUES: &[&str] =
     &["fifo", "lifo", "lowest-basis", "highest-basis"];
-
 
 #[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
 pub struct Lot {
