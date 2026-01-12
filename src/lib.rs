@@ -89,9 +89,7 @@ impl RpcClients {
     }
 
     pub fn helius_or_default(&self) -> &RpcClient {
-        self.helius
-            .as_ref()
-            .map_or_else(|| self.default(), |helius| helius)
+        self.helius.as_ref().unwrap_or_else(|| self.default())
     }
 }
 
