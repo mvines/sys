@@ -998,6 +998,7 @@ async fn process_jup_quote(
     to_token: MaybeToken,
     ui_amount: f64,
     slippage_bps: u64,
+    jup_api_key: String,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let quote = jup_ag::quote(
         from_token.mint(),
@@ -1007,6 +1008,7 @@ async fn process_jup_quote(
             slippage_bps: Some(slippage_bps),
             ..jup_ag::QuoteConfig::default()
         },
+        jup_api_key,
     )
     .await?;
 
@@ -1032,6 +1034,7 @@ async fn process_jup_swap<T: Signers>(
     max_coingecko_value_percentage_loss: f64,
     priority_fee: PriorityFee,
     notifier: &Notifier,
+    jup_api_key: String,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let rpc_client = rpc_clients.default();
 
@@ -1106,6 +1109,7 @@ async fn process_jup_swap<T: Signers>(
                 slippage_bps: Some(slippage_bps),
                 ..jup_ag::QuoteConfig::default()
             },
+            jup_api_key.clone(),
         )
         .await?;
 
@@ -1150,7 +1154,9 @@ async fn process_jup_swap<T: Signers>(
                 jup_ag::PrioritizationFeeLamports::Exact { lamports };
         }
 
-        let mut transaction = jup_ag::swap(swap_request).await?.swap_transaction;
+        let mut transaction = jup_ag::swap(swap_request, jup_api_key.clone())
+            .await?
+            .swap_transaction;
 
         {
             let mut transaction_compute_budget = sys::priority_fee::ComputeBudget::default();
@@ -6453,60 +6459,71 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             _ => unreachable!(),
         },
-        ("jup", Some(jup_matches)) => match jup_matches.subcommand() {
-            ("quote", Some(arg_matches)) => {
-                let from_token = MaybeToken::from(value_t!(arg_matches, "from_token", Token).ok());
-                let to_token = MaybeToken::from(value_t!(arg_matches, "to_token", Token).ok());
-                let ui_amount = value_t_or_exit!(arg_matches, "amount", f64);
-                let slippage_bps = value_t_or_exit!(arg_matches, "slippage_bps", u64);
+        ("jup", Some(jup_matches)) => {
+            let jup_api_key = std::env::var("JUP_API_KEY").map_err(|_| {
+                "JUP_API_KEY env var not set. Get one from https://portal.jup.ag".to_string()
+            });
 
-                process_jup_quote(from_token, to_token, ui_amount, slippage_bps).await?;
-            }
-            ("swap", Some(arg_matches)) => {
-                let (signer, address) = signer_of(arg_matches, "address", &mut wallet_manager)?;
-                let from_token = MaybeToken::from(value_t!(arg_matches, "from_token", Token).ok());
-                let to_token = MaybeToken::from(value_t!(arg_matches, "to_token", Token).ok());
-                let ui_amount = match arg_matches.value_of("amount").unwrap() {
-                    "ALL" => None,
-                    ui_amount => Some(ui_amount.parse::<f64>().unwrap()),
-                };
-                let slippage_bps = value_t_or_exit!(arg_matches, "slippage_bps", u64);
-                let signer = signer.expect("signer");
-                let address = address.expect("address");
-                let lot_selection_method =
-                    value_t_or_exit!(arg_matches, "lot_selection", LotSelectionMethod);
-                let lot_numbers = lot_numbers_of(arg_matches, "lot_numbers");
-                let signature = value_t!(arg_matches, "transaction", Signature).ok();
-                let if_from_balance_exceeds = value_t!(arg_matches, "if_from_balance_exceeds", f64)
-                    .ok()
-                    .map(|x| from_token.amount(x));
-                let for_no_less_than = value_t!(arg_matches, "for_no_less_than", f64).ok();
-                let max_coingecko_value_percentage_loss =
-                    value_t_or_exit!(arg_matches, "max_coingecko_value_percentage_loss", f64);
+            match jup_matches.subcommand() {
+                ("quote", Some(arg_matches)) => {
+                    let from_token =
+                        MaybeToken::from(value_t!(arg_matches, "from_token", Token).ok());
+                    let to_token = MaybeToken::from(value_t!(arg_matches, "to_token", Token).ok());
+                    let ui_amount = value_t_or_exit!(arg_matches, "amount", f64);
+                    let slippage_bps = value_t_or_exit!(arg_matches, "slippage_bps", u64);
 
-                process_jup_swap(
-                    &mut db,
-                    &rpc_clients,
-                    address,
-                    from_token,
-                    to_token,
-                    ui_amount,
-                    slippage_bps,
-                    lot_selection_method,
-                    lot_numbers,
-                    vec![signer],
-                    signature,
-                    if_from_balance_exceeds,
-                    for_no_less_than,
-                    max_coingecko_value_percentage_loss,
-                    priority_fee,
-                    &notifier,
-                )
-                .await?;
-                process_sync_swaps(&mut db, rpc_client, &notifier).await?;
+                    process_jup_quote(from_token, to_token, ui_amount, slippage_bps, jup_api_key?)
+                        .await?;
+                }
+                ("swap", Some(arg_matches)) => {
+                    let (signer, address) = signer_of(arg_matches, "address", &mut wallet_manager)?;
+                    let from_token =
+                        MaybeToken::from(value_t!(arg_matches, "from_token", Token).ok());
+                    let to_token = MaybeToken::from(value_t!(arg_matches, "to_token", Token).ok());
+                    let ui_amount = match arg_matches.value_of("amount").unwrap() {
+                        "ALL" => None,
+                        ui_amount => Some(ui_amount.parse::<f64>().unwrap()),
+                    };
+                    let slippage_bps = value_t_or_exit!(arg_matches, "slippage_bps", u64);
+                    let signer = signer.expect("signer");
+                    let address = address.expect("address");
+                    let lot_selection_method =
+                        value_t_or_exit!(arg_matches, "lot_selection", LotSelectionMethod);
+                    let lot_numbers = lot_numbers_of(arg_matches, "lot_numbers");
+                    let signature = value_t!(arg_matches, "transaction", Signature).ok();
+                    let if_from_balance_exceeds =
+                        value_t!(arg_matches, "if_from_balance_exceeds", f64)
+                            .ok()
+                            .map(|x| from_token.amount(x));
+                    let for_no_less_than = value_t!(arg_matches, "for_no_less_than", f64).ok();
+                    let max_coingecko_value_percentage_loss =
+                        value_t_or_exit!(arg_matches, "max_coingecko_value_percentage_loss", f64);
+
+                    process_jup_swap(
+                        &mut db,
+                        &rpc_clients,
+                        address,
+                        from_token,
+                        to_token,
+                        ui_amount,
+                        slippage_bps,
+                        lot_selection_method,
+                        lot_numbers,
+                        vec![signer],
+                        signature,
+                        if_from_balance_exceeds,
+                        for_no_less_than,
+                        max_coingecko_value_percentage_loss,
+                        priority_fee,
+                        &notifier,
+                        jup_api_key?,
+                    )
+                    .await?;
+                    process_sync_swaps(&mut db, rpc_client, &notifier).await?;
+                }
+                _ => unreachable!(),
             }
-            _ => unreachable!(),
-        },
+        }
         (exchange, Some(exchange_matches)) => {
             assert!(exchanges.contains(&exchange), "Bug!");
             let exchange = Exchange::from_str(exchange)?;
