@@ -127,7 +127,8 @@ pub async fn get_current_price(token: &MaybeToken) -> Result<Decimal, Box<dyn st
                 pyusd: Option<CurrencyList>,
             }
 
-            let coins = reqwest::get(url).await?.json::<Coins>().await?;
+            let client = reqwest::Client::builder().user_agent("sys").build()?;
+            let coins = client.get(url).send().await?.json::<Coins>().await?;
 
             coins
                 .solana
@@ -184,7 +185,10 @@ pub async fn get_historical_price(
                 when.year()
             );
 
-            reqwest::get(url)
+            let client = reqwest::Client::builder().user_agent("sys").build()?;
+            client
+                .get(url)
+                .send()
                 .await?
                 .json::<HistoryResponse>()
                 .await?
