@@ -46,6 +46,7 @@ pub fn get_stake_activation_state(
     let clock_account = rpc_client.get_account(&solana_sdk::sysvar::clock::id())?;
     let clock: solana_sdk::clock::Clock =
         solana_sdk::account::from_account(&clock_account).unwrap();
+    #[allow(clippy::result_large_err)]
     let new_rate_activation_epoch = rpc_client
         .get_feature_activation_slot(&solana_sdk::feature_set::reduce_stake_warmup_cooldown::id())
         .and_then(|activation_slot: Option<solana_sdk::clock::Slot>| {
