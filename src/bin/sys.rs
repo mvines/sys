@@ -2619,29 +2619,34 @@ async fn process_account_xls(
                 }
             }
 
-            sheet_writer.append_row(row![
-                disposed_lot.token.to_string(),
-                disposed_lot.token.ui_amount(disposed_lot.lot.amount),
-                income,
-                disposed_lot.lot.acquisition.when.to_string(),
-                disposed_lot.lot.acquisition.price().to_string(),
-                disposed_lot.lot.acquisition.kind.to_string(),
-                disposed_lot
-                    .lot
-                    .cap_gain(disposed_lot.token, disposed_lot.price()),
-                if long_term_cap_gain { "Long" } else { "Short" },
-                disposed_lot.when.to_string(),
-                disposed_lot.price().to_string(),
-                disposed_lot
-                    .kind
-                    .fee()
-                    .map(|(amount, currency)| {
-                        assert_eq!(currency, "USD");
-                        *amount
-                    })
-                    .unwrap_or_default(),
-                disposed_lot.kind.to_string()
-            ])?;
+            let cap_gain = disposed_lot
+                .lot
+                .cap_gain(disposed_lot.token, disposed_lot.price());
+
+            // Exclude disposals with no tax impact
+            if income.abs() > 0.0 || cap_gain.abs() > 0.0 {
+                sheet_writer.append_row(row![
+                    disposed_lot.token.to_string(),
+                    disposed_lot.token.ui_amount(disposed_lot.lot.amount),
+                    income,
+                    disposed_lot.lot.acquisition.when.to_string(),
+                    disposed_lot.lot.acquisition.price().to_string(),
+                    disposed_lot.lot.acquisition.kind.to_string(),
+                    cap_gain,
+                    if long_term_cap_gain { "Long" } else { "Short" },
+                    disposed_lot.when.to_string(),
+                    disposed_lot.price().to_string(),
+                    disposed_lot
+                        .kind
+                        .fee()
+                        .map(|(amount, currency)| {
+                            assert_eq!(currency, "USD");
+                            *amount
+                        })
+                        .unwrap_or_default(),
+                    disposed_lot.kind.to_string()
+                ])?;
+            }
         }
         Ok(())
     })?;
