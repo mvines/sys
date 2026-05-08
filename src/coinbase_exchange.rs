@@ -21,6 +21,9 @@ impl ExchangeClient for CoinbaseExchangeClient {
         pin_mut!(accounts);
 
         while let Some(account_result) = accounts.next().await {
+            if let Err(e) = account_result {
+                return Err(format!("Failed to get accounts: {e}").into());
+            }
             for account in account_result.unwrap() {
                 if let Ok(id) = coinbase_rs::Uuid::from_str(&account.id) {
                     if token.name() == account.currency.code
@@ -157,6 +160,7 @@ pub fn new(
     }: ExchangeCredentials,
 ) -> Result<CoinbaseExchangeClient, Box<dyn std::error::Error>> {
     assert!(subaccount.is_none());
+    let secret = secret.replace("\\n", "\n");
     Ok(CoinbaseExchangeClient {
         client: coinbase_rs::Private::new(coinbase_rs::MAIN_URL, &api_key, &secret),
     })
